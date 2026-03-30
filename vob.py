@@ -15708,47 +15708,26 @@ def main():
                         for _col in ['open', 'high', 'low', 'close', 'volume']:
                             if _col in _vdc_df.columns:
                                 _vdc_df[_col] = pd.to_numeric(_vdc_df[_col], errors='coerce').fillna(0)
-                        # Approximate buy/sell volume using candle body position
+
+                        # Calculate buy/sell volume using candle body position
                         _vdc_df['_range'] = _vdc_df['high'] - _vdc_df['low']
                         _vdc_df['_buy_pct'] = _vdc_df.apply(
-                            lambda r: (r['close'] - r['low']) / r['_range'] if r['_range'] > 0 else 0.5, axis=1)
+                            lambda r: float(r['close'] - r['low']) / float(r['_range']) if float(r['_range']) > 0 else 0.5, axis=1)
                         _vdc_df['buy_vol'] = _vdc_df['volume'] * _vdc_df['_buy_pct']
                         _vdc_df['sell_vol'] = _vdc_df['volume'] * (1 - _vdc_df['_buy_pct'])
                         _vdc_df['delta'] = _vdc_df['buy_vol'] - _vdc_df['sell_vol']
                         _vdc_df['cum_delta'] = _vdc_df['delta'].cumsum()
                         _vdc_df['delta_pct'] = _vdc_df.apply(
-                            lambda r: (r['delta'] / r['volume'] * 100) if r['volume'] > 0 else 0, axis=1)
+                            lambda r: float(r['delta'] / r['volume'] * 100) if float(r['volume']) > 0 else 0.0, axis=1)
 
-                        # Determine delta bar colors
-                        _vdc_df['_is_bull'] = _vdc_df['close'] > _vdc_df['open']
-                        _vdc_df['_delta_color'] = _vdc_df.apply(
-                            lambda r: ('#089981' if r['delta'] >= 0 else 'rgba(242,54,69,0.67)') if r['_is_bull']
-                            else ('#f23645' if r['delta'] < 0 else 'rgba(8,153,129,0.67)'), axis=1)
-
-                        # Build delta overlay values (normalized within candle body)
-                        _vdc_df['_abs_norm'] = _vdc_df['delta_pct'].abs() / 100
-                        _vdc_df['_candle_min'] = _vdc_df[['open', 'close']].min(axis=1)
-                        _vdc_df['_candle_max'] = _vdc_df[['open', 'close']].max(axis=1)
-                        _vdc_df['_candle_mid'] = (_vdc_df['open'] + _vdc_df['close']) / 2
-                        _vdc_df['_body'] = (_vdc_df['_candle_max'] - _vdc_df['_candle_min']).abs()
-
-                        # Delta bar: from mid to extent based on delta magnitude
-                        _vdc_df['_delta_base'] = _vdc_df['_candle_mid']
-                        _vdc_df['_delta_top'] = _vdc_df.apply(
-                            lambda r: r['_candle_mid'] + r['_abs_norm'] * r['_body'] / 2 if r['delta'] >= 0
-                            else r['_candle_mid'] - r['_abs_norm'] * r['_body'] / 2, axis=1)
-
-                        # Find max volume price per candle
-                        # (approximation: price where most activity occurred = weighted avg)
-
-                        # ── Chart: Candlestick + Delta Overlay + Cumulative Delta ──
-                        _vdc_fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                                                 vertical_spacing=0.03,
-                                                 row_heights=[0.50, 0.25, 0.25],
-                                                 subplot_titles=('Price + Volume Delta', 'Delta per Candle', 'Cumulative Delta'))
+                        # ── 1) Candlestick Chart with Delta Color Bars ──
+                        _vdc_fig1 = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                                  vertical_spacing=0.03,
+                                                  row_heights=[0.65, 0.35],
+                                                  subplot_titles=('Price Chart', 'Volume Delta Bars'))
 
                         # Row 1: Candlestick
-                        _vdc_fig.add_trace(go.Candlestick(
+                        _vdc_fig1.add_trace(go.Candlestick(
                             x=_vdc_df['datetime'],
                             open=_vdc_df['open'], high=_vdc_df['high'],
                             low=_vdc_df['low'], close=_vdc_df['close'],
@@ -15757,64 +15736,104 @@ def main():
                             increasing_fillcolor='#089981', decreasing_fillcolor='#f23645',
                         ), row=1, col=1)
 
-                        # Row 1: Delta overlay as thin bars on candles
-                        for _idx, _row in _vdc_df.iterrows():
-                            _d_base = float(_row['_delta_base'])
-                            _d_top = float(_row['_delta_top'])
-                            _d_lo = min(_d_base, _d_top)
-                            _d_hi = max(_d_base, _d_top)
-                            _vdc_fig.add_trace(go.Candlestick(
-                                x=[_row['datetime']],
-                                open=[_d_lo], high=[_d_hi], low=[_d_lo], close=[_d_hi],
-                                increasing_line_color=_row['_delta_color'],
-                                decreasing_line_color=_row['_delta_color'],
-                                increasing_fillcolor=_row['_delta_color'],
-                                decreasing_fillcolor=_row['_delta_color'],
-                                showlegend=False,
-                            ), row=1, col=1)
-
-                        # Row 2: Delta bars
-                        _vdc_fig.add_trace(go.Bar(
+                        # Row 2: Delta bars (green = positive, red = negative)
+                        _vdc_fig1.add_trace(go.Bar(
                             x=_vdc_df['datetime'],
                             y=_vdc_df['delta'],
                             name='Delta',
-                            marker_color=['#26a69a' if d >= 0 else '#ef5350' for d in _vdc_df['delta']],
+                            marker_color=['#26a69a' if float(d) >= 0 else '#ef5350' for d in _vdc_df['delta']],
                             opacity=0.85,
-                            text=[f"{d:+,.0f}" for d in _vdc_df['delta']],
-                            textposition='outside',
-                            textfont=dict(size=8),
                         ), row=2, col=1)
 
-                        # Row 3: Cumulative delta line
-                        _vdc_fig.add_trace(go.Scatter(
-                            x=_vdc_df['datetime'],
-                            y=_vdc_df['cum_delta'],
-                            name='Cum Delta',
-                            fill='tozeroy',
-                            line=dict(color='#00bcd4', width=2),
-                            fillcolor='rgba(0,188,212,0.15)',
-                        ), row=3, col=1)
+                        _vdc_fig1.add_hline(y=0, line_dash='dot', line_color='#555', row=2, col=1)
 
-                        _vdc_fig.add_hline(y=0, line_dash='dot', line_color='#555', row=2, col=1)
-                        _vdc_fig.add_hline(y=0, line_dash='dot', line_color='#555', row=3, col=1)
-
-                        _vdc_fig.update_layout(
+                        _vdc_fig1.update_layout(
                             template='plotly_dark',
-                            height=700,
+                            height=550,
                             showlegend=False,
                             xaxis_rangeslider_visible=False,
                             xaxis2_rangeslider_visible=False,
-                            xaxis3_rangeslider_visible=False,
-                            margin=dict(l=0, r=0, t=40, b=0),
+                            margin=dict(l=40, r=40, t=40, b=30),
                             hovermode='x unified',
+                            plot_bgcolor='#111', paper_bgcolor='#111', font=dict(color='#ccc'),
                         )
 
-                        st.plotly_chart(_vdc_fig, use_container_width=True)
+                        st.plotly_chart(_vdc_fig1, use_container_width=True)
+
+                        # ── 2) Delta Volume Line Chart (PCR-style) ──
+                        st.markdown("##### 📈 Delta Volume Trend")
+
+                        _vdc_delta_vals = _vdc_df['delta'].dropna().tolist()
+                        _vdc_cum_vals = _vdc_df['cum_delta'].dropna().tolist()
+                        _vdc_all_vals = _vdc_delta_vals + _vdc_cum_vals + [0]
+                        _vdc_ymin = min(_vdc_all_vals) * 1.1 if min(_vdc_all_vals) < 0 else min(_vdc_all_vals) * 0.9
+                        _vdc_ymax = max(_vdc_all_vals) * 1.1
+
+                        _vdc_fig2 = go.Figure()
+
+                        # Delta line with color-coded markers
+                        _vdc_fig2.add_trace(go.Scatter(
+                            x=_vdc_df['datetime'],
+                            y=_vdc_df['delta'],
+                            mode='lines+markers',
+                            name='Delta Volume',
+                            line=dict(color='#00aaff', width=3),
+                            marker=dict(size=6, color=[
+                                '#00ff88' if float(v) > 0 else '#ff4444' if float(v) < 0 else '#FFD700'
+                                for v in _vdc_df['delta']
+                            ]),
+                            fill='tozeroy',
+                            fillcolor='rgba(0, 170, 255, 0.1)',
+                            hovertemplate='Time: %{x|%H:%M}<br>Delta: %{y:+,.0f}<extra></extra>',
+                        ))
+
+                        # Cumulative delta line
+                        _vdc_fig2.add_trace(go.Scatter(
+                            x=_vdc_df['datetime'],
+                            y=_vdc_df['cum_delta'],
+                            mode='lines',
+                            name='Cum Delta',
+                            line=dict(color='#ffaa00', width=2, dash='dash'),
+                            hovertemplate='Time: %{x|%H:%M}<br>Cum Delta: %{y:+,.0f}<extra></extra>',
+                        ))
+
+                        # Zero reference line
+                        _vdc_fig2.add_hline(y=0, line_dash='dash', line_color='white', line_width=1,
+                                            annotation_text='0 (Neutral)',
+                                            annotation_position='right',
+                                            annotation_font_size=8)
+
+                        # Shading zones (positive = green, negative = red)
+                        _vdc_fig2.add_hrect(y0=0, y1=_vdc_ymax, fillcolor='rgba(0,255,136,0.06)', line_width=0)
+                        _vdc_fig2.add_hrect(y0=_vdc_ymin, y1=0, fillcolor='rgba(255,68,68,0.06)', line_width=0)
+
+                        # Latest values annotation
+                        _vdc_last_delta = float(_vdc_df['delta'].iloc[-1])
+                        _vdc_last_cum = float(_vdc_df['cum_delta'].iloc[-1])
+                        _vdc_d_icon = '🟢' if _vdc_last_delta >= 0 else '🔴'
+                        _vdc_c_icon = '🟢' if _vdc_last_cum >= 0 else '🔴'
+                        _vdc_bias = 'BUYING PRESSURE' if _vdc_last_cum > 0 else ('SELLING PRESSURE' if _vdc_last_cum < 0 else 'NEUTRAL')
+                        _vdc_bias_clr = '#00ff88' if _vdc_last_cum > 0 else ('#ff4444' if _vdc_last_cum < 0 else '#FFD700')
+
+                        _vdc_fig2.update_layout(
+                            title=f"Volume Delta Trend | Current Delta: {_vdc_last_delta:+,.0f} | Cum Delta: {_vdc_last_cum:+,.0f} | <span style='color:{_vdc_bias_clr}'>{_vdc_bias}</span>",
+                            template='plotly_dark',
+                            height=400,
+                            showlegend=True,
+                            legend=dict(orientation='h', y=-0.25, font=dict(size=9)),
+                            xaxis=dict(tickformat='%H:%M', title='Time', gridcolor='#333'),
+                            yaxis=dict(title='Delta Volume', range=[_vdc_ymin, _vdc_ymax], gridcolor='#333'),
+                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            margin=dict(l=50, r=50, t=60, b=50),
+                            font=dict(color='#ccc'),
+                        )
+
+                        st.plotly_chart(_vdc_fig2, use_container_width=True)
 
                         # ── Metrics ──
-                        _vdc_total_delta = _vdc_df['delta'].sum()
-                        _vdc_total_buy = _vdc_df['buy_vol'].sum()
-                        _vdc_total_sell = _vdc_df['sell_vol'].sum()
+                        _vdc_total_delta = float(_vdc_df['delta'].sum())
+                        _vdc_total_buy = float(_vdc_df['buy_vol'].sum())
+                        _vdc_total_sell = float(_vdc_df['sell_vol'].sum())
                         _vdc_max_delta_idx = _vdc_df['delta'].abs().idxmax()
                         _vdc_max_delta_row = _vdc_df.loc[_vdc_max_delta_idx]
                         _vdc_max_time = _vdc_max_delta_row['datetime']
@@ -15829,11 +15848,11 @@ def main():
                         with _dmc3:
                             st.metric("Sell Volume", f"{_vdc_total_sell:,.0f}")
                         with _dmc4:
-                            _cum_d = _vdc_df['cum_delta'].iloc[-1]
+                            _cum_d = float(_vdc_df['cum_delta'].iloc[-1])
                             _cum_icon = '🟢' if _cum_d > 0 else '🔴'
                             st.metric("Cum Delta (Final)", f"{_cum_icon} {_cum_d:+,.0f}")
                         with _dmc5:
-                            st.metric("Max Delta Candle", f"{_vdc_max_delta_row['delta']:+,.0f}", f"at {_vdc_max_time_str}")
+                            st.metric("Max Delta Candle", f"{float(_vdc_max_delta_row['delta']):+,.0f}", f"at {_vdc_max_time_str}")
 
                         # ── Data Table ──
                         st.markdown("##### Volume Delta Data")
@@ -15842,21 +15861,21 @@ def main():
                             _r = _vdc_df.iloc[_idx]
                             _ts = _r['datetime']
                             _time_str = _ts.strftime('%H:%M') if hasattr(_ts, 'strftime') else str(_ts)
-                            _candle = '🟢' if _r['close'] > _r['open'] else ('🔴' if _r['close'] < _r['open'] else '⚪')
-                            _d_icon = '▲' if _r['delta'] >= 0 else '▼'
+                            _candle = '🟢' if float(_r['close']) > float(_r['open']) else ('🔴' if float(_r['close']) < float(_r['open']) else '⚪')
+                            _d_icon = '▲' if float(_r['delta']) >= 0 else '▼'
                             _vdc_rows.append({
                                 'Time': _time_str,
-                                'Open': f"{_r['open']:.1f}",
-                                'High': f"{_r['high']:.1f}",
-                                'Low': f"{_r['low']:.1f}",
-                                'Close': f"{_r['close']:.1f}",
+                                'Open': f"{float(_r['open']):.1f}",
+                                'High': f"{float(_r['high']):.1f}",
+                                'Low': f"{float(_r['low']):.1f}",
+                                'Close': f"{float(_r['close']):.1f}",
                                 'Candle': _candle,
-                                'Volume': f"{int(_r['volume']):,}",
-                                'Buy Vol': f"{int(_r['buy_vol']):,}",
-                                'Sell Vol': f"{int(_r['sell_vol']):,}",
-                                'Delta': f"{_d_icon} {int(_r['delta']):+,}",
-                                'Delta %': f"{_r['delta_pct']:+.1f}%",
-                                'Cum Delta': f"{int(_r['cum_delta']):+,}",
+                                'Volume': f"{int(float(_r['volume'])):,}",
+                                'Buy Vol': f"{int(float(_r['buy_vol'])):,}",
+                                'Sell Vol': f"{int(float(_r['sell_vol'])):,}",
+                                'Delta': f"{_d_icon} {int(float(_r['delta'])):+,}",
+                                'Delta %': f"{float(_r['delta_pct']):+.1f}%",
+                                'Cum Delta': f"{int(float(_r['cum_delta'])):+,}",
                             })
                         if _vdc_rows:
                             st.dataframe(pd.DataFrame(_vdc_rows), use_container_width=True, hide_index=True)
@@ -15865,7 +15884,9 @@ def main():
                     else:
                         st.info("Insufficient data for Volume Delta Candles. Need at least 5 candles.")
                 except Exception as _vdc_err:
+                    import traceback as _vdc_tb
                     st.warning(f"Volume Delta Candles error: {str(_vdc_err)}")
+                    st.code(_vdc_tb.format_exc(), language='text')
 
             # ── Pre-compute HTF pivot + VOB levels for candle pattern enrichment ──
             _cp_htf_supports    = []
