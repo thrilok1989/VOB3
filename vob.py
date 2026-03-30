@@ -168,6 +168,36 @@ def cached_iv_average(option_data_json):
     iv_pe_avg = df['impliedVolatility_PE'].mean()
     return iv_ce_avg, iv_pe_avg
 
+# ── ATM Bias helper for Telegram messages ─────────────────────────────────
+def _get_atm_bias_text(option_data: dict = None) -> str:
+    """Extract ATM bias info from option_data for inclusion in Telegram alerts."""
+    if not option_data:
+        return ""
+    df_summary = option_data.get('df_summary')
+    underlying = option_data.get('underlying')
+    if df_summary is None or underlying is None:
+        return ""
+    try:
+        atm_strike = min(df_summary['Strike'].tolist(), key=lambda x: abs(x - underlying))
+        atm_rows = df_summary[df_summary['Strike'] == atm_strike]
+        if atm_rows.empty:
+            return ""
+        row = atm_rows.iloc[0]
+        bias_score = row.get('BiasScore', 0)
+        verdict = row.get('Verdict', final_verdict(bias_score))
+        oi_bias = row.get('OI_Bias', 'N/A')
+        chgoi_bias = row.get('ChgOI_Bias', 'N/A')
+        delta_exp = row.get('DeltaExp', 'N/A')
+        gamma_exp = row.get('GammaExp', 'N/A')
+        pressure = row.get('PressureBias', 'N/A')
+        return (
+            f"\n<b>📊 ATM Bias:</b> {verdict} (Score: {bias_score})"
+            f"\n• OI: {oi_bias} | ChgOI: {chgoi_bias} | Delta: {delta_exp} | Gamma: {gamma_exp} | Pressure: {pressure}"
+        )
+    except Exception:
+        return ""
+
+
 # Telegram Functions
 def send_telegram_message_sync(message):
     """Send message to Telegram synchronously"""
@@ -17740,39 +17770,6 @@ def main():
                     _conf_clr   = ("#00ff88" if _confidence == "HIGH" else
                                    "#FFD700"  if _confidence == "MEDIUM" else "#FF5252")
 
-                    # ── STEP 11: Telegram Alert ─────────────────────────────────
-                    if _confidence == "HIGH" and _itm_market_bias != "SIDEWAYS" and enable_signals:
-                        _itm_key = f"{_itm_market_bias}_{int(_itm_entry)}_{int(_itm_target)}"
-                        _last_itm = st.session_state.itm_last_alert
-                        _itm_now2 = datetime.now(pytz.timezone('Asia/Kolkata'))
-                        _itm_ok   = (_last_itm[0] != _itm_key or
-                                     (_last_itm[1] is not None and
-                                      (_itm_now2 - _last_itm[1]).total_seconds() > 900))
-                        if _itm_ok:
-                            send_telegram_message_sync(
-                                f"<b>🗺️ INSTITUTIONAL TRADE SETUP</b>\n"
-                                f"Spot: ₹{_itm_spot:.0f}\n"
-                                f"Direction: {_itm_dir_lbl}\n"
-                                f"Entry: {_itm_entry:.0f} | Target: {_itm_target:.0f} | SL: {_itm_sl:.0f}\n"
-                                f"Support: {_true_support:.0f} | Resistance: {_true_resist:.0f}\n"
-                                f"Breakout: {_breakout_lvl:.0f} | Breakdown: {_breakdown_lvl:.0f}\n"
-                                f"Confidence: {_confidence} | Sentiment: {_itm_sent_score}/100\n"
-                                f"Flow: {_itm_final_signal}"
-                            )
-                            db.save_signal(
-                                signal_type='ITM',
-                                direction='BUY' if _itm_market_bias == 'BULLISH' else 'SELL',
-                                source='Institutional Trade Map',
-                                spot_price=_itm_spot,
-                                confidence=_confidence,
-                                entry=_itm_entry,
-                                target=_itm_target,
-                                stop_loss=_itm_sl,
-                                details={'sentiment': _itm_sent_score, 'flow': _itm_final_signal,
-                                         'support': _true_support, 'resistance': _true_resist},
-                            )
-                            st.session_state.itm_last_alert = (_itm_key, _itm_now2)
-
                     # ── STEP 9 Display: Trade Map Panel ────────────────────────
                     st.markdown(f"""
                     <div style="background:linear-gradient(135deg,{_itm_dir_clr}08,{_itm_dir_clr}18);
@@ -22326,6 +22323,7 @@ def main():
                                     (_cie_now_ist - _cie_last_ts).total_seconds() > 300
                                 )
                                 if _cie_should_alert and _conf >= 70:
+                                    _cie_atm_bias = _get_atm_bias_text(option_data)
                                     _cie_tg_msg = (
                                         f"{_dir_emoji} <b>CIE {_dir} SIGNAL — {_pat}</b>\n\n"
                                         f"Spot: ₹{_cie_underlying:.0f}\n"
@@ -22336,7 +22334,8 @@ def main():
                                         f"{_gamma_str}\n"
                                         f"{_oi_str}\n"
                                         f"Straddle: {'Expanding ✅' if _opt.get('straddle_expanding') else 'Flat'}\n"
-                                        f"Confidence: {_conf}/100 — {_strength}\n"
+                                        f"Confidence: {_conf}/100 — {_strength}"
+                                        f"{_cie_atm_bias}\n"
                                         f"Time: {_cie_now_ist.strftime('%H:%M:%S')} IST"
                                     )
                                     send_telegram_message_sync(_cie_tg_msg)
@@ -22639,6 +22638,7 @@ def main():
                 cie_signals=_cmce_cie_sigs,
                 send_telegram=_cmce_tg,
                 db=db,
+                option_data=option_data,
             )
         except Exception as _cmce_err:
             st.warning(f"Cross-Market Confirmation Engine error: {str(_cmce_err)}")
@@ -23426,6 +23426,7 @@ def show_cross_market_confirmation_engine(
     cie_signals: list,
     send_telegram: bool = False,
     db=None,
+    option_data: dict = None,
 ):
     """UI for Cross-Market Confirmation Engine (Reversal / Continuation / Trap modes).
 
@@ -23590,6 +23591,7 @@ def show_cross_market_confirmation_engine(
         _last = st.session_state.get('cmce_last_alert')
         if _last is None or (_now - _last).total_seconds() > 300:
             msg = _cmce_build_telegram_message(nifty_pattern, analysis)
+            msg += _get_atm_bias_text(option_data)
             try:
                 send_telegram_message_sync(msg)
                 st.session_state.cmce_last_alert = _now
@@ -24184,6 +24186,7 @@ def show_iofce(option_data: dict, df, underlying_price: float, cie_signals: list
             if _dom_sig and _dom_sig.get('direction') in ('BUY', 'SELL'):
                 msg = _iofce_build_telegram_message(res, underlying_price, _dom_sig,
                                                     ultimate_rsi_data=ultimate_rsi_data)
+                msg += _get_atm_bias_text(option_data)
                 try:
                     send_telegram_message_sync(msg)
                     st.session_state.iofce_last_alert = _now
