@@ -15202,8 +15202,8 @@ def main():
                         # Reset backoff on success
                         st.session_state.pop('_api_cooldown_secs', None)
                         st.session_state.pop('_api_cooldown_until', None)
-                    elif not df.empty and _max_utc is not None:
-                        stale_mins = int((datetime.now(pytz.UTC) - _max_utc).total_seconds() / 60)
+                    elif not df.empty and _max_dt is not None:
+                        stale_mins = int((datetime.now(pytz.timezone('Asia/Kolkata')) - _max_dt).total_seconds() / 60) if hasattr(_max_dt, 'tzinfo') and _max_dt.tzinfo else 0
                         st.warning(f"⚠️ **API fetch failed** — showing cached data from {stale_mins} min ago ({_max_dt.strftime('%H:%M')} IST). Check your Dhan token or network.")
         else:
             with st.spinner("Fetching fresh data from API..."):
@@ -15492,6 +15492,360 @@ def main():
                               f"Bull {_bull_vol:,} / Bear {_bear_vol:,}")
                 with vc5:
                     st.metric("Volume Spikes (>2x)", f"{_spikes}")
+
+            # ══════════════════════════════════════════════════════════════════
+            # 📊 MONEY FLOW PROFILE
+            # ══════════════════════════════════════════════════════════════════
+            st.markdown("---")
+            with st.expander("💰 Money Flow Profile — Volume & Sentiment at Price Levels", expanded=False):
+                try:
+                    _mfp_df = _df_today.copy() if not _df_today.empty else pd.DataFrame()
+                    if len(_mfp_df) >= 10 and 'volume' in _mfp_df.columns:
+                        _mfp_num_rows = 25
+                        _mfp_high = _mfp_df['high'].max()
+                        _mfp_low = _mfp_df['low'].min()
+                        _mfp_step = (_mfp_high - _mfp_low) / _mfp_num_rows if _mfp_high > _mfp_low else 1
+
+                        # Distribute volume across price bins
+                        _mfp_total_vol = [0.0] * _mfp_num_rows
+                        _mfp_bull_vol = [0.0] * _mfp_num_rows
+                        _mfp_bear_vol = [0.0] * _mfp_num_rows
+                        _mfp_mf_total = [0.0] * _mfp_num_rows
+                        _mfp_mf_bull = [0.0] * _mfp_num_rows
+                        _mfp_mf_bear = [0.0] * _mfp_num_rows
+
+                        for _, _r in _mfp_df.iterrows():
+                            _h, _l, _c, _o, _v = float(_r['high']), float(_r['low']), float(_r['close']), float(_r['open']), float(_r.get('volume', 0))
+                            if _v <= 0 or _h == _l:
+                                continue
+                            _is_bull = _c > _o
+                            for _bin_idx in range(_mfp_num_rows):
+                                _bin_low = _mfp_low + _bin_idx * _mfp_step
+                                _bin_high = _bin_low + _mfp_step
+                                if _h >= _bin_low and _l < _bin_high:
+                                    # Proportional volume allocation
+                                    _overlap_low = max(_l, _bin_low)
+                                    _overlap_high = min(_h, _bin_high)
+                                    _portion = (_overlap_high - _overlap_low) / (_h - _l)
+                                    _vol_portion = _v * _portion
+                                    _mfp_total_vol[_bin_idx] += _vol_portion
+                                    _mf_val = _vol_portion * (_mfp_low + (_bin_idx + 0.5) * _mfp_step)
+                                    _mfp_mf_total[_bin_idx] += _mf_val
+                                    if _is_bull:
+                                        _mfp_bull_vol[_bin_idx] += _vol_portion
+                                        _mfp_mf_bull[_bin_idx] += _mf_val
+                                    else:
+                                        _mfp_bear_vol[_bin_idx] += _vol_portion
+                                        _mfp_mf_bear[_bin_idx] += _mf_val
+
+                        _mfp_max_vol = max(_mfp_total_vol) if max(_mfp_total_vol) > 0 else 1
+                        _mfp_max_mf = max(_mfp_mf_total) if max(_mfp_mf_total) > 0 else 1
+                        _mfp_poc_idx = _mfp_total_vol.index(max(_mfp_total_vol))
+                        _mfp_poc_price = _mfp_low + (_mfp_poc_idx + 0.5) * _mfp_step
+
+                        # Node classification thresholds
+                        _hvt = 0.53  # High volume threshold
+                        _lvt = 0.37  # Low volume threshold
+
+                        # Build price level labels and data
+                        _mfp_price_labels = []
+                        _mfp_node_types = []
+                        _mfp_sentiments = []
+                        for _i in range(_mfp_num_rows):
+                            _price = _mfp_low + (_i + 0.5) * _mfp_step
+                            _mfp_price_labels.append(f"₹{_price:.0f}")
+                            _ratio = _mfp_total_vol[_i] / _mfp_max_vol
+                            if _ratio >= _hvt:
+                                _mfp_node_types.append('High')
+                            elif _ratio <= _lvt:
+                                _mfp_node_types.append('Low')
+                            else:
+                                _mfp_node_types.append('Average')
+                            _net = _mfp_bull_vol[_i] - _mfp_bear_vol[_i]
+                            _mfp_sentiments.append('Bullish' if _net > 0 else ('Bearish' if _net < 0 else 'Neutral'))
+
+                        # ── Chart: Volume Profile + Sentiment Profile side by side ──
+                        _mfp_src_sel = st.radio("Profile Source", ['Volume', 'Money Flow'], horizontal=True, key='mfp_src')
+                        _use_mf = _mfp_src_sel == 'Money Flow'
+                        _prof_data = _mfp_mf_total if _use_mf else _mfp_total_vol
+                        _prof_bull = _mfp_mf_bull if _use_mf else _mfp_bull_vol
+                        _prof_bear = _mfp_mf_bear if _use_mf else _mfp_bear_vol
+                        _prof_max = max(_prof_data) if max(_prof_data) > 0 else 1
+
+                        _mfp_fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
+                                                 column_widths=[0.55, 0.45],
+                                                 subplot_titles=('Volume/Money Flow Profile', 'Sentiment Profile'),
+                                                 horizontal_spacing=0.02)
+
+                        # Volume/Money Flow Profile bars (colored by node type)
+                        _vp_colors = []
+                        for _i in range(_mfp_num_rows):
+                            _ratio = _prof_data[_i] / _prof_max
+                            if _ratio >= _hvt:
+                                _vp_colors.append('#ffeb3b')  # High traded = yellow
+                            elif _ratio <= _lvt:
+                                _vp_colors.append('#f23645')  # Low traded = red
+                            else:
+                                _vp_colors.append('#2962ff')  # Average = blue
+
+                        _mfp_fig.add_trace(go.Bar(
+                            y=_mfp_price_labels,
+                            x=_prof_data,
+                            orientation='h',
+                            marker_color=_vp_colors,
+                            name='Profile',
+                            text=[f"{v:,.0f}" for v in _prof_data],
+                            textposition='auto',
+                            textfont=dict(size=9),
+                            hovertemplate='Price: %{y}<br>Volume: %{x:,.0f}<extra></extra>',
+                        ), row=1, col=1)
+
+                        # POC line
+                        _mfp_fig.add_hline(y=_mfp_price_labels[_mfp_poc_idx],
+                                           line_dash='dash', line_color='#ffeb3b', line_width=2,
+                                           annotation_text=f"POC ₹{_mfp_poc_price:.0f}",
+                                           annotation_position='top right',
+                                           annotation_font_color='#ffeb3b',
+                                           row=1, col=1)
+
+                        # Sentiment Profile bars (net = bull - bear)
+                        _sent_vals = [_prof_bull[_i] - _prof_bear[_i] for _i in range(_mfp_num_rows)]
+                        _sent_colors = ['#26a69a' if v >= 0 else '#ef5350' for v in _sent_vals]
+
+                        _mfp_fig.add_trace(go.Bar(
+                            y=_mfp_price_labels,
+                            x=[abs(v) for v in _sent_vals],
+                            orientation='h',
+                            marker_color=_sent_colors,
+                            name='Sentiment',
+                            text=[f"{'▲' if v >= 0 else '▼'} {abs(v):,.0f}" for v in _sent_vals],
+                            textposition='auto',
+                            textfont=dict(size=9),
+                            hovertemplate='Price: %{y}<br>Net: %{x:,.0f}<extra></extra>',
+                        ), row=1, col=2)
+
+                        _mfp_fig.update_layout(
+                            template='plotly_dark',
+                            height=max(500, _mfp_num_rows * 22),
+                            showlegend=False,
+                            margin=dict(l=0, r=0, t=40, b=0),
+                            yaxis=dict(autorange=True),
+                        )
+
+                        st.plotly_chart(_mfp_fig, use_container_width=True)
+
+                        # ── Metrics row ──
+                        _mfp_mc1, _mfp_mc2, _mfp_mc3, _mfp_mc4 = st.columns(4)
+                        with _mfp_mc1:
+                            st.metric("Point of Control (POC)", f"₹{_mfp_poc_price:.0f}")
+                        with _mfp_mc2:
+                            _mfp_total_sum = sum(_mfp_total_vol)
+                            st.metric("Total Volume", f"{_mfp_total_sum:,.0f}")
+                        with _mfp_mc3:
+                            _mfp_bull_sum = sum(_mfp_bull_vol)
+                            _mfp_bear_sum = sum(_mfp_bear_vol)
+                            _mfp_sent = 'Bullish' if _mfp_bull_sum > _mfp_bear_sum else 'Bearish'
+                            _mfp_sent_icon = '🟢' if _mfp_sent == 'Bullish' else '🔴'
+                            st.metric("Overall Sentiment", f"{_mfp_sent_icon} {_mfp_sent}")
+                        with _mfp_mc4:
+                            _high_nodes = sum(1 for n in _mfp_node_types if n == 'High')
+                            st.metric("High Traded Nodes", f"{_high_nodes}")
+
+                        # ── Data Table ──
+                        st.markdown("##### Profile Data")
+                        _mfp_rows = []
+                        for _i in range(_mfp_num_rows - 1, -1, -1):
+                            _price = _mfp_low + (_i + 0.5) * _mfp_step
+                            _vol_pct = (_mfp_total_vol[_i] / sum(_mfp_total_vol) * 100) if sum(_mfp_total_vol) > 0 else 0
+                            _node_icon = '🟡' if _mfp_node_types[_i] == 'High' else ('🔴' if _mfp_node_types[_i] == 'Low' else '🔵')
+                            _sent_icon = '🟢' if _mfp_sentiments[_i] == 'Bullish' else ('🔴' if _mfp_sentiments[_i] == 'Bearish' else '⚪')
+                            _poc_tag = ' ⭐' if _i == _mfp_poc_idx else ''
+                            _mfp_rows.append({
+                                'Price Level': f"₹{_price:.0f}{_poc_tag}",
+                                'Volume': f"{_mfp_total_vol[_i]:,.0f}",
+                                'Money Flow': f"₹{_mfp_mf_total[_i]:,.0f}",
+                                'Vol %': f"{_vol_pct:.1f}%",
+                                'Bull Vol': f"{_mfp_bull_vol[_i]:,.0f}",
+                                'Bear Vol': f"{_mfp_bear_vol[_i]:,.0f}",
+                                'Net': f"{_mfp_bull_vol[_i] - _mfp_bear_vol[_i]:+,.0f}",
+                                'Node': f"{_node_icon} {_mfp_node_types[_i]}",
+                                'Sentiment': f"{_sent_icon} {_mfp_sentiments[_i]}",
+                            })
+                        if _mfp_rows:
+                            st.dataframe(pd.DataFrame(_mfp_rows), use_container_width=True, hide_index=True)
+
+                        st.caption("🟡 High Traded = consolidation/value area | 🔵 Average | 🔴 Low Traded = supply/demand/liquidity | ⭐ = Point of Control (POC)")
+                    else:
+                        st.info("Insufficient data for Money Flow Profile. Need at least 10 candles.")
+                except Exception as _mfp_err:
+                    st.warning(f"Money Flow Profile error: {str(_mfp_err)}")
+
+            # ══════════════════════════════════════════════════════════════════
+            # 📊 VOLUME DELTA CANDLES
+            # ══════════════════════════════════════════════════════════════════
+            st.markdown("---")
+            with st.expander("📊 Volume Delta Candles — Buy vs Sell Pressure per Candle", expanded=False):
+                try:
+                    _vdc_df = _df_today.copy() if not _df_today.empty else pd.DataFrame()
+                    if len(_vdc_df) >= 5 and 'volume' in _vdc_df.columns:
+                        # Approximate buy/sell volume using candle body position
+                        _vdc_df['_range'] = _vdc_df['high'] - _vdc_df['low']
+                        _vdc_df['_buy_pct'] = _vdc_df.apply(
+                            lambda r: (r['close'] - r['low']) / r['_range'] if r['_range'] > 0 else 0.5, axis=1)
+                        _vdc_df['buy_vol'] = _vdc_df['volume'] * _vdc_df['_buy_pct']
+                        _vdc_df['sell_vol'] = _vdc_df['volume'] * (1 - _vdc_df['_buy_pct'])
+                        _vdc_df['delta'] = _vdc_df['buy_vol'] - _vdc_df['sell_vol']
+                        _vdc_df['cum_delta'] = _vdc_df['delta'].cumsum()
+                        _vdc_df['delta_pct'] = _vdc_df.apply(
+                            lambda r: (r['delta'] / r['volume'] * 100) if r['volume'] > 0 else 0, axis=1)
+
+                        # Determine delta bar colors
+                        _vdc_df['_is_bull'] = _vdc_df['close'] > _vdc_df['open']
+                        _vdc_df['_delta_color'] = _vdc_df.apply(
+                            lambda r: ('#089981' if r['delta'] >= 0 else '#f23645aa') if r['_is_bull']
+                            else ('#f23645' if r['delta'] < 0 else '#089981aa'), axis=1)
+
+                        # Build delta overlay values (normalized within candle body)
+                        _vdc_df['_abs_norm'] = _vdc_df['delta_pct'].abs() / 100
+                        _vdc_df['_candle_min'] = _vdc_df[['open', 'close']].min(axis=1)
+                        _vdc_df['_candle_max'] = _vdc_df[['open', 'close']].max(axis=1)
+                        _vdc_df['_candle_mid'] = (_vdc_df['open'] + _vdc_df['close']) / 2
+                        _vdc_df['_body'] = (_vdc_df['_candle_max'] - _vdc_df['_candle_min']).abs()
+
+                        # Delta bar: from mid to extent based on delta magnitude
+                        _vdc_df['_delta_base'] = _vdc_df['_candle_mid']
+                        _vdc_df['_delta_top'] = _vdc_df.apply(
+                            lambda r: r['_candle_mid'] + r['_abs_norm'] * r['_body'] / 2 if r['delta'] >= 0
+                            else r['_candle_mid'] - r['_abs_norm'] * r['_body'] / 2, axis=1)
+
+                        # Find max volume price per candle
+                        # (approximation: price where most activity occurred = weighted avg)
+
+                        # ── Chart: Candlestick + Delta Overlay + Cumulative Delta ──
+                        _vdc_fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                                                 vertical_spacing=0.03,
+                                                 row_heights=[0.50, 0.25, 0.25],
+                                                 subplot_titles=('Price + Volume Delta', 'Delta per Candle', 'Cumulative Delta'))
+
+                        # Row 1: Candlestick
+                        _vdc_fig.add_trace(go.Candlestick(
+                            x=_vdc_df['datetime'],
+                            open=_vdc_df['open'], high=_vdc_df['high'],
+                            low=_vdc_df['low'], close=_vdc_df['close'],
+                            name='Price',
+                            increasing_line_color='#089981', decreasing_line_color='#f23645',
+                            increasing_fillcolor='#089981', decreasing_fillcolor='#f23645',
+                        ), row=1, col=1)
+
+                        # Row 1: Delta overlay as thin bars on candles
+                        for _idx, _row in _vdc_df.iterrows():
+                            _d_base = float(_row['_delta_base'])
+                            _d_top = float(_row['_delta_top'])
+                            _d_lo = min(_d_base, _d_top)
+                            _d_hi = max(_d_base, _d_top)
+                            _vdc_fig.add_trace(go.Candlestick(
+                                x=[_row['datetime']],
+                                open=[_d_lo], high=[_d_hi], low=[_d_lo], close=[_d_hi],
+                                increasing_line_color=_row['_delta_color'],
+                                decreasing_line_color=_row['_delta_color'],
+                                increasing_fillcolor=_row['_delta_color'],
+                                decreasing_fillcolor=_row['_delta_color'],
+                                showlegend=False,
+                            ), row=1, col=1)
+
+                        # Row 2: Delta bars
+                        _vdc_fig.add_trace(go.Bar(
+                            x=_vdc_df['datetime'],
+                            y=_vdc_df['delta'],
+                            name='Delta',
+                            marker_color=['#26a69a' if d >= 0 else '#ef5350' for d in _vdc_df['delta']],
+                            opacity=0.85,
+                            text=[f"{d:+,.0f}" for d in _vdc_df['delta']],
+                            textposition='outside',
+                            textfont=dict(size=8),
+                        ), row=2, col=1)
+
+                        # Row 3: Cumulative delta line
+                        _vdc_fig.add_trace(go.Scatter(
+                            x=_vdc_df['datetime'],
+                            y=_vdc_df['cum_delta'],
+                            name='Cum Delta',
+                            fill='tozeroy',
+                            line=dict(color='#00bcd4', width=2),
+                            fillcolor='rgba(0,188,212,0.15)',
+                        ), row=3, col=1)
+
+                        _vdc_fig.add_hline(y=0, line_dash='dot', line_color='#555', row=2, col=1)
+                        _vdc_fig.add_hline(y=0, line_dash='dot', line_color='#555', row=3, col=1)
+
+                        _vdc_fig.update_layout(
+                            template='plotly_dark',
+                            height=700,
+                            showlegend=False,
+                            xaxis_rangeslider_visible=False,
+                            xaxis2_rangeslider_visible=False,
+                            xaxis3_rangeslider_visible=False,
+                            margin=dict(l=0, r=0, t=40, b=0),
+                            hovermode='x unified',
+                        )
+
+                        st.plotly_chart(_vdc_fig, use_container_width=True)
+
+                        # ── Metrics ──
+                        _vdc_total_delta = _vdc_df['delta'].sum()
+                        _vdc_total_buy = _vdc_df['buy_vol'].sum()
+                        _vdc_total_sell = _vdc_df['sell_vol'].sum()
+                        _vdc_max_delta_idx = _vdc_df['delta'].abs().idxmax()
+                        _vdc_max_delta_row = _vdc_df.loc[_vdc_max_delta_idx]
+                        _vdc_max_time = _vdc_max_delta_row['datetime']
+                        _vdc_max_time_str = _vdc_max_time.strftime('%H:%M') if hasattr(_vdc_max_time, 'strftime') else str(_vdc_max_time)
+
+                        _dmc1, _dmc2, _dmc3, _dmc4, _dmc5 = st.columns(5)
+                        with _dmc1:
+                            _d_icon = '🟢' if _vdc_total_delta > 0 else '🔴'
+                            st.metric("Net Delta", f"{_d_icon} {_vdc_total_delta:+,.0f}")
+                        with _dmc2:
+                            st.metric("Buy Volume", f"{_vdc_total_buy:,.0f}")
+                        with _dmc3:
+                            st.metric("Sell Volume", f"{_vdc_total_sell:,.0f}")
+                        with _dmc4:
+                            _cum_d = _vdc_df['cum_delta'].iloc[-1]
+                            _cum_icon = '🟢' if _cum_d > 0 else '🔴'
+                            st.metric("Cum Delta (Final)", f"{_cum_icon} {_cum_d:+,.0f}")
+                        with _dmc5:
+                            st.metric("Max Delta Candle", f"{_vdc_max_delta_row['delta']:+,.0f}", f"at {_vdc_max_time_str}")
+
+                        # ── Data Table ──
+                        st.markdown("##### Volume Delta Data")
+                        _vdc_rows = []
+                        for _idx in range(len(_vdc_df) - 1, max(len(_vdc_df) - 31, -1), -1):
+                            _r = _vdc_df.iloc[_idx]
+                            _ts = _r['datetime']
+                            _time_str = _ts.strftime('%H:%M') if hasattr(_ts, 'strftime') else str(_ts)
+                            _candle = '🟢' if _r['close'] > _r['open'] else ('🔴' if _r['close'] < _r['open'] else '⚪')
+                            _d_icon = '▲' if _r['delta'] >= 0 else '▼'
+                            _vdc_rows.append({
+                                'Time': _time_str,
+                                'Open': f"{_r['open']:.1f}",
+                                'High': f"{_r['high']:.1f}",
+                                'Low': f"{_r['low']:.1f}",
+                                'Close': f"{_r['close']:.1f}",
+                                'Candle': _candle,
+                                'Volume': f"{int(_r['volume']):,}",
+                                'Buy Vol': f"{int(_r['buy_vol']):,}",
+                                'Sell Vol': f"{int(_r['sell_vol']):,}",
+                                'Delta': f"{_d_icon} {int(_r['delta']):+,}",
+                                'Delta %': f"{_r['delta_pct']:+.1f}%",
+                                'Cum Delta': f"{int(_r['cum_delta']):+,}",
+                            })
+                        if _vdc_rows:
+                            st.dataframe(pd.DataFrame(_vdc_rows), use_container_width=True, hide_index=True)
+
+                        st.caption("Buy/Sell volume estimated via candle body position: Buy% = (Close-Low)/(High-Low). Delta = Buy Vol - Sell Vol. Positive delta = buying pressure dominant.")
+                    else:
+                        st.info("Insufficient data for Volume Delta Candles. Need at least 5 candles.")
+                except Exception as _vdc_err:
+                    st.warning(f"Volume Delta Candles error: {str(_vdc_err)}")
 
             # ── Pre-compute HTF pivot + VOB levels for candle pattern enrichment ──
             _cp_htf_supports    = []
