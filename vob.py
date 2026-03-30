@@ -15502,8 +15502,8 @@ def main():
                     _mfp_df = _df_today.copy() if not _df_today.empty else pd.DataFrame()
                     if len(_mfp_df) >= 10 and 'volume' in _mfp_df.columns:
                         _mfp_num_rows = 25
-                        _mfp_high = _mfp_df['high'].max()
-                        _mfp_low = _mfp_df['low'].min()
+                        _mfp_high = float(_mfp_df['high'].max())
+                        _mfp_low = float(_mfp_df['low'].min())
                         _mfp_step = (_mfp_high - _mfp_low) / _mfp_num_rows if _mfp_high > _mfp_low else 1
 
                         # Distribute volume across price bins
@@ -15702,8 +15702,8 @@ def main():
                         # Determine delta bar colors
                         _vdc_df['_is_bull'] = _vdc_df['close'] > _vdc_df['open']
                         _vdc_df['_delta_color'] = _vdc_df.apply(
-                            lambda r: ('#089981' if r['delta'] >= 0 else '#f23645aa') if r['_is_bull']
-                            else ('#f23645' if r['delta'] < 0 else '#089981aa'), axis=1)
+                            lambda r: ('#089981' if r['delta'] >= 0 else 'rgba(242,54,69,0.67)') if r['_is_bull']
+                            else ('#f23645' if r['delta'] < 0 else 'rgba(8,153,129,0.67)'), axis=1)
 
                         # Build delta overlay values (normalized within candle body)
                         _vdc_df['_abs_norm'] = _vdc_df['delta_pct'].abs() / 100
