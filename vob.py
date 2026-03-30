@@ -15501,6 +15501,9 @@ def main():
                 try:
                     _mfp_df = _df_today.copy() if not _df_today.empty else pd.DataFrame()
                     if len(_mfp_df) >= 10 and 'volume' in _mfp_df.columns:
+                        for _col in ['open', 'high', 'low', 'close', 'volume']:
+                            if _col in _mfp_df.columns:
+                                _mfp_df[_col] = pd.to_numeric(_mfp_df[_col], errors='coerce').fillna(0)
                         _mfp_num_rows = 25
                         _mfp_high = float(_mfp_df['high'].max())
                         _mfp_low = float(_mfp_df['low'].min())
@@ -15688,6 +15691,9 @@ def main():
                 try:
                     _vdc_df = _df_today.copy() if not _df_today.empty else pd.DataFrame()
                     if len(_vdc_df) >= 5 and 'volume' in _vdc_df.columns:
+                        for _col in ['open', 'high', 'low', 'close', 'volume']:
+                            if _col in _vdc_df.columns:
+                                _vdc_df[_col] = pd.to_numeric(_vdc_df[_col], errors='coerce').fillna(0)
                         # Approximate buy/sell volume using candle body position
                         _vdc_df['_range'] = _vdc_df['high'] - _vdc_df['low']
                         _vdc_df['_buy_pct'] = _vdc_df.apply(
