@@ -15507,181 +15507,195 @@ def main():
                         _mfp_num_rows = 25
                         _mfp_high = float(_mfp_df['high'].max())
                         _mfp_low = float(_mfp_df['low'].min())
-                        _mfp_step = (_mfp_high - _mfp_low) / _mfp_num_rows if _mfp_high > _mfp_low else 1
+                        if _mfp_high <= _mfp_low:
+                            st.info("Price range too narrow for Money Flow Profile.")
+                        else:
+                            _mfp_step = float((_mfp_high - _mfp_low) / _mfp_num_rows)
 
-                        # Distribute volume across price bins
-                        _mfp_total_vol = [0.0] * _mfp_num_rows
-                        _mfp_bull_vol = [0.0] * _mfp_num_rows
-                        _mfp_bear_vol = [0.0] * _mfp_num_rows
-                        _mfp_mf_total = [0.0] * _mfp_num_rows
-                        _mfp_mf_bull = [0.0] * _mfp_num_rows
-                        _mfp_mf_bear = [0.0] * _mfp_num_rows
+                            # Distribute volume across price bins
+                            _mfp_total_vol = [0.0] * _mfp_num_rows
+                            _mfp_bull_vol = [0.0] * _mfp_num_rows
+                            _mfp_bear_vol = [0.0] * _mfp_num_rows
+                            _mfp_mf_total = [0.0] * _mfp_num_rows
+                            _mfp_mf_bull = [0.0] * _mfp_num_rows
+                            _mfp_mf_bear = [0.0] * _mfp_num_rows
 
-                        for _, _r in _mfp_df.iterrows():
-                            _h, _l, _c, _o, _v = float(_r['high']), float(_r['low']), float(_r['close']), float(_r['open']), float(_r.get('volume', 0))
-                            if _v <= 0 or _h == _l:
-                                continue
-                            _is_bull = _c > _o
-                            for _bin_idx in range(_mfp_num_rows):
-                                _bin_low = _mfp_low + _bin_idx * _mfp_step
-                                _bin_high = _bin_low + _mfp_step
-                                if _h >= _bin_low and _l < _bin_high:
-                                    # Proportional volume allocation
-                                    _overlap_low = max(_l, _bin_low)
-                                    _overlap_high = min(_h, _bin_high)
-                                    _portion = (_overlap_high - _overlap_low) / (_h - _l)
-                                    _vol_portion = _v * _portion
-                                    _mfp_total_vol[_bin_idx] += _vol_portion
-                                    _mf_val = _vol_portion * (_mfp_low + (_bin_idx + 0.5) * _mfp_step)
-                                    _mfp_mf_total[_bin_idx] += _mf_val
-                                    if _is_bull:
-                                        _mfp_bull_vol[_bin_idx] += _vol_portion
-                                        _mfp_mf_bull[_bin_idx] += _mf_val
-                                    else:
-                                        _mfp_bear_vol[_bin_idx] += _vol_portion
-                                        _mfp_mf_bear[_bin_idx] += _mf_val
+                            for _, _r in _mfp_df.iterrows():
+                                try:
+                                    _h = float(_r['high'])
+                                    _l = float(_r['low'])
+                                    _c = float(_r['close'])
+                                    _o = float(_r['open'])
+                                    _v = float(_r['volume']) if pd.notna(_r['volume']) else 0.0
+                                except (ValueError, TypeError):
+                                    continue
+                                if _v <= 0 or _h <= _l:
+                                    continue
+                                _is_bull = _c > _o
+                                for _bin_idx in range(_mfp_num_rows):
+                                    _bin_low = _mfp_low + float(_bin_idx) * _mfp_step
+                                    _bin_high = _bin_low + _mfp_step
+                                    if _h >= _bin_low and _l < _bin_high:
+                                        _overlap_low = max(_l, _bin_low)
+                                        _overlap_high = min(_h, _bin_high)
+                                        _portion = float((_overlap_high - _overlap_low) / (_h - _l))
+                                        _vol_portion = float(_v * _portion)
+                                        _mfp_total_vol[_bin_idx] += _vol_portion
+                                        _mf_val = float(_vol_portion * (_mfp_low + (_bin_idx + 0.5) * _mfp_step))
+                                        _mfp_mf_total[_bin_idx] += _mf_val
+                                        if _is_bull:
+                                            _mfp_bull_vol[_bin_idx] += _vol_portion
+                                            _mfp_mf_bull[_bin_idx] += _mf_val
+                                        else:
+                                            _mfp_bear_vol[_bin_idx] += _vol_portion
+                                            _mfp_mf_bear[_bin_idx] += _mf_val
 
-                        _mfp_max_vol = max(_mfp_total_vol) if max(_mfp_total_vol) > 0 else 1
-                        _mfp_max_mf = max(_mfp_mf_total) if max(_mfp_mf_total) > 0 else 1
-                        _mfp_poc_idx = _mfp_total_vol.index(max(_mfp_total_vol))
-                        _mfp_poc_price = _mfp_low + (_mfp_poc_idx + 0.5) * _mfp_step
+                            _mfp_max_vol = max(_mfp_total_vol) if max(_mfp_total_vol) > 0 else 1.0
+                            _mfp_poc_idx = _mfp_total_vol.index(max(_mfp_total_vol))
+                            _mfp_poc_price = float(_mfp_low + (_mfp_poc_idx + 0.5) * _mfp_step)
 
-                        # Node classification thresholds
-                        _hvt = 0.53  # High volume threshold
-                        _lvt = 0.37  # Low volume threshold
+                            # Node classification thresholds
+                            _hvt = 0.53
+                            _lvt = 0.37
 
-                        # Build price level labels and data
-                        _mfp_price_labels = []
-                        _mfp_node_types = []
-                        _mfp_sentiments = []
-                        for _i in range(_mfp_num_rows):
-                            _price = _mfp_low + (_i + 0.5) * _mfp_step
-                            _mfp_price_labels.append(f"₹{_price:.0f}")
-                            _ratio = _mfp_total_vol[_i] / _mfp_max_vol
-                            if _ratio >= _hvt:
-                                _mfp_node_types.append('High')
-                            elif _ratio <= _lvt:
-                                _mfp_node_types.append('Low')
-                            else:
-                                _mfp_node_types.append('Average')
-                            _net = _mfp_bull_vol[_i] - _mfp_bear_vol[_i]
-                            _mfp_sentiments.append('Bullish' if _net > 0 else ('Bearish' if _net < 0 else 'Neutral'))
+                            # Build price level labels and data
+                            _mfp_price_labels = []
+                            _mfp_node_types = []
+                            _mfp_sentiments = []
+                            for _i in range(_mfp_num_rows):
+                                _price = float(_mfp_low + (_i + 0.5) * _mfp_step)
+                                _mfp_price_labels.append(f"₹{_price:.0f}")
+                                _ratio = float(_mfp_total_vol[_i]) / float(_mfp_max_vol)
+                                if _ratio >= _hvt:
+                                    _mfp_node_types.append('High')
+                                elif _ratio <= _lvt:
+                                    _mfp_node_types.append('Low')
+                                else:
+                                    _mfp_node_types.append('Average')
+                                _net = float(_mfp_bull_vol[_i]) - float(_mfp_bear_vol[_i])
+                                _mfp_sentiments.append('Bullish' if _net > 0 else ('Bearish' if _net < 0 else 'Neutral'))
 
-                        # ── Chart: Volume Profile + Sentiment Profile side by side ──
-                        _mfp_src_sel = st.radio("Profile Source", ['Volume', 'Money Flow'], horizontal=True, key='mfp_src')
-                        _use_mf = _mfp_src_sel == 'Money Flow'
-                        _prof_data = _mfp_mf_total if _use_mf else _mfp_total_vol
-                        _prof_bull = _mfp_mf_bull if _use_mf else _mfp_bull_vol
-                        _prof_bear = _mfp_mf_bear if _use_mf else _mfp_bear_vol
-                        _prof_max = max(_prof_data) if max(_prof_data) > 0 else 1
+                            # ── Chart: Volume Profile + Sentiment Profile side by side ──
+                            _mfp_src_sel = st.radio("Profile Source", ['Volume', 'Money Flow'], horizontal=True, key='mfp_src')
+                            _use_mf = _mfp_src_sel == 'Money Flow'
+                            _prof_data = [float(v) for v in (_mfp_mf_total if _use_mf else _mfp_total_vol)]
+                            _prof_bull = [float(v) for v in (_mfp_mf_bull if _use_mf else _mfp_bull_vol)]
+                            _prof_bear = [float(v) for v in (_mfp_mf_bear if _use_mf else _mfp_bear_vol)]
+                            _prof_max = max(_prof_data) if max(_prof_data) > 0 else 1.0
 
-                        _mfp_fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
-                                                 column_widths=[0.55, 0.45],
-                                                 subplot_titles=('Volume/Money Flow Profile', 'Sentiment Profile'),
-                                                 horizontal_spacing=0.02)
+                            _mfp_fig = make_subplots(rows=1, cols=2, shared_yaxes=True,
+                                                     column_widths=[0.55, 0.45],
+                                                     subplot_titles=('Volume/Money Flow Profile', 'Sentiment Profile'),
+                                                     horizontal_spacing=0.02)
 
-                        # Volume/Money Flow Profile bars (colored by node type)
-                        _vp_colors = []
-                        for _i in range(_mfp_num_rows):
-                            _ratio = _prof_data[_i] / _prof_max
-                            if _ratio >= _hvt:
-                                _vp_colors.append('#ffeb3b')  # High traded = yellow
-                            elif _ratio <= _lvt:
-                                _vp_colors.append('#f23645')  # Low traded = red
-                            else:
-                                _vp_colors.append('#2962ff')  # Average = blue
+                            # Volume/Money Flow Profile bars (colored by node type)
+                            _vp_colors = []
+                            for _i in range(_mfp_num_rows):
+                                _ratio = float(_prof_data[_i]) / float(_prof_max)
+                                if _ratio >= _hvt:
+                                    _vp_colors.append('#ffeb3b')
+                                elif _ratio <= _lvt:
+                                    _vp_colors.append('#f23645')
+                                else:
+                                    _vp_colors.append('#2962ff')
 
-                        _mfp_fig.add_trace(go.Bar(
-                            y=_mfp_price_labels,
-                            x=_prof_data,
-                            orientation='h',
-                            marker_color=_vp_colors,
-                            name='Profile',
-                            text=[f"{v:,.0f}" for v in _prof_data],
-                            textposition='auto',
-                            textfont=dict(size=9),
-                            hovertemplate='Price: %{y}<br>Volume: %{x:,.0f}<extra></extra>',
-                        ), row=1, col=1)
+                            _mfp_fig.add_trace(go.Bar(
+                                y=_mfp_price_labels,
+                                x=_prof_data,
+                                orientation='h',
+                                marker_color=_vp_colors,
+                                name='Profile',
+                                text=[f"{v:,.0f}" for v in _prof_data],
+                                textposition='auto',
+                                textfont=dict(size=9),
+                                hovertemplate='Price: %{y}<br>Value: %{x:,.0f}<extra></extra>',
+                            ), row=1, col=1)
 
-                        # POC line
-                        _mfp_fig.add_hline(y=_mfp_price_labels[_mfp_poc_idx],
-                                           line_dash='dash', line_color='#ffeb3b', line_width=2,
-                                           annotation_text=f"POC ₹{_mfp_poc_price:.0f}",
-                                           annotation_position='top right',
-                                           annotation_font_color='#ffeb3b',
-                                           row=1, col=1)
+                            # POC line
+                            _mfp_fig.add_hline(y=_mfp_price_labels[_mfp_poc_idx],
+                                               line_dash='dash', line_color='#ffeb3b', line_width=2,
+                                               annotation_text=f"POC ₹{_mfp_poc_price:.0f}",
+                                               annotation_position='top right',
+                                               annotation_font_color='#ffeb3b',
+                                               row=1, col=1)
 
-                        # Sentiment Profile bars (net = bull - bear)
-                        _sent_vals = [_prof_bull[_i] - _prof_bear[_i] for _i in range(_mfp_num_rows)]
-                        _sent_colors = ['#26a69a' if v >= 0 else '#ef5350' for v in _sent_vals]
+                            # Sentiment Profile bars (net = bull - bear)
+                            _sent_vals = [float(_prof_bull[_i]) - float(_prof_bear[_i]) for _i in range(_mfp_num_rows)]
+                            _sent_colors = ['#26a69a' if v >= 0 else '#ef5350' for v in _sent_vals]
 
-                        _mfp_fig.add_trace(go.Bar(
-                            y=_mfp_price_labels,
-                            x=[abs(v) for v in _sent_vals],
-                            orientation='h',
-                            marker_color=_sent_colors,
-                            name='Sentiment',
-                            text=[f"{'▲' if v >= 0 else '▼'} {abs(v):,.0f}" for v in _sent_vals],
-                            textposition='auto',
-                            textfont=dict(size=9),
-                            hovertemplate='Price: %{y}<br>Net: %{x:,.0f}<extra></extra>',
-                        ), row=1, col=2)
+                            _mfp_fig.add_trace(go.Bar(
+                                y=_mfp_price_labels,
+                                x=[abs(v) for v in _sent_vals],
+                                orientation='h',
+                                marker_color=_sent_colors,
+                                name='Sentiment',
+                                text=[f"{'▲' if v >= 0 else '▼'} {abs(v):,.0f}" for v in _sent_vals],
+                                textposition='auto',
+                                textfont=dict(size=9),
+                                hovertemplate='Price: %{y}<br>Net: %{x:,.0f}<extra></extra>',
+                            ), row=1, col=2)
 
-                        _mfp_fig.update_layout(
-                            template='plotly_dark',
-                            height=max(500, _mfp_num_rows * 22),
-                            showlegend=False,
-                            margin=dict(l=0, r=0, t=40, b=0),
-                            yaxis=dict(autorange=True),
-                        )
+                            _mfp_fig.update_layout(
+                                template='plotly_dark',
+                                height=max(500, _mfp_num_rows * 22),
+                                showlegend=False,
+                                margin=dict(l=0, r=0, t=40, b=0),
+                                yaxis=dict(autorange=True),
+                            )
 
-                        st.plotly_chart(_mfp_fig, use_container_width=True)
+                            st.plotly_chart(_mfp_fig, use_container_width=True)
 
-                        # ── Metrics row ──
-                        _mfp_mc1, _mfp_mc2, _mfp_mc3, _mfp_mc4 = st.columns(4)
-                        with _mfp_mc1:
-                            st.metric("Point of Control (POC)", f"₹{_mfp_poc_price:.0f}")
-                        with _mfp_mc2:
-                            _mfp_total_sum = sum(_mfp_total_vol)
-                            st.metric("Total Volume", f"{_mfp_total_sum:,.0f}")
-                        with _mfp_mc3:
-                            _mfp_bull_sum = sum(_mfp_bull_vol)
-                            _mfp_bear_sum = sum(_mfp_bear_vol)
-                            _mfp_sent = 'Bullish' if _mfp_bull_sum > _mfp_bear_sum else 'Bearish'
-                            _mfp_sent_icon = '🟢' if _mfp_sent == 'Bullish' else '🔴'
-                            st.metric("Overall Sentiment", f"{_mfp_sent_icon} {_mfp_sent}")
-                        with _mfp_mc4:
-                            _high_nodes = sum(1 for n in _mfp_node_types if n == 'High')
-                            st.metric("High Traded Nodes", f"{_high_nodes}")
+                            # ── Metrics row ──
+                            _mfp_mc1, _mfp_mc2, _mfp_mc3, _mfp_mc4 = st.columns(4)
+                            _mfp_total_sum = float(sum(_mfp_total_vol))
+                            _mfp_bull_sum = float(sum(_mfp_bull_vol))
+                            _mfp_bear_sum = float(sum(_mfp_bear_vol))
+                            with _mfp_mc1:
+                                st.metric("Point of Control (POC)", f"₹{_mfp_poc_price:.0f}")
+                            with _mfp_mc2:
+                                st.metric("Total Volume", f"{_mfp_total_sum:,.0f}")
+                            with _mfp_mc3:
+                                _mfp_sent = 'Bullish' if _mfp_bull_sum > _mfp_bear_sum else 'Bearish'
+                                _mfp_sent_icon = '🟢' if _mfp_sent == 'Bullish' else '🔴'
+                                st.metric("Overall Sentiment", f"{_mfp_sent_icon} {_mfp_sent}")
+                            with _mfp_mc4:
+                                _high_nodes = sum(1 for n in _mfp_node_types if n == 'High')
+                                st.metric("High Traded Nodes", f"{_high_nodes}")
 
-                        # ── Data Table ──
-                        st.markdown("##### Profile Data")
-                        _mfp_rows = []
-                        for _i in range(_mfp_num_rows - 1, -1, -1):
-                            _price = _mfp_low + (_i + 0.5) * _mfp_step
-                            _vol_pct = (_mfp_total_vol[_i] / sum(_mfp_total_vol) * 100) if sum(_mfp_total_vol) > 0 else 0
-                            _node_icon = '🟡' if _mfp_node_types[_i] == 'High' else ('🔴' if _mfp_node_types[_i] == 'Low' else '🔵')
-                            _sent_icon = '🟢' if _mfp_sentiments[_i] == 'Bullish' else ('🔴' if _mfp_sentiments[_i] == 'Bearish' else '⚪')
-                            _poc_tag = ' ⭐' if _i == _mfp_poc_idx else ''
-                            _mfp_rows.append({
-                                'Price Level': f"₹{_price:.0f}{_poc_tag}",
-                                'Volume': f"{_mfp_total_vol[_i]:,.0f}",
-                                'Money Flow': f"₹{_mfp_mf_total[_i]:,.0f}",
-                                'Vol %': f"{_vol_pct:.1f}%",
-                                'Bull Vol': f"{_mfp_bull_vol[_i]:,.0f}",
-                                'Bear Vol': f"{_mfp_bear_vol[_i]:,.0f}",
-                                'Net': f"{_mfp_bull_vol[_i] - _mfp_bear_vol[_i]:+,.0f}",
-                                'Node': f"{_node_icon} {_mfp_node_types[_i]}",
-                                'Sentiment': f"{_sent_icon} {_mfp_sentiments[_i]}",
-                            })
-                        if _mfp_rows:
-                            st.dataframe(pd.DataFrame(_mfp_rows), use_container_width=True, hide_index=True)
+                            # ── Data Table ──
+                            st.markdown("##### Profile Data")
+                            _mfp_rows = []
+                            for _i in range(_mfp_num_rows - 1, -1, -1):
+                                _price = float(_mfp_low + (_i + 0.5) * _mfp_step)
+                                _tv = float(_mfp_total_vol[_i])
+                                _mf = float(_mfp_mf_total[_i])
+                                _bv = float(_mfp_bull_vol[_i])
+                                _sv = float(_mfp_bear_vol[_i])
+                                _vol_pct = (_tv / _mfp_total_sum * 100) if _mfp_total_sum > 0 else 0.0
+                                _node_icon = '🟡' if _mfp_node_types[_i] == 'High' else ('🔴' if _mfp_node_types[_i] == 'Low' else '🔵')
+                                _sent_icon = '🟢' if _mfp_sentiments[_i] == 'Bullish' else ('🔴' if _mfp_sentiments[_i] == 'Bearish' else '⚪')
+                                _poc_tag = ' ⭐' if _i == _mfp_poc_idx else ''
+                                _mfp_rows.append({
+                                    'Price Level': f"₹{_price:.0f}{_poc_tag}",
+                                    'Volume': f"{_tv:,.0f}",
+                                    'Money Flow': f"₹{_mf:,.0f}",
+                                    'Vol %': f"{_vol_pct:.1f}%",
+                                    'Bull Vol': f"{_bv:,.0f}",
+                                    'Bear Vol': f"{_sv:,.0f}",
+                                    'Net': f"{_bv - _sv:+,.0f}",
+                                    'Node': f"{_node_icon} {_mfp_node_types[_i]}",
+                                    'Sentiment': f"{_sent_icon} {_mfp_sentiments[_i]}",
+                                })
+                            if _mfp_rows:
+                                st.dataframe(pd.DataFrame(_mfp_rows), use_container_width=True, hide_index=True)
 
-                        st.caption("🟡 High Traded = consolidation/value area | 🔵 Average | 🔴 Low Traded = supply/demand/liquidity | ⭐ = Point of Control (POC)")
+                            st.caption("🟡 High Traded = consolidation/value area | 🔵 Average | 🔴 Low Traded = supply/demand/liquidity | ⭐ = Point of Control (POC)")
                     else:
                         st.info("Insufficient data for Money Flow Profile. Need at least 10 candles.")
                 except Exception as _mfp_err:
+                    import traceback as _mfp_tb
                     st.warning(f"Money Flow Profile error: {str(_mfp_err)}")
+                    st.code(_mfp_tb.format_exc(), language='text')
 
             # ══════════════════════════════════════════════════════════════════
             # 📊 VOLUME DELTA CANDLES
