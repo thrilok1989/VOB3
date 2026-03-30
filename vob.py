@@ -15612,12 +15612,18 @@ def main():
                             ), row=1, col=1)
 
                             # POC line
-                            _mfp_fig.add_hline(y=_mfp_price_labels[_mfp_poc_idx],
-                                               line_dash='dash', line_color='#ffeb3b', line_width=2,
-                                               annotation_text=f"POC ₹{_mfp_poc_price:.0f}",
-                                               annotation_position='top right',
-                                               annotation_font_color='#ffeb3b',
+                            _mfp_fig.add_shape(type='line',
+                                               x0=0, x1=1, xref='paper',
+                                               y0=_mfp_price_labels[_mfp_poc_idx], y1=_mfp_price_labels[_mfp_poc_idx],
+                                               line=dict(color='#ffeb3b', width=2, dash='dash'),
                                                row=1, col=1)
+                            _mfp_fig.add_annotation(
+                                text=f"POC ₹{_mfp_poc_price:.0f}",
+                                x=1, xref='paper', xanchor='left',
+                                y=_mfp_price_labels[_mfp_poc_idx], yref='y',
+                                font=dict(color='#ffeb3b', size=10),
+                                showarrow=False,
+                                row=1, col=1)
 
                             # Sentiment Profile bars (net = bull - bear)
                             _sent_vals = [float(_prof_bull[_i]) - float(_prof_bear[_i]) for _i in range(_mfp_num_rows)]
