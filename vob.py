@@ -14715,6 +14715,393 @@ def compute_dealer_hedging_map(mde):
     return zones
 
 
+# ── Spot OI Pressure Analysis Engine ──────────────────────────────────
+def compute_spot_oi_pressure(mde):
+    """
+    Comprehensive Spot OI Pressure analysis: spot zone OI aggregation,
+    institutional activity, market control, real-time position shifts,
+    breakout probability, gamma wall, liquidity traps, smart money entry,
+    expiry manipulation, and OI cluster shift detection.
+
+    Uses existing data from MasterDataEngine — no new data fetches.
+    """
+    result = {
+        'spot_call_oi': 0, 'spot_put_oi': 0,
+        'spot_call_change': 0, 'spot_put_change': 0,
+        'spot_oi_bias': 0, 'institutional_bias': '',
+        'institutional_signals': [],
+        'market_control': '', 'market_control_score': 0,
+        'oi_shift': '', 'oi_shift_detail': '',
+        'breakout_probability': 0, 'breakout_direction': '',
+        'breakout_signals': [],
+        'support_strength': 0, 'resistance_strength': 0,
+        'gamma_wall': None, 'gamma_wall_type': '',
+        'liquidity_traps': [],
+        'smart_money_entries': [],
+        'expiry_manipulation': {'detected': False, 'details': ''},
+        'oi_cluster_shift': {'detected': False, 'direction': '', 'detail': ''},
+        'institutional_activity_score': 0,
+        'spot_oi_trend': [],  # for graph data
+    }
+
+    df_summary = mde.val('df_summary')
+    spot = mde.val('spot_price') or mde.val('underlying_price', 0)
+    atm_strike = mde.val('atm_strike')
+    gex_data = mde.val('gex_data')
+    total_ce_chg = mde.val('total_ce_change', 0) or 0
+    total_pe_chg = mde.val('total_pe_change', 0) or 0
+    max_pain = mde.val('max_pain_strike')
+    expiry = mde.val('expiry', '')
+
+    if df_summary is None or df_summary.empty or not atm_strike or not spot:
+        return result
+
+    LOT = 100000
+    ds = df_summary.sort_values('Strike').reset_index(drop=True)
+
+    # ── Step 1: Define Spot Zone (ATM ± 3 strikes) ──────────────────
+    atm_matches = ds[ds['Strike'] == atm_strike].index.tolist()
+    ai = atm_matches[0] if atm_matches else int((ds['Strike'] - atm_strike).abs().idxmin())
+    spot_start = max(0, ai - 3)
+    spot_end = min(len(ds), ai + 4)
+    spot_zone = ds.iloc[spot_start:spot_end]
+
+    # ── Step 2: Spot Zone OI Aggregation ─────────────────────────────
+    spot_call_oi = spot_zone['openInterest_CE'].sum() if 'openInterest_CE' in spot_zone.columns else 0
+    spot_put_oi = spot_zone['openInterest_PE'].sum() if 'openInterest_PE' in spot_zone.columns else 0
+    spot_call_change = spot_zone['changeinOpenInterest_CE'].sum() if 'changeinOpenInterest_CE' in spot_zone.columns else 0
+    spot_put_change = spot_zone['changeinOpenInterest_PE'].sum() if 'changeinOpenInterest_PE' in spot_zone.columns else 0
+
+    result['spot_call_oi'] = spot_call_oi
+    result['spot_put_oi'] = spot_put_oi
+    result['spot_call_change'] = spot_call_change
+    result['spot_put_change'] = spot_put_change
+
+    # ── Step 3: Institutional Activity Detection ─────────────────────
+    inst_signals = []
+    inst_score = 0
+
+    if spot_call_oi > spot_put_oi:
+        result['institutional_bias'] = "Resistance Building"
+        inst_signals.append("CE OI > PE OI near spot — institutions building resistance")
+        inst_score -= 1
+    elif spot_put_oi > spot_call_oi:
+        result['institutional_bias'] = "Support Building"
+        inst_signals.append("PE OI > CE OI near spot — institutions building support")
+        inst_score += 1
+    else:
+        result['institutional_bias'] = "Balanced"
+
+    # Fresh writing detection (rapid OI change)
+    avg_ce_chg = ds['changeinOpenInterest_CE'].abs().mean() if 'changeinOpenInterest_CE' in ds.columns else 1
+    avg_pe_chg = ds['changeinOpenInterest_PE'].abs().mean() if 'changeinOpenInterest_PE' in ds.columns else 1
+
+    if avg_ce_chg > 0 and spot_call_change > avg_ce_chg * 2:
+        inst_signals.append(f"Fresh call writing near spot (+{spot_call_change/LOT:.2f}L) — resistance forming")
+        inst_score -= 2
+    if avg_pe_chg > 0 and spot_put_change > avg_pe_chg * 2:
+        inst_signals.append(f"Fresh put writing near spot (+{spot_put_change/LOT:.2f}L) — support forming")
+        inst_score += 2
+
+    # Big OI spikes at individual strikes in spot zone
+    for _, row in spot_zone.iterrows():
+        strike = int(row['Strike'])
+        ce_chg = row.get('changeinOpenInterest_CE', 0) or 0
+        pe_chg = row.get('changeinOpenInterest_PE', 0) or 0
+        if avg_ce_chg > 0 and abs(ce_chg) > avg_ce_chg * 3:
+            lbl = "writing" if ce_chg > 0 else "covering"
+            inst_signals.append(f"Institutional CE {lbl} at ₹{strike} ({ce_chg/LOT:+.2f}L)")
+            inst_score += (-1 if ce_chg > 0 else 1)
+        if avg_pe_chg > 0 and abs(pe_chg) > avg_pe_chg * 3:
+            lbl = "writing" if pe_chg > 0 else "covering"
+            inst_signals.append(f"Institutional PE {lbl} at ₹{strike} ({pe_chg/LOT:+.2f}L)")
+            inst_score += (1 if pe_chg > 0 else -1)
+
+    result['institutional_signals'] = inst_signals[:8]
+    result['institutional_activity_score'] = max(-10, min(10, inst_score))
+
+    # ── Step 4: Market Control (Spot OI Bias) ────────────────────────
+    spot_oi_bias = spot_put_oi - spot_call_oi
+    result['spot_oi_bias'] = spot_oi_bias
+    bias_ratio = spot_oi_bias / LOT if LOT > 0 else 0
+
+    if bias_ratio > 5:
+        result['market_control'] = "Strong Bullish Control"
+        result['market_control_score'] = min(100, int(bias_ratio * 5))
+    elif bias_ratio > 2:
+        result['market_control'] = "Bullish Control"
+        result['market_control_score'] = min(80, 40 + int(bias_ratio * 8))
+    elif bias_ratio > 0.5:
+        result['market_control'] = "Mild Bullish"
+        result['market_control_score'] = 30 + int(bias_ratio * 10)
+    elif bias_ratio > -0.5:
+        result['market_control'] = "Market in Balance"
+        result['market_control_score'] = 0
+    elif bias_ratio > -2:
+        result['market_control'] = "Mild Bearish"
+        result['market_control_score'] = -(30 + int(abs(bias_ratio) * 10))
+    elif bias_ratio > -5:
+        result['market_control'] = "Bearish Control"
+        result['market_control_score'] = -min(80, 40 + int(abs(bias_ratio) * 8))
+    else:
+        result['market_control'] = "Strong Bearish Control"
+        result['market_control_score'] = -min(100, int(abs(bias_ratio) * 5))
+
+    # ── Step 5: Real-Time Position Shifts ────────────────────────────
+    price_up = spot >= st.session_state.get('_oi_prev_underlying', spot)
+    total_oi_change = spot_call_change + spot_put_change
+    oi_increasing = total_oi_change > 0
+
+    if price_up and oi_increasing:
+        result['oi_shift'] = "Long Build-up"
+        result['oi_shift_detail'] = "OI increasing + price rising — fresh longs entering"
+    elif not price_up and oi_increasing:
+        result['oi_shift'] = "Short Build-up"
+        result['oi_shift_detail'] = "OI increasing + price falling — fresh shorts entering"
+    elif price_up and not oi_increasing:
+        result['oi_shift'] = "Short Covering"
+        result['oi_shift_detail'] = "OI decreasing + price rising — shorts exiting"
+    else:
+        result['oi_shift'] = "Long Unwinding"
+        result['oi_shift_detail'] = "OI decreasing + price falling — longs exiting"
+
+    # ── Step 6: Spot Breakout Probability ────────────────────────────
+    bo_score = 0
+    bo_signals = []
+
+    # Put OI collapsing + price up = breakout
+    if spot_put_change < 0 and price_up:
+        bo_score += 30
+        bo_signals.append("Put OI collapsing near spot + price rising")
+    # Call OI collapsing + price down = breakdown
+    if spot_call_change < 0 and not price_up:
+        bo_score += 30
+        bo_signals.append("Call OI collapsing near spot + price falling")
+    # Large OI movement
+    total_spot_oi = spot_call_oi + spot_put_oi
+    if total_spot_oi > 0 and abs(total_oi_change) / total_spot_oi > 0.05:
+        bo_score += 15
+        bo_signals.append(f"Large spot zone OI shift ({abs(total_oi_change)/total_spot_oi*100:.1f}%)")
+    # GEX support
+    if gex_data and isinstance(gex_data, dict):
+        total_gex = gex_data.get('total_gex', 0)
+        if total_gex < -50:
+            bo_score += 20
+            bo_signals.append(f"Negative GEX ({total_gex:.0f}L) — acceleration likely")
+    # Resistance migration (from existing data)
+    if spot_call_change < 0 and any(
+        (row.get('changeinOpenInterest_CE', 0) or 0) > avg_ce_chg * 1.5
+        for _, row in ds.iloc[spot_end:spot_end+3].iterrows()
+    ) if spot_end + 3 <= len(ds) else False:
+        bo_score += 15
+        bo_signals.append("Resistance shifting higher — bullish breakout setup")
+
+    result['breakout_probability'] = min(95, bo_score)
+    result['breakout_signals'] = bo_signals
+    if spot_put_change < 0 and price_up:
+        result['breakout_direction'] = "Upside"
+    elif spot_call_change < 0 and not price_up:
+        result['breakout_direction'] = "Downside"
+    else:
+        result['breakout_direction'] = "Neutral"
+
+    # ── Step 7: Spot Gamma Wall Detection ────────────────────────────
+    if gex_data and isinstance(gex_data, dict):
+        gex_df = gex_data.get('gex_df')
+        if gex_df is not None and not gex_df.empty:
+            # Find strike with max absolute Net_GEX near spot
+            spot_gex = gex_df[(gex_df['Strike'] >= ds.iloc[spot_start]['Strike']) &
+                              (gex_df['Strike'] <= ds.iloc[min(spot_end, len(ds)-1)]['Strike'])]
+            if not spot_gex.empty:
+                max_gex_row = spot_gex.loc[spot_gex['Net_GEX'].abs().idxmax()]
+                gamma_wall_strike = int(max_gex_row['Strike'])
+                gamma_wall_val = max_gex_row['Net_GEX']
+                result['gamma_wall'] = gamma_wall_strike
+                if gamma_wall_val > 0:
+                    result['gamma_wall_type'] = "Pin/Support Wall"
+                else:
+                    result['gamma_wall_type'] = "Acceleration/Breakdown Wall"
+
+    # ── Step 8: Liquidity Trap Detection ─────────────────────────────
+    liquidity_traps = []
+    df_today = mde.val('df_today')
+    if df_today is not None and not df_today.empty and len(df_today) >= 5:
+        recent_high = df_today['high'].iloc[-5:].max()
+        recent_low = df_today['low'].iloc[-5:].min()
+        current_close = df_today['close'].iloc[-1]
+
+        # Liquidity grab above resistance then close back
+        max_ce_strike = ds.loc[ds['openInterest_CE'].idxmax(), 'Strike'] if 'openInterest_CE' in ds.columns else None
+        if max_ce_strike and recent_high > max_ce_strike > current_close:
+            liquidity_traps.append({
+                'type': 'Bull Liquidity Trap',
+                'detail': f"Wick above max CE OI ₹{int(max_ce_strike)} (high ₹{recent_high:.0f}) but closed ₹{current_close:.0f}",
+                'severity': 'High'
+            })
+        # Liquidity grab below support then close back
+        max_pe_strike = ds.loc[ds['openInterest_PE'].idxmax(), 'Strike'] if 'openInterest_PE' in ds.columns else None
+        if max_pe_strike and recent_low < max_pe_strike < current_close:
+            liquidity_traps.append({
+                'type': 'Bear Liquidity Trap',
+                'detail': f"Wick below max PE OI ₹{int(max_pe_strike)} (low ₹{recent_low:.0f}) but closed ₹{current_close:.0f}",
+                'severity': 'High'
+            })
+        # Gamma trap: pinned near gamma flip
+        if gex_data and isinstance(gex_data, dict):
+            gf = gex_data.get('gamma_flip_level')
+            if gf and abs(spot - gf) / spot * 100 < 0.15:
+                liquidity_traps.append({
+                    'type': 'Gamma Liquidity Trap',
+                    'detail': f"Spot ₹{spot:.0f} pinned near gamma flip ₹{gf:.0f} — dealers absorbing moves",
+                    'severity': 'Medium'
+                })
+    result['liquidity_traps'] = liquidity_traps
+
+    # ── Step 9: Smart Money Entry Detection ──────────────────────────
+    smart_entries = []
+    for _, row in spot_zone.iterrows():
+        strike = int(row['Strike'])
+        ce_chg = row.get('changeinOpenInterest_CE', 0) or 0
+        pe_chg = row.get('changeinOpenInterest_PE', 0) or 0
+        ce_oi = row.get('openInterest_CE', 0) or 0
+        pe_oi = row.get('openInterest_PE', 0) or 0
+
+        # Smart money: large OI add where total OI is already high
+        if avg_ce_chg > 0 and ce_chg > avg_ce_chg * 2.5 and ce_oi > ds['openInterest_CE'].quantile(0.75):
+            smart_entries.append({
+                'strike': strike, 'side': 'CE',
+                'action': 'Heavy Call Writing',
+                'signal': 'Bearish',
+                'detail': f"₹{strike}: +{ce_chg/LOT:.2f}L CE on already high OI ({ce_oi/LOT:.2f}L)"
+            })
+        if avg_pe_chg > 0 and pe_chg > avg_pe_chg * 2.5 and pe_oi > ds['openInterest_PE'].quantile(0.75):
+            smart_entries.append({
+                'strike': strike, 'side': 'PE',
+                'action': 'Heavy Put Writing',
+                'signal': 'Bullish',
+                'detail': f"₹{strike}: +{pe_chg/LOT:.2f}L PE on already high OI ({pe_oi/LOT:.2f}L)"
+            })
+        # Covering on high OI = smart exit
+        if ce_chg < -avg_ce_chg * 2 and ce_oi > ds['openInterest_CE'].median():
+            smart_entries.append({
+                'strike': strike, 'side': 'CE',
+                'action': 'Call Unwinding',
+                'signal': 'Bullish',
+                'detail': f"₹{strike}: {ce_chg/LOT:+.2f}L CE exit — resistance weakening"
+            })
+        if pe_chg < -avg_pe_chg * 2 and pe_oi > ds['openInterest_PE'].median():
+            smart_entries.append({
+                'strike': strike, 'side': 'PE',
+                'action': 'Put Unwinding',
+                'signal': 'Bearish',
+                'detail': f"₹{strike}: {pe_chg/LOT:+.2f}L PE exit — support weakening"
+            })
+    result['smart_money_entries'] = smart_entries[:6]
+
+    # ── Step 10: Expiry Manipulation Detection ───────────────────────
+    if expiry and max_pain:
+        try:
+            from datetime import datetime as _dt
+            ist = pytz.timezone('Asia/Kolkata')
+            now = datetime.now(ist)
+            # Parse expiry
+            exp_date = None
+            for fmt in ('%d-%b-%Y', '%Y-%m-%d', '%d-%m-%Y', '%d %b %Y'):
+                try:
+                    exp_date = _dt.strptime(str(expiry), fmt)
+                    break
+                except ValueError:
+                    continue
+            if exp_date:
+                dte = (exp_date.date() - now.date()).days
+                mp_dist = abs(spot - max_pain) / spot * 100
+                if dte <= 1 and mp_dist < 0.5:
+                    result['expiry_manipulation'] = {
+                        'detected': True,
+                        'details': f"DTE={dte}, Spot ₹{spot:.0f} near Max Pain ₹{int(max_pain)} ({mp_dist:.2f}%) — "
+                                   f"price likely pinned for expiry"
+                    }
+                elif dte <= 2 and mp_dist < 0.3:
+                    result['expiry_manipulation'] = {
+                        'detected': True,
+                        'details': f"DTE={dte}, Spot converging to Max Pain ₹{int(max_pain)} ({mp_dist:.2f}%) — "
+                                   f"institutions managing expiry"
+                    }
+        except Exception:
+            pass
+
+    # ── Step 11: OI Cluster Shift Detection (ATM Migration) ──────────
+    prev_atm = st.session_state.get('_spot_oi_prev_atm')
+    if prev_atm and prev_atm != atm_strike:
+        shift_dir = "Upward" if atm_strike > prev_atm else "Downward"
+        shift_pts = abs(atm_strike - prev_atm)
+        # Check if OI cluster also shifted
+        prev_max_ce = st.session_state.get('_spot_oi_prev_max_ce_strike')
+        prev_max_pe = st.session_state.get('_spot_oi_prev_max_pe_strike')
+        curr_max_ce = ds.loc[ds['openInterest_CE'].idxmax(), 'Strike'] if 'openInterest_CE' in ds.columns else None
+        curr_max_pe = ds.loc[ds['openInterest_PE'].idxmax(), 'Strike'] if 'openInterest_PE' in ds.columns else None
+
+        oi_shifted_with_price = False
+        shift_details = []
+        if prev_max_ce and curr_max_ce and curr_max_ce != prev_max_ce:
+            ce_dir = "up" if curr_max_ce > prev_max_ce else "down"
+            shift_details.append(f"Max CE OI shifted {ce_dir} ₹{int(prev_max_ce)}→₹{int(curr_max_ce)}")
+            if (shift_dir == "Upward" and curr_max_ce > prev_max_ce) or \
+               (shift_dir == "Downward" and curr_max_ce < prev_max_ce):
+                oi_shifted_with_price = True
+        if prev_max_pe and curr_max_pe and curr_max_pe != prev_max_pe:
+            pe_dir = "up" if curr_max_pe > prev_max_pe else "down"
+            shift_details.append(f"Max PE OI shifted {pe_dir} ₹{int(prev_max_pe)}→₹{int(curr_max_pe)}")
+            if (shift_dir == "Upward" and curr_max_pe > prev_max_pe) or \
+               (shift_dir == "Downward" and curr_max_pe < prev_max_pe):
+                oi_shifted_with_price = True
+
+        result['oi_cluster_shift'] = {
+            'detected': True,
+            'direction': shift_dir,
+            'detail': f"ATM shifted {shift_dir} ₹{int(prev_atm)}→₹{int(atm_strike)} ({shift_pts}pts). " +
+                      (" + ".join(shift_details) if shift_details else "OI cluster stable.") +
+                      (" — STRONG TREND CONFIRMATION (Smart money moving with price)" if oi_shifted_with_price
+                       else " — Price moved but OI sticky (possible reversal)")
+        }
+
+    # Save current state for next comparison
+    st.session_state['_spot_oi_prev_atm'] = atm_strike
+    if 'openInterest_CE' in ds.columns:
+        st.session_state['_spot_oi_prev_max_ce_strike'] = ds.loc[ds['openInterest_CE'].idxmax(), 'Strike']
+    if 'openInterest_PE' in ds.columns:
+        st.session_state['_spot_oi_prev_max_pe_strike'] = ds.loc[ds['openInterest_PE'].idxmax(), 'Strike']
+
+    # ── Support / Resistance Strength Scores ─────────────────────────
+    sup_pts = 0
+    if spot_put_oi > spot_call_oi: sup_pts += 2
+    if spot_put_change > 0: sup_pts += 2
+    if spot_put_change > abs(spot_call_change): sup_pts += 1
+    if total_pe_chg > 0: sup_pts += 1
+    result['support_strength'] = min(10, sup_pts * 2)
+
+    res_pts = 0
+    if spot_call_oi > spot_put_oi: res_pts += 2
+    if spot_call_change > 0: res_pts += 2
+    if spot_call_change > abs(spot_put_change): res_pts += 1
+    if total_ce_chg > 0: res_pts += 1
+    result['resistance_strength'] = min(10, res_pts * 2)
+
+    # ── Spot OI Trend Data (for graph) ───────────────────────────────
+    trend_data = []
+    for _, row in spot_zone.iterrows():
+        trend_data.append({
+            'Strike': int(row['Strike']),
+            'CE_OI': (row.get('openInterest_CE', 0) or 0) / LOT,
+            'PE_OI': (row.get('openInterest_PE', 0) or 0) / LOT,
+            'CE_Change': (row.get('changeinOpenInterest_CE', 0) or 0) / LOT,
+            'PE_Change': (row.get('changeinOpenInterest_PE', 0) or 0) / LOT,
+        })
+    result['spot_oi_trend'] = trend_data
+
+    return result
+
+
 def main():
     st.title("📈 Nifty Trading & Options Analyzer")
 
@@ -19656,6 +20043,182 @@ def main():
                         st.caption(f"₹{_z['strike']:,} — GEX: {_z['gex']:+,.0f}")
         except Exception as _dhm_err:
             st.warning(f"Dealer Hedging Map error: {str(_dhm_err)[:80]}")
+
+        # ===== SPOT OI PRESSURE ANALYSIS ENGINE =====
+        st.markdown("---")
+        st.markdown("## 🎯 Spot OI Pressure Analysis")
+        try:
+            _sop = compute_spot_oi_pressure(mde)
+            _sop_LOT = 100000
+
+            # Row 1 — Market Control + OI Shift + Breakout Probability
+            _sop_c1, _sop_c2, _sop_c3 = st.columns(3)
+
+            _mc_score = _sop['market_control_score']
+            _mc_clr = '#00ff88' if _mc_score > 20 else ('#ff4444' if _mc_score < -20 else '#FFD700')
+            with _sop_c1:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_mc_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>MARKET CONTROL</span><br>
+                <span style='font-size:1.1em;font-weight:bold;color:{_mc_clr}'>{_sop['market_control']}</span><br>
+                <span style='font-size:0.8em;color:#666'>Score: {_mc_score:+d} | Bias: {_sop['spot_oi_bias']/_sop_LOT:+.2f}L</span>
+                </div>""", unsafe_allow_html=True)
+
+            _shift_clr_map = {'Long Build-up': '#00ff88', 'Short Build-up': '#ff4444',
+                              'Short Covering': '#FFD700', 'Long Unwinding': '#ff8800'}
+            _shift_clr = _shift_clr_map.get(_sop['oi_shift'], '#888')
+            _shift_emoji = {'Long Build-up': '🟢', 'Short Build-up': '🔴',
+                            'Short Covering': '🟡', 'Long Unwinding': '🟠'}.get(_sop['oi_shift'], '⚪')
+            with _sop_c2:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_shift_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>OI POSITION SHIFT</span><br>
+                <span style='font-size:1.1em;font-weight:bold;color:{_shift_clr}'>{_shift_emoji} {_sop['oi_shift']}</span><br>
+                <span style='font-size:0.8em;color:#666'>{_sop['oi_shift_detail']}</span>
+                </div>""", unsafe_allow_html=True)
+
+            _bo_prob = _sop['breakout_probability']
+            _bo_clr = '#ff4444' if _bo_prob >= 60 else ('#FFD700' if _bo_prob >= 30 else '#00aaff')
+            _bo_dir = _sop['breakout_direction']
+            _bo_arrow = '⬆️' if _bo_dir == 'Upside' else ('⬇️' if _bo_dir == 'Downside' else '↔️')
+            with _sop_c3:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_bo_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>BREAKOUT PROBABILITY</span><br>
+                <span style='font-size:1.1em;font-weight:bold;color:{_bo_clr}'>{_bo_prob}% {_bo_arrow} {_bo_dir}</span><br>
+                <span style='font-size:0.8em;color:#666'>{"High alert!" if _bo_prob >= 60 else "Moderate" if _bo_prob >= 30 else "Low probability"}</span>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("")
+
+            # Row 2 — Spot Zone OI Summary
+            _sop_r2c1, _sop_r2c2 = st.columns(2)
+            with _sop_r2c1:
+                st.markdown("#### 🟢 Spot Support Strength")
+                st.progress(min(_sop['support_strength'] / 10.0, 1.0),
+                            text=f"Score: {_sop['support_strength']}/10")
+                st.caption(f"Spot PE OI: {_sop['spot_put_oi']/_sop_LOT:.2f}L | "
+                           f"PE ΔOI: {_sop['spot_put_change']/_sop_LOT:+.2f}L")
+            with _sop_r2c2:
+                st.markdown("#### 🔴 Spot Resistance Strength")
+                st.progress(min(_sop['resistance_strength'] / 10.0, 1.0),
+                            text=f"Score: {_sop['resistance_strength']}/10")
+                st.caption(f"Spot CE OI: {_sop['spot_call_oi']/_sop_LOT:.2f}L | "
+                           f"CE ΔOI: {_sop['spot_call_change']/_sop_LOT:+.2f}L")
+
+            # Row 3 — Spot OI Trend Graph (bar chart)
+            _sop_trend = _sop.get('spot_oi_trend', [])
+            if _sop_trend:
+                st.markdown("#### 📊 Spot Zone OI Distribution (ATM ± 3)")
+                _sop_trend_df = pd.DataFrame(_sop_trend)
+                _sop_trend_df['Strike'] = _sop_trend_df['Strike'].astype(str)
+
+                _sop_fig = go.Figure()
+                _sop_fig.add_trace(go.Bar(
+                    x=_sop_trend_df['Strike'], y=_sop_trend_df['CE_OI'],
+                    name='CE OI (L)', marker_color='#ff4444', opacity=0.7))
+                _sop_fig.add_trace(go.Bar(
+                    x=_sop_trend_df['Strike'], y=_sop_trend_df['PE_OI'],
+                    name='PE OI (L)', marker_color='#00ff88', opacity=0.7))
+                _sop_fig.add_trace(go.Bar(
+                    x=_sop_trend_df['Strike'], y=_sop_trend_df['CE_Change'],
+                    name='CE ΔOI (L)', marker_color='#ff8888', opacity=0.5))
+                _sop_fig.add_trace(go.Bar(
+                    x=_sop_trend_df['Strike'], y=_sop_trend_df['PE_Change'],
+                    name='PE ΔOI (L)', marker_color='#88ffaa', opacity=0.5))
+                _sop_fig.update_layout(
+                    barmode='group', height=320,
+                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                    font=dict(color='#ccc'),
+                    legend=dict(orientation='h', y=-0.15),
+                    margin=dict(l=40, r=20, t=30, b=40),
+                    xaxis_title='Strike', yaxis_title='OI (Lakhs)')
+                st.plotly_chart(_sop_fig, use_container_width=True)
+
+            # Row 4 — Institutional Activity + Smart Money Entries
+            _sop_r4c1, _sop_r4c2 = st.columns(2)
+            with _sop_r4c1:
+                st.markdown("#### 🏦 Institutional Activity")
+                _ia_score = _sop['institutional_activity_score']
+                _ia_clr = '#00ff88' if _ia_score > 2 else ('#ff4444' if _ia_score < -2 else '#FFD700')
+                st.markdown(f"**Bias:** <span style='color:{_ia_clr}'>{_sop['institutional_bias']}</span> "
+                            f"(Score: {_ia_score:+d})", unsafe_allow_html=True)
+                for _sig in _sop.get('institutional_signals', [])[:5]:
+                    st.caption(f"• {_sig}")
+                if not _sop.get('institutional_signals'):
+                    st.caption("• No significant institutional activity detected")
+
+            with _sop_r4c2:
+                st.markdown("#### 💰 Smart Money Entries")
+                _sm_entries = _sop.get('smart_money_entries', [])
+                if _sm_entries:
+                    for _sm in _sm_entries[:5]:
+                        _sm_clr = '#00ff88' if _sm['signal'] == 'Bullish' else '#ff4444'
+                        _sm_emoji = '🟢' if _sm['signal'] == 'Bullish' else '🔴'
+                        st.markdown(f"<div style='background:#1a1a2e;padding:6px 10px;border-radius:4px;margin-bottom:4px;"
+                                    f"border-left:3px solid {_sm_clr};font-size:0.85em'>"
+                                    f"{_sm_emoji} <b>{_sm['action']}</b> ({_sm['signal']})<br>"
+                                    f"<span style='color:#999'>{_sm['detail']}</span></div>",
+                                    unsafe_allow_html=True)
+                else:
+                    st.caption("• No smart money entries detected in spot zone")
+
+            # Row 5 — Gamma Wall + Liquidity Traps + Expiry Manipulation
+            _sop_r5c1, _sop_r5c2, _sop_r5c3 = st.columns(3)
+            with _sop_r5c1:
+                st.markdown("#### ⚡ Spot Gamma Wall")
+                _gw = _sop.get('gamma_wall')
+                if _gw:
+                    _gw_clr = '#ffeb3b' if 'Pin' in _sop['gamma_wall_type'] else '#ff6600'
+                    st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                    border-left:3px solid {_gw_clr};text-align:center'>
+                    <div style='font-size:22px;font-weight:bold;color:{_gw_clr}'>₹{_gw:,}</div>
+                    <div style='font-size:0.8em;color:#aaa'>{_sop['gamma_wall_type']}</div>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.caption("No dominant gamma wall in spot zone")
+
+            with _sop_r5c2:
+                st.markdown("#### 🪤 Liquidity Traps")
+                _lt = _sop.get('liquidity_traps', [])
+                if _lt:
+                    for _trap in _lt:
+                        _lt_clr = '#ff4444' if _trap['severity'] == 'High' else '#FFD700'
+                        st.markdown(f"<div style='border-left:3px solid {_lt_clr};padding:4px 8px;margin-bottom:4px'>"
+                                    f"<b style='color:{_lt_clr}'>{_trap['type']}</b><br>"
+                                    f"<span style='color:#999;font-size:0.8em'>{_trap['detail']}</span></div>",
+                                    unsafe_allow_html=True)
+                else:
+                    st.caption("No liquidity traps detected")
+
+            with _sop_r5c3:
+                st.markdown("#### 📅 Expiry Manipulation")
+                _em = _sop.get('expiry_manipulation', {})
+                if _em.get('detected'):
+                    st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                    border-left:3px solid #ff44ff'>
+                    <div style='font-size:14px;font-weight:bold;color:#ff44ff'>⚠️ Detected</div>
+                    <div style='font-size:0.8em;color:#ccc;margin-top:4px'>{_em['details']}</div>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.caption("No expiry manipulation signals")
+
+            # Row 6 — OI Cluster Shift Detection
+            _ocs = _sop.get('oi_cluster_shift', {})
+            if _ocs.get('detected'):
+                _ocs_clr = '#00ff88' if 'STRONG TREND' in _ocs.get('detail', '') else '#FFD700'
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;
+                border-left:4px solid {_ocs_clr};margin-top:8px'>
+                <span style='font-size:0.85em;color:#aaa'>🔄 OI CLUSTER SHIFT — {_ocs['direction']}</span><br>
+                <span style='font-size:0.95em;color:{_ocs_clr}'>{_ocs['detail']}</span>
+                </div>""", unsafe_allow_html=True)
+
+            # Breakout signals detail
+            _bo_sigs = _sop.get('breakout_signals', [])
+            if _bo_sigs:
+                with st.expander("📈 Breakout Signal Details"):
+                    for _bs in _bo_sigs:
+                        st.caption(f"• {_bs}")
+
+        except Exception as _sop_err:
+            st.warning(f"Spot OI Pressure error: {str(_sop_err)[:80]}")
 
         # ===== VOLUME PCR + STRADDLE + COMBINED SIGNAL (ATM ± 2) =====
         st.markdown("---")
