@@ -15385,33 +15385,49 @@ def compute_market_depth_spot_pressure(mde):
         spot_call_oi_chg = spot_zone['changeinOpenInterest_CE'].sum()
 
     LOT = 100000
-    # Put OI increasing + Put Bid increasing = Strong Support
-    if spot_put_oi_chg > 0 and spot_put_bid > spot_call_bid:
+    # Put OI increasing + Put Ask high = put WRITERS active = institutional support building
+    # (Put Ask = sellers offering puts = they believe price won't fall)
+    if spot_put_oi_chg > 0 and spot_put_ask > spot_put_bid:
         confluence.append({
             'signal': 'STRONG SUPPORT ZONE',
             'type': 'Bullish',
-            'detail': f"PE OI +{spot_put_oi_chg/LOT:.2f}L + PE Bid dominant ({spot_put_bid:,.0f}) — institutional floor"
+            'detail': f"PE OI +{spot_put_oi_chg/LOT:.2f}L + PE Ask dominant ({spot_put_ask:,.0f}) — institutions writing puts (floor)"
         })
-    # Call OI increasing + Call Ask increasing = Strong Resistance
-    if spot_call_oi_chg > 0 and spot_call_ask > spot_put_ask:
+    # Put OI increasing + Put Bid high = put BUYERS active = fear/hedging (weak support)
+    if spot_put_oi_chg > 0 and spot_put_bid > spot_put_ask:
+        confluence.append({
+            'signal': 'HEDGING ACTIVITY',
+            'type': 'Caution',
+            'detail': f"PE OI +{spot_put_oi_chg/LOT:.2f}L + PE Bid dominant ({spot_put_bid:,.0f}) — put buying (fear/hedge)"
+        })
+    # Call OI increasing + Call Ask high = call WRITERS active = institutional resistance building
+    # (Call Ask = sellers offering calls = they believe price won't rise)
+    if spot_call_oi_chg > 0 and spot_call_ask > spot_call_bid:
         confluence.append({
             'signal': 'STRONG RESISTANCE ZONE',
             'type': 'Bearish',
-            'detail': f"CE OI +{spot_call_oi_chg/LOT:.2f}L + CE Ask dominant ({spot_call_ask:,.0f}) — institutional ceiling"
+            'detail': f"CE OI +{spot_call_oi_chg/LOT:.2f}L + CE Ask dominant ({spot_call_ask:,.0f}) — institutions writing calls (ceiling)"
         })
-    # Put OI collapsing + Bid also collapsing = Support breaking
-    if spot_put_oi_chg < 0 and spot_put_bid < spot_put_ask:
+    # Call OI increasing + Call Bid high = call BUYERS active = bullish aggression
+    if spot_call_oi_chg > 0 and spot_call_bid > spot_call_ask:
+        confluence.append({
+            'signal': 'BULLISH AGGRESSION',
+            'type': 'Bullish',
+            'detail': f"CE OI +{spot_call_oi_chg/LOT:.2f}L + CE Bid dominant ({spot_call_bid:,.0f}) — call buying (breakout intent)"
+        })
+    # Put OI collapsing + Put Ask dropping = put writers exiting = support weakening
+    if spot_put_oi_chg < 0 and spot_put_ask < spot_put_bid:
         confluence.append({
             'signal': 'SUPPORT BREAKING',
             'type': 'Bearish',
-            'detail': f"PE OI {spot_put_oi_chg/LOT:+.2f}L + PE Bid weak ({spot_put_bid:,.0f} < Ask {spot_put_ask:,.0f})"
+            'detail': f"PE OI {spot_put_oi_chg/LOT:+.2f}L + PE Ask weak ({spot_put_ask:,.0f} < Bid {spot_put_bid:,.0f}) — put writers exiting"
         })
-    # Call OI collapsing + Ask also collapsing = Resistance breaking
+    # Call OI collapsing + Call Ask dropping = call writers exiting = resistance weakening
     if spot_call_oi_chg < 0 and spot_call_ask < spot_call_bid:
         confluence.append({
             'signal': 'RESISTANCE BREAKING',
             'type': 'Bullish',
-            'detail': f"CE OI {spot_call_oi_chg/LOT:+.2f}L + CE Ask weak ({spot_call_ask:,.0f} < Bid {spot_call_bid:,.0f})"
+            'detail': f"CE OI {spot_call_oi_chg/LOT:+.2f}L + CE Ask weak ({spot_call_ask:,.0f} < Bid {spot_call_bid:,.0f}) — call writers exiting"
         })
 
     result['oi_depth_confluence'] = confluence
@@ -20688,8 +20704,8 @@ def main():
                 if _conf:
                     st.markdown("#### 🔗 OI + Depth Confluence (High-Confidence Signals)")
                     for _cf in _conf:
-                        _cf_clr = '#00ff88' if _cf['type'] == 'Bullish' else '#ff4444'
-                        _cf_emoji = '🟢' if _cf['type'] == 'Bullish' else '🔴'
+                        _cf_clr = '#00ff88' if _cf['type'] == 'Bullish' else ('#ff4444' if _cf['type'] == 'Bearish' else '#FFD700')
+                        _cf_emoji = '🟢' if _cf['type'] == 'Bullish' else ('🔴' if _cf['type'] == 'Bearish' else '🟡')
                         st.markdown(f"""<div style='background:#111827;padding:12px;border-radius:8px;
                         border-left:4px solid {_cf_clr};margin-bottom:6px'>
                         <div style='font-size:15px;font-weight:bold;color:{_cf_clr}'>{_cf_emoji} {_cf['signal']}</div>
