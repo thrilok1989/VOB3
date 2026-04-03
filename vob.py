@@ -15568,6 +15568,237 @@ def compute_oi_depth_timeline(mde):
     return result
 
 
+# ── Triple Confluence Engine: OI + Depth + Money Flow ────────────────
+def compute_triple_confluence(mde, spot_oi_result, depth_result, df_today):
+    """
+    Merge Spot OI Pressure + Market Depth + Money Flow Profile into
+    a single high-confidence signal engine.
+
+    OI  = what positions exist (institutional structure)
+    Depth = what they WANT to do (order book intent)
+    Money Flow = what they ARE DOING (actual capital movement)
+
+    When all 3 align → highest confidence.
+    """
+    result = {
+        'signals': [],
+        'confidence': 0,
+        'verdict': '',
+        'verdict_color': '#888',
+        'oi_bias': 'Neutral', 'depth_bias': 'Neutral', 'mf_bias': 'Neutral',
+        'alignment': 0,  # 0-3 how many layers agree
+        'strike_analysis': [],
+    }
+
+    spot = mde.val('spot_price') or mde.val('underlying_price', 0)
+    if not spot:
+        return result
+
+    # ── Extract OI signal ────────────────────────────────────────────
+    oi_control = spot_oi_result.get('market_control', '')
+    oi_score = spot_oi_result.get('market_control_score', 0)
+    if oi_score > 10:
+        result['oi_bias'] = 'Bullish'
+    elif oi_score < -10:
+        result['oi_bias'] = 'Bearish'
+    else:
+        result['oi_bias'] = 'Neutral'
+
+    # ── Extract Depth signal ─────────────────────────────────────────
+    depth_bias_label = depth_result.get('depth_bias_label', 'Balanced')
+    depth_pressure = depth_result.get('depth_pressure_score', 0)
+    if 'Bullish' in depth_bias_label:
+        result['depth_bias'] = 'Bullish'
+    elif 'Bearish' in depth_bias_label:
+        result['depth_bias'] = 'Bearish'
+    else:
+        result['depth_bias'] = 'Neutral'
+
+    # ── Extract Money Flow signal from df_today ──────────────────────
+    mf_bull_vol = 0
+    mf_bear_vol = 0
+    mf_poc_price = None
+
+    if df_today is not None and not df_today.empty and len(df_today) >= 10:
+        for _col in ['open', 'high', 'low', 'close', 'volume']:
+            if _col in df_today.columns:
+                df_today[_col] = pd.to_numeric(df_today[_col], errors='coerce').fillna(0)
+
+        _high = float(df_today['high'].max())
+        _low = float(df_today['low'].min())
+        if _high > _low and 'volume' in df_today.columns:
+            _num_bins = 25
+            _step = (_high - _low) / _num_bins
+            _bin_vols = [0.0] * _num_bins
+            _bin_bull = [0.0] * _num_bins
+            _bin_bear = [0.0] * _num_bins
+
+            for _, r in df_today.iterrows():
+                try:
+                    h, l, c, o = float(r['high']), float(r['low']), float(r['close']), float(r['open'])
+                    v = float(r.get('volume', 0)) if pd.notna(r.get('volume', 0)) else 0.0
+                except (ValueError, TypeError):
+                    continue
+                if v <= 0 or h <= l:
+                    continue
+                is_bull = c > o
+                for bi in range(_num_bins):
+                    bl = _low + bi * _step
+                    bh = bl + _step
+                    if h >= bl and l < bh:
+                        portion = (min(h, bh) - max(l, bl)) / (h - l)
+                        vp = v * portion
+                        _bin_vols[bi] += vp
+                        if is_bull:
+                            _bin_bull[bi] += vp
+                        else:
+                            _bin_bear[bi] += vp
+
+            mf_bull_vol = sum(_bin_bull)
+            mf_bear_vol = sum(_bin_bear)
+            poc_idx = _bin_vols.index(max(_bin_vols))
+            mf_poc_price = _low + (poc_idx + 0.5) * _step
+
+    if mf_bull_vol > mf_bear_vol * 1.15:
+        result['mf_bias'] = 'Bullish'
+    elif mf_bear_vol > mf_bull_vol * 1.15:
+        result['mf_bias'] = 'Bearish'
+    else:
+        result['mf_bias'] = 'Neutral'
+
+    # ── Count alignment ──────────────────────────────────────────────
+    biases = [result['oi_bias'], result['depth_bias'], result['mf_bias']]
+    bullish_count = biases.count('Bullish')
+    bearish_count = biases.count('Bearish')
+
+    if bullish_count == 3:
+        result['alignment'] = 3
+        result['verdict'] = 'TRIPLE BULLISH CONFLUENCE'
+        result['verdict_color'] = '#00ff88'
+        result['confidence'] = 95
+    elif bearish_count == 3:
+        result['alignment'] = 3
+        result['verdict'] = 'TRIPLE BEARISH CONFLUENCE'
+        result['verdict_color'] = '#ff4444'
+        result['confidence'] = 95
+    elif bullish_count == 2:
+        result['alignment'] = 2
+        odd_one = [b for b in ['oi_bias', 'depth_bias', 'mf_bias'] if result[b] != 'Bullish'][0]
+        result['verdict'] = f'DOUBLE BULLISH ({odd_one.split("_")[0].upper()} diverging)'
+        result['verdict_color'] = '#00cc66'
+        result['confidence'] = 70
+    elif bearish_count == 2:
+        result['alignment'] = 2
+        odd_one = [b for b in ['oi_bias', 'depth_bias', 'mf_bias'] if result[b] != 'Bearish'][0]
+        result['verdict'] = f'DOUBLE BEARISH ({odd_one.split("_")[0].upper()} diverging)'
+        result['verdict_color'] = '#ff6666'
+        result['confidence'] = 70
+    elif bullish_count == 1 and bearish_count == 1:
+        result['alignment'] = 0
+        result['verdict'] = 'CONFLICTING SIGNALS — No clear direction'
+        result['verdict_color'] = '#FFD700'
+        result['confidence'] = 25
+    else:
+        result['alignment'] = 0
+        result['verdict'] = 'NEUTRAL — Waiting for alignment'
+        result['verdict_color'] = '#888'
+        result['confidence'] = 15
+
+    # ── Build detailed signals ───────────────────────────────────────
+    signals = []
+
+    # OI layer
+    oi_shift = spot_oi_result.get('oi_shift', '')
+    signals.append({
+        'layer': 'OI',
+        'bias': result['oi_bias'],
+        'detail': f"{oi_control} | {oi_shift} (Score: {oi_score:+d})",
+    })
+
+    # Depth layer
+    liq_control = depth_result.get('liquidity_control', 'Unknown')
+    liq_shift = depth_result.get('liquidity_shift', '')
+    signals.append({
+        'layer': 'Depth',
+        'bias': result['depth_bias'],
+        'detail': f"{liq_control} | {liq_shift} (Pressure: {depth_pressure:+d})",
+    })
+
+    # Money Flow layer
+    if mf_bull_vol + mf_bear_vol > 0:
+        mf_ratio = mf_bull_vol / (mf_bull_vol + mf_bear_vol) * 100
+        poc_str = f"₹{mf_poc_price:.0f}" if mf_poc_price else "N/A"
+        signals.append({
+            'layer': 'Money Flow',
+            'bias': result['mf_bias'],
+            'detail': f"Bull: {mf_ratio:.0f}% | Bear: {100-mf_ratio:.0f}% | POC: {poc_str}",
+        })
+    else:
+        signals.append({
+            'layer': 'Money Flow',
+            'bias': 'N/A',
+            'detail': 'Insufficient candle data',
+        })
+
+    result['signals'] = signals
+
+    # ── Per-strike triple analysis ───────────────────────────────────
+    df_summary = mde.val('df_summary')
+    if df_summary is not None and not df_summary.empty:
+        ds = df_summary.sort_values('Strike').reset_index(drop=True)
+        for _c in ['openInterest_CE', 'openInterest_PE', 'changeinOpenInterest_CE',
+                    'changeinOpenInterest_PE', 'bidQty_CE', 'askQty_CE',
+                    'bidQty_PE', 'askQty_PE', 'totalTradedVolume_CE', 'totalTradedVolume_PE']:
+            if _c in ds.columns:
+                ds[_c] = pd.to_numeric(ds[_c], errors='coerce').fillna(0)
+
+        for _, row in ds.iterrows():
+            strike = int(row['Strike'])
+            ce_oi = row.get('openInterest_CE', 0)
+            pe_oi = row.get('openInterest_PE', 0)
+            ce_chg = row.get('changeinOpenInterest_CE', 0)
+            pe_chg = row.get('changeinOpenInterest_PE', 0)
+            ce_ask = row.get('askQty_CE', 0)
+            pe_ask = row.get('askQty_PE', 0)
+            ce_bid = row.get('bidQty_CE', 0)
+            pe_bid = row.get('bidQty_PE', 0)
+            ce_vol = row.get('totalTradedVolume_CE', 0)
+            pe_vol = row.get('totalTradedVolume_PE', 0)
+
+            # OI signal: PE OI > CE OI = support
+            oi_sig = 'Bullish' if pe_oi > ce_oi else ('Bearish' if ce_oi > pe_oi else 'Neutral')
+            # Depth signal: PE Ask > PE Bid = put writers = support
+            depth_sig = 'Bullish' if pe_ask > ce_ask else ('Bearish' if ce_ask > pe_ask else 'Neutral')
+            # Volume signal: PE Vol > CE Vol often = more put activity
+            vol_sig = 'Bullish' if pe_vol > ce_vol * 1.2 else ('Bearish' if ce_vol > pe_vol * 1.2 else 'Neutral')
+
+            strike_sigs = [oi_sig, depth_sig, vol_sig]
+            bull_c = strike_sigs.count('Bullish')
+            bear_c = strike_sigs.count('Bearish')
+
+            if bull_c == 3:
+                verdict = 'STRONG SUPPORT'
+            elif bear_c == 3:
+                verdict = 'STRONG RESISTANCE'
+            elif bull_c == 2:
+                verdict = 'Support'
+            elif bear_c == 2:
+                verdict = 'Resistance'
+            else:
+                verdict = 'Neutral'
+
+            result['strike_analysis'].append({
+                'Strike': strike,
+                'OI': oi_sig,
+                'Depth': depth_sig,
+                'Volume': vol_sig,
+                'Verdict': verdict,
+                'CE_OI': ce_oi, 'PE_OI': pe_oi,
+            })
+
+    return result
+
+
 def main():
     st.title("📈 Nifty Trading & Options Analyzer")
 
@@ -20894,6 +21125,88 @@ def main():
 
         except Exception as _mdp_err:
             st.warning(f"Market Depth Spot Pressure error: {str(_mdp_err)[:80]}")
+
+        # ===== TRIPLE CONFLUENCE: OI + DEPTH + MONEY FLOW =====
+        st.markdown("---")
+        st.markdown("## 🔗 Triple Confluence — OI · Depth · Money Flow")
+        try:
+            # Gather results from previous engines (use empty defaults if they failed)
+            _tc_sop = _sop if '_sop' in dir() else compute_spot_oi_pressure(mde)
+            _tc_mdp = _mdp if '_mdp' in dir() else compute_market_depth_spot_pressure(mde)
+            _tc_df_today = _df_today if '_df_today' in dir() else None
+
+            _tc = compute_triple_confluence(mde, _tc_sop, _tc_mdp, _tc_df_today)
+
+            # Row 1 — Main Verdict with confidence
+            _tc_conf = _tc['confidence']
+            _tc_vclr = _tc['verdict_color']
+            _tc_align = _tc['alignment']
+            _align_bar = '🟢' * _tc_align + '⚪' * (3 - _tc_align)
+
+            st.markdown(f"""<div style='background:#111827;padding:18px;border-radius:10px;
+            border-left:5px solid {_tc_vclr};margin-bottom:12px'>
+            <div style='font-size:0.8em;color:#888;text-transform:uppercase'>TRIPLE CONFLUENCE VERDICT</div>
+            <div style='font-size:1.4em;font-weight:bold;color:{_tc_vclr};margin:6px 0'>{_tc['verdict']}</div>
+            <div style='font-size:0.9em;color:#ccc'>Confidence: {_tc_conf}% | Alignment: {_align_bar} ({_tc_align}/3 layers agree)</div>
+            </div>""", unsafe_allow_html=True)
+
+            # Row 2 — Three layer cards
+            _tc_l1, _tc_l2, _tc_l3 = st.columns(3)
+            for _tc_col, _sig in zip([_tc_l1, _tc_l2, _tc_l3], _tc.get('signals', [])):
+                _b = _sig.get('bias', 'N/A')
+                _b_clr = '#00ff88' if _b == 'Bullish' else ('#ff4444' if _b == 'Bearish' else '#FFD700')
+                _b_emoji = '🟢' if _b == 'Bullish' else ('🔴' if _b == 'Bearish' else '⚪')
+                with _tc_col:
+                    st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;
+                    border-left:4px solid {_b_clr}'>
+                    <div style='font-size:0.75em;color:#888;text-transform:uppercase'>{_sig['layer']}</div>
+                    <div style='font-size:1.05em;font-weight:bold;color:{_b_clr}'>{_b_emoji} {_b}</div>
+                    <div style='font-size:0.8em;color:#999;margin-top:4px'>{_sig['detail']}</div>
+                    </div>""", unsafe_allow_html=True)
+
+            # Row 3 — Per-strike triple analysis table
+            _tc_strikes = _tc.get('strike_analysis', [])
+            if _tc_strikes:
+                st.markdown("#### 📋 Per-Strike Triple Analysis (ATM ± 2)")
+                _tc_rows = []
+                LOT = 100000
+                for _s in _tc_strikes:
+                    _v = _s['Verdict']
+                    _v_emoji = '🟢' if 'Support' in _v else ('🔴' if 'Resistance' in _v else '⚪')
+                    _v_bold = '**' if 'STRONG' in _v else ''
+                    _oi_e = '🟢' if _s['OI'] == 'Bullish' else ('🔴' if _s['OI'] == 'Bearish' else '⚪')
+                    _d_e = '🟢' if _s['Depth'] == 'Bullish' else ('🔴' if _s['Depth'] == 'Bearish' else '⚪')
+                    _vol_e = '🟢' if _s['Volume'] == 'Bullish' else ('🔴' if _s['Volume'] == 'Bearish' else '⚪')
+                    _tc_rows.append({
+                        'Strike': f"₹{_s['Strike']:,}",
+                        'CE OI': f"{_s['CE_OI']/LOT:.2f}L",
+                        'PE OI': f"{_s['PE_OI']/LOT:.2f}L",
+                        'OI': f"{_oi_e} {_s['OI']}",
+                        'Depth': f"{_d_e} {_s['Depth']}",
+                        'Volume': f"{_vol_e} {_s['Volume']}",
+                        'Verdict': f"{_v_emoji} {_v}",
+                    })
+                st.dataframe(pd.DataFrame(_tc_rows), use_container_width=True, hide_index=True)
+
+                st.caption("OI = Put OI vs Call OI | Depth = Put Ask (writers) vs Call Ask | "
+                           "Volume = Put Volume vs Call Volume | "
+                           "All 3 align = STRONG signal")
+
+            # OI+Depth confluence from depth engine (if available)
+            _tc_oi_depth = _tc_mdp.get('oi_depth_confluence', []) if '_tc_mdp' in dir() else []
+            if _tc_oi_depth:
+                st.markdown("#### 🔗 OI + Depth Confluence Signals")
+                for _cf in _tc_oi_depth:
+                    _cf_clr = '#00ff88' if _cf['type'] == 'Bullish' else ('#ff4444' if _cf['type'] == 'Bearish' else '#FFD700')
+                    _cf_emoji = '🟢' if _cf['type'] == 'Bullish' else ('🔴' if _cf['type'] == 'Bearish' else '🟡')
+                    st.markdown(f"""<div style='background:#111827;padding:10px;border-radius:6px;
+                    border-left:3px solid {_cf_clr};margin-bottom:4px'>
+                    <span style='color:{_cf_clr};font-weight:bold'>{_cf_emoji} {_cf['signal']}</span>
+                    <span style='color:#999;font-size:0.85em'> — {_cf['detail']}</span>
+                    </div>""", unsafe_allow_html=True)
+
+        except Exception as _tc_err:
+            st.warning(f"Triple Confluence error: {str(_tc_err)[:80]}")
 
         # ===== VOLUME PCR + STRADDLE + COMBINED SIGNAL (ATM ± 2) =====
         st.markdown("---")
