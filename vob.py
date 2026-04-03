@@ -14759,12 +14759,21 @@ def compute_spot_oi_pressure(mde):
     LOT = 100000
     ds = df_summary.sort_values('Strike').reset_index(drop=True)
 
-    # ── Step 1: Define Spot Zone (ATM ± 3 strikes) ──────────────────
-    atm_matches = ds[ds['Strike'] == atm_strike].index.tolist()
-    ai = atm_matches[0] if atm_matches else int((ds['Strike'] - atm_strike).abs().idxmin())
-    spot_start = max(0, ai - 3)
-    spot_end = min(len(ds), ai + 4)
-    spot_zone = ds.iloc[spot_start:spot_end]
+    # ── Step 1: Define Spot Zone (ATM ± 2 strikes) ──────────────────
+    # Use pre-computed ATM slice from MDE, fallback to manual search
+    spot_zone = mde.val('atm_pm2_df')
+    if spot_zone is None or spot_zone.empty:
+        # Fallback: find ATM by Zone column or closest Strike
+        if 'Zone' in ds.columns and (ds['Zone'] == 'ATM').any():
+            atm_idx = ds[ds['Zone'] == 'ATM'].index
+            ai = ds.index.get_loc(atm_idx[0])
+        else:
+            ai = int((ds['Strike'] - atm_strike).abs().idxmin())
+        spot_start = max(0, ai - 2)
+        spot_end = min(len(ds), ai + 3)
+        spot_zone = ds.iloc[spot_start:spot_end]
+    else:
+        spot_zone = spot_zone.copy()
 
     # ── Step 2: Spot Zone OI Aggregation ─────────────────────────────
     spot_call_oi = spot_zone['openInterest_CE'].sum() if 'openInterest_CE' in spot_zone.columns else 0
@@ -14889,10 +14898,12 @@ def compute_spot_oi_pressure(mde):
             bo_score += 20
             bo_signals.append(f"Negative GEX ({total_gex:.0f}L) — acceleration likely")
     # Resistance migration (from existing data)
-    if spot_call_change < 0 and any(
+    spot_max_strike = spot_zone['Strike'].max()
+    above_spot = ds[ds['Strike'] > spot_max_strike].head(3)
+    if spot_call_change < 0 and not above_spot.empty and any(
         (row.get('changeinOpenInterest_CE', 0) or 0) > avg_ce_chg * 1.5
-        for _, row in ds.iloc[spot_end:spot_end+3].iterrows()
-    ) if spot_end + 3 <= len(ds) else False:
+        for _, row in above_spot.iterrows()
+    ):
         bo_score += 15
         bo_signals.append("Resistance shifting higher — bullish breakout setup")
 
@@ -14910,8 +14921,9 @@ def compute_spot_oi_pressure(mde):
         gex_df = gex_data.get('gex_df')
         if gex_df is not None and not gex_df.empty:
             # Find strike with max absolute Net_GEX near spot
-            spot_gex = gex_df[(gex_df['Strike'] >= ds.iloc[spot_start]['Strike']) &
-                              (gex_df['Strike'] <= ds.iloc[min(spot_end, len(ds)-1)]['Strike'])]
+            spot_min_strike = spot_zone['Strike'].min()
+            spot_gex = gex_df[(gex_df['Strike'] >= spot_min_strike) &
+                              (gex_df['Strike'] <= spot_max_strike)]
             if not spot_gex.empty:
                 max_gex_row = spot_gex.loc[spot_gex['Net_GEX'].abs().idxmax()]
                 gamma_wall_strike = int(max_gex_row['Strike'])
@@ -15098,6 +15110,323 @@ def compute_spot_oi_pressure(mde):
             'PE_Change': (row.get('changeinOpenInterest_PE', 0) or 0) / LOT,
         })
     result['spot_oi_trend'] = trend_data
+
+    return result
+
+
+# ── Market Depth Spot Pressure Analysis Engine ────────────────────────
+def compute_market_depth_spot_pressure(mde):
+    """
+    Comprehensive Market Depth analysis for Call vs Put around spot zone.
+    Detects institutional liquidity walls, spoofing, liquidity shifts,
+    and combines with OI for high-confidence signals.
+
+    Uses existing bid/ask data from df_summary — no new API calls.
+    """
+    result = {
+        'spot_call_bid': 0, 'spot_call_ask': 0,
+        'spot_put_bid': 0, 'spot_put_ask': 0,
+        'call_liquidity_total': 0, 'put_liquidity_total': 0,
+        'depth_bias': 0, 'depth_bias_label': '',
+        'liquidity_control': '',
+        'liquidity_signals': [],
+        'support_wall': None, 'resistance_wall': None,
+        'wall_score': 0,
+        'spoofing_alerts': [],
+        'liquidity_shift': '', 'liquidity_shift_detail': '',
+        'support_strength': 0, 'resistance_strength': 0,
+        'depth_pressure_score': 0,
+        'institutional_control': '',
+        'oi_depth_confluence': [],
+        'spot_depth_data': [],  # for heatmap/chart
+    }
+
+    df_summary = mde.val('df_summary')
+    spot = mde.val('spot_price') or mde.val('underlying_price', 0)
+    atm_strike = mde.val('atm_strike')
+
+    if df_summary is None or df_summary.empty or not atm_strike or not spot:
+        return result
+
+    # Check if bid/ask columns exist
+    has_bid_ce = 'bidQty_CE' in df_summary.columns
+    has_ask_ce = 'askQty_CE' in df_summary.columns
+    has_bid_pe = 'bidQty_PE' in df_summary.columns
+    has_ask_pe = 'askQty_PE' in df_summary.columns
+    if not (has_bid_ce or has_ask_ce or has_bid_pe or has_ask_pe):
+        return result
+
+    ds = df_summary.sort_values('Strike').reset_index(drop=True)
+
+    # ── Step 1: Define Spot Zone (ATM ± 2 strikes) ──────────────────
+    # Use pre-computed ATM slice from MDE, fallback to manual search
+    spot_zone = mde.val('atm_pm2_df')
+    if spot_zone is None or spot_zone.empty:
+        if 'Zone' in ds.columns and (ds['Zone'] == 'ATM').any():
+            atm_idx = ds[ds['Zone'] == 'ATM'].index
+            ai = ds.index.get_loc(atm_idx[0])
+        else:
+            ai = int((ds['Strike'] - atm_strike).abs().idxmin())
+        spot_start = max(0, ai - 2)
+        spot_end = min(len(ds), ai + 3)
+        spot_zone = ds.iloc[spot_start:spot_end]
+    else:
+        spot_zone = spot_zone.copy()
+
+    # Re-check bid/ask columns on the actual spot_zone
+    has_bid_ce = 'bidQty_CE' in spot_zone.columns
+    has_ask_ce = 'askQty_CE' in spot_zone.columns
+    has_bid_pe = 'bidQty_PE' in spot_zone.columns
+    has_ask_pe = 'askQty_PE' in spot_zone.columns
+
+    def _sv(val):
+        """Safe value — coerce to float, treat NaN as 0."""
+        try:
+            v = float(val)
+            return v if pd.notna(v) else 0.0
+        except Exception:
+            return 0.0
+
+    # ── Step 2: Aggregate Market Depth in Spot Zone ──────────────────
+    spot_call_bid = sum(_sv(r.get('bidQty_CE', 0)) for _, r in spot_zone.iterrows()) if has_bid_ce else 0
+    spot_call_ask = sum(_sv(r.get('askQty_CE', 0)) for _, r in spot_zone.iterrows()) if has_ask_ce else 0
+    spot_put_bid = sum(_sv(r.get('bidQty_PE', 0)) for _, r in spot_zone.iterrows()) if has_bid_pe else 0
+    spot_put_ask = sum(_sv(r.get('askQty_PE', 0)) for _, r in spot_zone.iterrows()) if has_ask_pe else 0
+
+    result['spot_call_bid'] = spot_call_bid
+    result['spot_call_ask'] = spot_call_ask
+    result['spot_put_bid'] = spot_put_bid
+    result['spot_put_ask'] = spot_put_ask
+
+    call_liquidity = spot_call_bid + spot_call_ask
+    put_liquidity = spot_put_bid + spot_put_ask
+    result['call_liquidity_total'] = call_liquidity
+    result['put_liquidity_total'] = put_liquidity
+
+    # ── Step 3: Liquidity Control Detection ──────────────────────────
+    signals = []
+
+    if spot_call_ask > spot_put_ask * 1.5 and spot_call_ask > 0:
+        signals.append("High Call Ask liquidity — sellers defending upside")
+    if spot_put_ask > spot_call_ask * 1.5 and spot_put_ask > 0:
+        signals.append("High Put Ask liquidity — sellers defending downside")
+    if spot_call_bid > spot_put_bid * 1.5 and spot_call_bid > 0:
+        signals.append("Call Bid increasing — buyers preparing breakout")
+    if spot_put_bid > spot_call_bid * 1.5 and spot_put_bid > 0:
+        signals.append("Put Bid increasing — buyers building support floor")
+
+    # Net pressure: (call_bid - call_ask) + (put_ask - put_bid) from existing formula
+    net_pressure = (spot_call_bid - spot_call_ask) + (spot_put_ask - spot_put_bid)
+    if net_pressure > 1000:
+        result['liquidity_control'] = "Strong Bullish Pressure"
+        signals.append(f"Net depth pressure strongly bullish ({net_pressure:+,.0f})")
+    elif net_pressure > 300:
+        result['liquidity_control'] = "Bullish Pressure"
+        signals.append(f"Net depth pressure bullish ({net_pressure:+,.0f})")
+    elif net_pressure > -300:
+        result['liquidity_control'] = "Balanced"
+    elif net_pressure > -1000:
+        result['liquidity_control'] = "Bearish Pressure"
+        signals.append(f"Net depth pressure bearish ({net_pressure:+,.0f})")
+    else:
+        result['liquidity_control'] = "Strong Bearish Pressure"
+        signals.append(f"Net depth pressure strongly bearish ({net_pressure:+,.0f})")
+
+    result['liquidity_signals'] = signals
+    result['depth_pressure_score'] = max(-100, min(100, int(net_pressure / 10)))
+
+    # ── Step 4: Institutional Liquidity Walls ────────────────────────
+    # Find max bid wall (support) and max ask wall (resistance) in spot zone
+    wall_score = 0
+
+    if has_bid_pe:
+        max_bid_pe_row = spot_zone.loc[spot_zone['bidQty_PE'].apply(_sv).idxmax()]
+        max_bid_pe_qty = _sv(max_bid_pe_row.get('bidQty_PE', 0))
+        avg_bid_pe = ds['bidQty_PE'].apply(_sv).mean() if has_bid_pe else 1
+        if avg_bid_pe > 0 and max_bid_pe_qty > avg_bid_pe * 2:
+            result['support_wall'] = {
+                'strike': int(max_bid_pe_row['Strike']),
+                'qty': max_bid_pe_qty,
+                'strength': 'Strong' if max_bid_pe_qty > avg_bid_pe * 3 else 'Moderate'
+            }
+            wall_score += 2 if max_bid_pe_qty > avg_bid_pe * 3 else 1
+
+    if has_ask_ce:
+        max_ask_ce_row = spot_zone.loc[spot_zone['askQty_CE'].apply(_sv).idxmax()]
+        max_ask_ce_qty = _sv(max_ask_ce_row.get('askQty_CE', 0))
+        avg_ask_ce = ds['askQty_CE'].apply(_sv).mean() if has_ask_ce else 1
+        if avg_ask_ce > 0 and max_ask_ce_qty > avg_ask_ce * 2:
+            result['resistance_wall'] = {
+                'strike': int(max_ask_ce_row['Strike']),
+                'qty': max_ask_ce_qty,
+                'strength': 'Strong' if max_ask_ce_qty > avg_ask_ce * 3 else 'Moderate'
+            }
+            wall_score += 2 if max_ask_ce_qty > avg_ask_ce * 3 else 1
+
+    result['wall_score'] = wall_score
+
+    # ── Step 5: Market Depth Bias (Put - Call Liquidity) ─────────────
+    depth_bias = put_liquidity - call_liquidity
+    result['depth_bias'] = depth_bias
+
+    if depth_bias > 5000:
+        result['depth_bias_label'] = "Strong Bullish"
+    elif depth_bias > 1000:
+        result['depth_bias_label'] = "Bullish"
+    elif depth_bias > -1000:
+        result['depth_bias_label'] = "Balanced"
+    elif depth_bias > -5000:
+        result['depth_bias_label'] = "Bearish"
+    else:
+        result['depth_bias_label'] = "Strong Bearish"
+
+    # ── Step 6: Spoofing / Fake Liquidity Detection ──────────────────
+    spoofing_alerts = []
+    prev_depth = st.session_state.get('_depth_prev_snapshot')
+    if prev_depth and isinstance(prev_depth, dict):
+        for _, row in spot_zone.iterrows():
+            strike = int(row['Strike'])
+            cur_bid_ce = _sv(row.get('bidQty_CE', 0))
+            cur_ask_ce = _sv(row.get('askQty_CE', 0))
+            cur_bid_pe = _sv(row.get('bidQty_PE', 0))
+            cur_ask_pe = _sv(row.get('askQty_PE', 0))
+
+            prev = prev_depth.get(strike, {})
+            prev_bid_ce = prev.get('bid_ce', 0)
+            prev_ask_ce = prev.get('ask_ce', 0)
+            prev_bid_pe = prev.get('bid_pe', 0)
+            prev_ask_pe = prev.get('ask_pe', 0)
+
+            # Large order appeared then disappeared (>60% drop)
+            for side, cur, prv, label in [
+                ('CE Bid', cur_bid_ce, prev_bid_ce, 'Call Bid'),
+                ('CE Ask', cur_ask_ce, prev_ask_ce, 'Call Ask'),
+                ('PE Bid', cur_bid_pe, prev_bid_pe, 'Put Bid'),
+                ('PE Ask', cur_ask_pe, prev_ask_pe, 'Put Ask'),
+            ]:
+                if prv > 0 and cur < prv * 0.4 and prv > (ds[f'bidQty_CE' if 'Bid' in side else f'askQty_CE'].apply(_sv).mean() if 'CE' in side else ds[f'bidQty_PE' if 'Bid' in side else f'askQty_PE'].apply(_sv).mean()) * 2:
+                    spoofing_alerts.append({
+                        'strike': strike,
+                        'side': label,
+                        'detail': f"₹{strike} {label}: {prv:,.0f} → {cur:,.0f} ({(cur-prv)/prv*100:+.0f}%)",
+                        'severity': 'High' if prv > 5000 else 'Medium'
+                    })
+
+    result['spoofing_alerts'] = spoofing_alerts[:5]
+
+    # Save current snapshot for next comparison
+    depth_snapshot = {}
+    for _, row in spot_zone.iterrows():
+        strike = int(row['Strike'])
+        depth_snapshot[strike] = {
+            'bid_ce': _sv(row.get('bidQty_CE', 0)),
+            'ask_ce': _sv(row.get('askQty_CE', 0)),
+            'bid_pe': _sv(row.get('bidQty_PE', 0)),
+            'ask_pe': _sv(row.get('askQty_PE', 0)),
+        }
+    st.session_state['_depth_prev_snapshot'] = depth_snapshot
+
+    # ── Step 7: Real-Time Liquidity Shift Detection ──────────────────
+    price_up = spot >= st.session_state.get('_oi_prev_underlying', spot)
+    prev_bias = st.session_state.get('_depth_prev_bias', 0)
+    bias_increasing = depth_bias > prev_bias
+    st.session_state['_depth_prev_bias'] = depth_bias
+
+    if price_up and bias_increasing:
+        result['liquidity_shift'] = "Bullish Confirmation"
+        result['liquidity_shift_detail'] = "Liquidity shifting upward with price — strong trend"
+    elif not price_up and not bias_increasing:
+        result['liquidity_shift'] = "Bearish Confirmation"
+        result['liquidity_shift_detail'] = "Liquidity shifting downward with price — strong trend"
+    elif price_up and not bias_increasing:
+        result['liquidity_shift'] = "Divergence (Trap Risk)"
+        result['liquidity_shift_detail'] = "Price rising but liquidity opposing — possible bull trap"
+    else:
+        result['liquidity_shift'] = "Divergence (Trap Risk)"
+        result['liquidity_shift_detail'] = "Price falling but liquidity supporting — possible bear trap"
+
+    # ── Step 8: Support / Resistance Strength ────────────────────────
+    sup_pts = 0
+    if spot_put_bid > spot_call_bid: sup_pts += 2
+    if spot_put_ask > spot_call_ask: sup_pts += 1
+    if result.get('support_wall'): sup_pts += 2
+    if depth_bias > 0: sup_pts += 1
+    result['support_strength'] = min(10, sup_pts * 2)
+
+    res_pts = 0
+    if spot_call_ask > spot_put_ask: res_pts += 2
+    if spot_call_bid > spot_put_bid: res_pts += 1
+    if result.get('resistance_wall'): res_pts += 2
+    if depth_bias < 0: res_pts += 1
+    result['resistance_strength'] = min(10, res_pts * 2)
+
+    # ── Step 9: Institutional Control Indicator ──────────────────────
+    # Combine wall score + depth bias + net pressure
+    inst_score = wall_score * 10 + (1 if depth_bias > 1000 else (-1 if depth_bias < -1000 else 0)) * 15 + \
+                 (1 if net_pressure > 500 else (-1 if net_pressure < -500 else 0)) * 10
+    if inst_score > 25:
+        result['institutional_control'] = "Institutions Controlling (Bullish)"
+    elif inst_score > 10:
+        result['institutional_control'] = "Mild Institutional Bullish"
+    elif inst_score > -10:
+        result['institutional_control'] = "No Clear Institutional Control"
+    elif inst_score > -25:
+        result['institutional_control'] = "Mild Institutional Bearish"
+    else:
+        result['institutional_control'] = "Institutions Controlling (Bearish)"
+
+    # ── Step 10: OI + Depth Confluence (Pro Tip) ─────────────────────
+    confluence = []
+    spot_put_oi_chg = 0
+    spot_call_oi_chg = 0
+    if 'changeinOpenInterest_PE' in spot_zone.columns:
+        spot_put_oi_chg = spot_zone['changeinOpenInterest_PE'].sum()
+    if 'changeinOpenInterest_CE' in spot_zone.columns:
+        spot_call_oi_chg = spot_zone['changeinOpenInterest_CE'].sum()
+
+    LOT = 100000
+    # Put OI increasing + Put Bid increasing = Strong Support
+    if spot_put_oi_chg > 0 and spot_put_bid > spot_call_bid:
+        confluence.append({
+            'signal': 'STRONG SUPPORT ZONE',
+            'type': 'Bullish',
+            'detail': f"PE OI +{spot_put_oi_chg/LOT:.2f}L + PE Bid dominant ({spot_put_bid:,.0f}) — institutional floor"
+        })
+    # Call OI increasing + Call Ask increasing = Strong Resistance
+    if spot_call_oi_chg > 0 and spot_call_ask > spot_put_ask:
+        confluence.append({
+            'signal': 'STRONG RESISTANCE ZONE',
+            'type': 'Bearish',
+            'detail': f"CE OI +{spot_call_oi_chg/LOT:.2f}L + CE Ask dominant ({spot_call_ask:,.0f}) — institutional ceiling"
+        })
+    # Put OI collapsing + Bid also collapsing = Support breaking
+    if spot_put_oi_chg < 0 and spot_put_bid < spot_put_ask:
+        confluence.append({
+            'signal': 'SUPPORT BREAKING',
+            'type': 'Bearish',
+            'detail': f"PE OI {spot_put_oi_chg/LOT:+.2f}L + PE Bid weak ({spot_put_bid:,.0f} < Ask {spot_put_ask:,.0f})"
+        })
+    # Call OI collapsing + Ask also collapsing = Resistance breaking
+    if spot_call_oi_chg < 0 and spot_call_ask < spot_call_bid:
+        confluence.append({
+            'signal': 'RESISTANCE BREAKING',
+            'type': 'Bullish',
+            'detail': f"CE OI {spot_call_oi_chg/LOT:+.2f}L + CE Ask weak ({spot_call_ask:,.0f} < Bid {spot_call_bid:,.0f})"
+        })
+
+    result['oi_depth_confluence'] = confluence
+
+    # ── Spot Depth Data (for chart / heatmap) ────────────────────────
+    depth_data = []
+    for _, row in spot_zone.iterrows():
+        depth_data.append({
+            'Strike': int(row['Strike']),
+            'CE_Bid': _sv(row.get('bidQty_CE', 0)),
+            'CE_Ask': _sv(row.get('askQty_CE', 0)),
+            'PE_Bid': _sv(row.get('bidQty_PE', 0)),
+            'PE_Ask': _sv(row.get('askQty_PE', 0)),
+        })
+    result['spot_depth_data'] = depth_data
 
     return result
 
@@ -20106,7 +20435,7 @@ def main():
             # Row 3 — Spot OI Trend Graph (bar chart)
             _sop_trend = _sop.get('spot_oi_trend', [])
             if _sop_trend:
-                st.markdown("#### 📊 Spot Zone OI Distribution (ATM ± 3)")
+                st.markdown("#### 📊 Spot Zone OI Distribution (ATM ± 2)")
                 _sop_trend_df = pd.DataFrame(_sop_trend)
                 _sop_trend_df['Strike'] = _sop_trend_df['Strike'].astype(str)
 
@@ -20219,6 +20548,165 @@ def main():
 
         except Exception as _sop_err:
             st.warning(f"Spot OI Pressure error: {str(_sop_err)[:80]}")
+
+        # ===== MARKET DEPTH SPOT PRESSURE ANALYSIS =====
+        st.markdown("---")
+        st.markdown("## 📊 Market Depth Spot Pressure — Call vs Put")
+        try:
+            _mdp = compute_market_depth_spot_pressure(mde)
+            _mdp_has_data = (_mdp['call_liquidity_total'] + _mdp['put_liquidity_total']) > 0
+
+            if _mdp_has_data:
+                # Row 1 — Liquidity Control + Depth Bias + Liquidity Shift
+                _mdp_c1, _mdp_c2, _mdp_c3 = st.columns(3)
+
+                _lc = _mdp['liquidity_control']
+                _lc_clr = '#00ff88' if 'Bullish' in _lc else ('#ff4444' if 'Bearish' in _lc else '#FFD700')
+                with _mdp_c1:
+                    st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_lc_clr}'>
+                    <span style='font-size:0.75em;color:#888;text-transform:uppercase'>LIQUIDITY CONTROL</span><br>
+                    <span style='font-size:1.1em;font-weight:bold;color:{_lc_clr}'>{_lc}</span><br>
+                    <span style='font-size:0.8em;color:#666'>Pressure Score: {_mdp['depth_pressure_score']:+d}</span>
+                    </div>""", unsafe_allow_html=True)
+
+                _db_lbl = _mdp['depth_bias_label']
+                _db_clr = '#00ff88' if 'Bullish' in _db_lbl else ('#ff4444' if 'Bearish' in _db_lbl else '#FFD700')
+                with _mdp_c2:
+                    st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_db_clr}'>
+                    <span style='font-size:0.75em;color:#888;text-transform:uppercase'>DEPTH BIAS (PUT − CALL)</span><br>
+                    <span style='font-size:1.1em;font-weight:bold;color:{_db_clr}'>{_db_lbl}</span><br>
+                    <span style='font-size:0.8em;color:#666'>CE: {_mdp['call_liquidity_total']:,.0f} | PE: {_mdp['put_liquidity_total']:,.0f}</span>
+                    </div>""", unsafe_allow_html=True)
+
+                _ls = _mdp['liquidity_shift']
+                _ls_clr = '#00ff88' if 'Bullish' in _ls else ('#ff4444' if 'Bearish' in _ls else '#ff8800')
+                _ls_emoji = '✅' if 'Confirmation' in _ls else '⚠️'
+                with _mdp_c3:
+                    st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_ls_clr}'>
+                    <span style='font-size:0.75em;color:#888;text-transform:uppercase'>LIQUIDITY SHIFT</span><br>
+                    <span style='font-size:1.1em;font-weight:bold;color:{_ls_clr}'>{_ls_emoji} {_ls}</span><br>
+                    <span style='font-size:0.8em;color:#666'>{_mdp['liquidity_shift_detail']}</span>
+                    </div>""", unsafe_allow_html=True)
+
+                st.markdown("")
+
+                # Row 2 — Support / Resistance Strength
+                _mdp_r2c1, _mdp_r2c2 = st.columns(2)
+                with _mdp_r2c1:
+                    st.markdown("#### 🟢 Depth Support Strength")
+                    st.progress(min(_mdp['support_strength'] / 10.0, 1.0),
+                                text=f"Score: {_mdp['support_strength']}/10")
+                    st.caption(f"PE Bid: {_mdp['spot_put_bid']:,.0f} | PE Ask: {_mdp['spot_put_ask']:,.0f} | "
+                               f"CE Bid: {_mdp['spot_call_bid']:,.0f}")
+                with _mdp_r2c2:
+                    st.markdown("#### 🔴 Depth Resistance Strength")
+                    st.progress(min(_mdp['resistance_strength'] / 10.0, 1.0),
+                                text=f"Score: {_mdp['resistance_strength']}/10")
+                    st.caption(f"CE Ask: {_mdp['spot_call_ask']:,.0f} | CE Bid: {_mdp['spot_call_bid']:,.0f} | "
+                               f"PE Ask: {_mdp['spot_put_ask']:,.0f}")
+
+                # Row 3 — Market Depth Heatmap (Bid/Ask bar chart)
+                _mdp_depth = _mdp.get('spot_depth_data', [])
+                if _mdp_depth:
+                    st.markdown("#### 🗺️ Market Depth Heatmap (ATM ± 2)")
+                    _mdp_df = pd.DataFrame(_mdp_depth)
+                    _mdp_df['Strike'] = _mdp_df['Strike'].astype(str)
+
+                    _mdp_fig = go.Figure()
+                    _mdp_fig.add_trace(go.Bar(
+                        x=_mdp_df['Strike'], y=_mdp_df['CE_Bid'],
+                        name='CE Bid', marker_color='#ff8888', opacity=0.6))
+                    _mdp_fig.add_trace(go.Bar(
+                        x=_mdp_df['Strike'], y=_mdp_df['CE_Ask'],
+                        name='CE Ask', marker_color='#ff4444', opacity=0.8))
+                    _mdp_fig.add_trace(go.Bar(
+                        x=_mdp_df['Strike'], y=_mdp_df['PE_Bid'],
+                        name='PE Bid', marker_color='#88ffaa', opacity=0.6))
+                    _mdp_fig.add_trace(go.Bar(
+                        x=_mdp_df['Strike'], y=_mdp_df['PE_Ask'],
+                        name='PE Ask', marker_color='#00ff88', opacity=0.8))
+                    _mdp_fig.update_layout(
+                        barmode='group', height=320,
+                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                        font=dict(color='#ccc'),
+                        legend=dict(orientation='h', y=-0.15),
+                        margin=dict(l=40, r=20, t=30, b=40),
+                        xaxis_title='Strike', yaxis_title='Quantity')
+                    st.plotly_chart(_mdp_fig, use_container_width=True)
+
+                # Row 4 — Institutional Walls + Institutional Control
+                _mdp_r4c1, _mdp_r4c2, _mdp_r4c3 = st.columns(3)
+                with _mdp_r4c1:
+                    st.markdown("#### 🧱 Support Wall")
+                    _sw = _mdp.get('support_wall')
+                    if _sw:
+                        _sw_clr = '#00ff88' if _sw['strength'] == 'Strong' else '#00cc66'
+                        st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                        border-left:3px solid {_sw_clr};text-align:center'>
+                        <div style='font-size:20px;font-weight:bold;color:{_sw_clr}'>₹{_sw['strike']:,}</div>
+                        <div style='font-size:0.8em;color:#aaa'>PE Bid: {_sw['qty']:,.0f} ({_sw['strength']})</div>
+                        </div>""", unsafe_allow_html=True)
+                    else:
+                        st.caption("No significant bid wall detected")
+
+                with _mdp_r4c2:
+                    st.markdown("#### 🧱 Resistance Wall")
+                    _rw = _mdp.get('resistance_wall')
+                    if _rw:
+                        _rw_clr = '#ff4444' if _rw['strength'] == 'Strong' else '#ff6666'
+                        st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                        border-left:3px solid {_rw_clr};text-align:center'>
+                        <div style='font-size:20px;font-weight:bold;color:{_rw_clr}'>₹{_rw['strike']:,}</div>
+                        <div style='font-size:0.8em;color:#aaa'>CE Ask: {_rw['qty']:,.0f} ({_rw['strength']})</div>
+                        </div>""", unsafe_allow_html=True)
+                    else:
+                        st.caption("No significant ask wall detected")
+
+                with _mdp_r4c3:
+                    st.markdown("#### 🏛️ Institutional Control")
+                    _ic = _mdp['institutional_control']
+                    _ic_clr = '#00ff88' if 'Bullish' in _ic else ('#ff4444' if 'Bearish' in _ic else '#888')
+                    st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                    border-left:3px solid {_ic_clr};text-align:center'>
+                    <div style='font-size:14px;font-weight:bold;color:{_ic_clr}'>{_ic}</div>
+                    <div style='font-size:0.8em;color:#aaa;margin-top:4px'>Wall Score: {_mdp['wall_score']}</div>
+                    </div>""", unsafe_allow_html=True)
+
+                # Row 5 — Spoofing Alerts
+                _spoof = _mdp.get('spoofing_alerts', [])
+                if _spoof:
+                    st.markdown("#### ⚠️ Spoofing / Fake Liquidity Alerts")
+                    for _sa in _spoof:
+                        _sa_clr = '#ff4444' if _sa['severity'] == 'High' else '#FFD700'
+                        st.markdown(f"""<div style='background:#1a1a2e;padding:8px 12px;border-radius:4px;
+                        border-left:3px solid {_sa_clr};margin-bottom:4px'>
+                        <span style='color:{_sa_clr};font-weight:bold'>⚠️ {_sa['side']}</span> — {_sa['detail']}
+                        </div>""", unsafe_allow_html=True)
+
+                # Row 6 — OI + Depth Confluence (most powerful signals)
+                _conf = _mdp.get('oi_depth_confluence', [])
+                if _conf:
+                    st.markdown("#### 🔗 OI + Depth Confluence (High-Confidence Signals)")
+                    for _cf in _conf:
+                        _cf_clr = '#00ff88' if _cf['type'] == 'Bullish' else '#ff4444'
+                        _cf_emoji = '🟢' if _cf['type'] == 'Bullish' else '🔴'
+                        st.markdown(f"""<div style='background:#111827;padding:12px;border-radius:8px;
+                        border-left:4px solid {_cf_clr};margin-bottom:6px'>
+                        <div style='font-size:15px;font-weight:bold;color:{_cf_clr}'>{_cf_emoji} {_cf['signal']}</div>
+                        <div style='font-size:0.85em;color:#ccc;margin-top:4px'>{_cf['detail']}</div>
+                        </div>""", unsafe_allow_html=True)
+
+                # Liquidity signals detail
+                _liq_sigs = _mdp.get('liquidity_signals', [])
+                if _liq_sigs:
+                    with st.expander("📋 Liquidity Signal Details"):
+                        for _ls_item in _liq_sigs:
+                            st.caption(f"• {_ls_item}")
+            else:
+                st.info("Bid/Ask depth data not available in current option chain.")
+
+        except Exception as _mdp_err:
+            st.warning(f"Market Depth Spot Pressure error: {str(_mdp_err)[:80]}")
 
         # ===== VOLUME PCR + STRADDLE + COMBINED SIGNAL (ATM ± 2) =====
         st.markdown("---")
