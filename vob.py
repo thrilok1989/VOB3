@@ -14760,20 +14760,16 @@ def compute_spot_oi_pressure(mde):
     ds = df_summary.sort_values('Strike').reset_index(drop=True)
 
     # ── Step 1: Define Spot Zone (ATM ± 2 strikes) ──────────────────
-    # Use pre-computed ATM slice from MDE, fallback to manual search
-    spot_zone = mde.val('atm_pm2_df')
-    if spot_zone is None or spot_zone.empty:
-        # Fallback: find ATM by Zone column or closest Strike
-        if 'Zone' in ds.columns and (ds['Zone'] == 'ATM').any():
-            atm_idx = ds[ds['Zone'] == 'ATM'].index
-            ai = ds.index.get_loc(atm_idx[0])
-        else:
-            ai = int((ds['Strike'] - atm_strike).abs().idxmin())
-        spot_start = max(0, ai - 2)
-        spot_end = min(len(ds), ai + 3)
-        spot_zone = ds.iloc[spot_start:spot_end]
-    else:
-        spot_zone = spot_zone.copy()
+    # df_summary is already limited to ATM ± 2 by analyze_option_chain(),
+    # so ds IS the spot zone. Use it directly — no further slicing needed.
+    # Fill NaN values that may arise from the merge in analyze_option_chain()
+    _oi_cols = ['openInterest_CE', 'openInterest_PE', 'changeinOpenInterest_CE',
+                'changeinOpenInterest_PE', 'bidQty_CE', 'askQty_CE', 'bidQty_PE', 'askQty_PE',
+                'totalTradedVolume_CE', 'totalTradedVolume_PE']
+    for _c in _oi_cols:
+        if _c in ds.columns:
+            ds[_c] = pd.to_numeric(ds[_c], errors='coerce').fillna(0)
+    spot_zone = ds.copy()
 
     # ── Step 2: Spot Zone OI Aggregation ─────────────────────────────
     spot_call_oi = spot_zone['openInterest_CE'].sum() if 'openInterest_CE' in spot_zone.columns else 0
@@ -15159,25 +15155,16 @@ def compute_market_depth_spot_pressure(mde):
     ds = df_summary.sort_values('Strike').reset_index(drop=True)
 
     # ── Step 1: Define Spot Zone (ATM ± 2 strikes) ──────────────────
-    # Use pre-computed ATM slice from MDE, fallback to manual search
-    spot_zone = mde.val('atm_pm2_df')
-    if spot_zone is None or spot_zone.empty:
-        if 'Zone' in ds.columns and (ds['Zone'] == 'ATM').any():
-            atm_idx = ds[ds['Zone'] == 'ATM'].index
-            ai = ds.index.get_loc(atm_idx[0])
-        else:
-            ai = int((ds['Strike'] - atm_strike).abs().idxmin())
-        spot_start = max(0, ai - 2)
-        spot_end = min(len(ds), ai + 3)
-        spot_zone = ds.iloc[spot_start:spot_end]
-    else:
-        spot_zone = spot_zone.copy()
-
-    # Re-check bid/ask columns on the actual spot_zone
-    has_bid_ce = 'bidQty_CE' in spot_zone.columns
-    has_ask_ce = 'askQty_CE' in spot_zone.columns
-    has_bid_pe = 'bidQty_PE' in spot_zone.columns
-    has_ask_pe = 'askQty_PE' in spot_zone.columns
+    # df_summary is already limited to ATM ± 2 by analyze_option_chain(),
+    # so ds IS the spot zone. Use it directly.
+    # Fill NaN values from the merge in analyze_option_chain()
+    _depth_cols = ['bidQty_CE', 'askQty_CE', 'bidQty_PE', 'askQty_PE',
+                   'openInterest_CE', 'openInterest_PE',
+                   'changeinOpenInterest_CE', 'changeinOpenInterest_PE']
+    for _c in _depth_cols:
+        if _c in ds.columns:
+            ds[_c] = pd.to_numeric(ds[_c], errors='coerce').fillna(0)
+    spot_zone = ds.copy()
 
     def _sv(val):
         """Safe value — coerce to float, treat NaN as 0."""
@@ -15443,6 +15430,140 @@ def compute_market_depth_spot_pressure(mde):
             'PE_Ask': _sv(row.get('askQty_PE', 0)),
         })
     result['spot_depth_data'] = depth_data
+
+    return result
+
+
+# ── OI / Depth Historical Timeline Comparison Engine ──────────────────
+def compute_oi_depth_timeline(mde):
+    """
+    Compare current OI and depth data with historical snapshots
+    across 5m, 15m, 30m, 1h, 2h, 3h windows using session_state histories.
+
+    Returns: dict with per-timeframe OI changes and building/breaking signals.
+    """
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    atm_strike = mde.val('atm_strike')
+
+    windows = [
+        ('5m', 5), ('15m', 15), ('30m', 30),
+        ('1h', 60), ('2h', 120), ('3h', 180),
+    ]
+    result = {'windows': [], 'trend_summary': '', 'trend_direction': ''}
+
+    # Use CE/PE OI history from session_state
+    ce_oi_hist = st.session_state.get('call_put_oi_ce_history', [])
+    pe_oi_hist = st.session_state.get('call_put_oi_pe_history', [])
+    ce_chg_hist = st.session_state.get('call_put_chgoi_ce_history', [])
+    pe_chg_hist = st.session_state.get('call_put_chgoi_pe_history', [])
+    depth_hist = st.session_state.get('depth_history', [])
+    current_strikes = st.session_state.get('call_put_oi_current_strikes', [])
+
+    if not ce_oi_hist or not pe_oi_hist or not current_strikes:
+        return result
+
+    def _get_snapshot_at(history, minutes_ago):
+        """Find the closest snapshot to N minutes ago."""
+        target = now - pd.Timedelta(minutes=minutes_ago)
+        best = None
+        best_diff = float('inf')
+        for entry in history:
+            t = entry.get('time')
+            if t is None:
+                continue
+            diff = abs((t - target).total_seconds())
+            if diff < best_diff:
+                best_diff = diff
+                best = entry
+        # Only return if within 2x window (e.g., for 5m window, accept up to 10m)
+        if best and best_diff < minutes_ago * 120:
+            return best
+        return None
+
+    def _sum_strikes(entry, strikes):
+        """Sum values across strike columns in a history entry."""
+        total = 0
+        for s in strikes:
+            total += float(entry.get(str(int(s)), 0) or 0)
+        return total
+
+    # Current values (latest entry)
+    curr_ce_oi = _sum_strikes(ce_oi_hist[-1], current_strikes) if ce_oi_hist else 0
+    curr_pe_oi = _sum_strikes(pe_oi_hist[-1], current_strikes) if pe_oi_hist else 0
+
+    bullish_count = 0
+    bearish_count = 0
+
+    for label, minutes in windows:
+        snap_ce = _get_snapshot_at(ce_oi_hist, minutes)
+        snap_pe = _get_snapshot_at(pe_oi_hist, minutes)
+        snap_ce_chg = _get_snapshot_at(ce_chg_hist, minutes) if ce_chg_hist else None
+        snap_pe_chg = _get_snapshot_at(pe_chg_hist, minutes) if pe_chg_hist else None
+
+        w = {'window': label, 'available': False}
+
+        if snap_ce and snap_pe:
+            prev_ce_oi = _sum_strikes(snap_ce, current_strikes)
+            prev_pe_oi = _sum_strikes(snap_pe, current_strikes)
+            ce_delta = curr_ce_oi - prev_ce_oi
+            pe_delta = curr_pe_oi - prev_pe_oi
+
+            w['available'] = True
+            w['ce_oi_change'] = ce_delta
+            w['pe_oi_change'] = pe_delta
+            w['ce_oi_pct'] = (ce_delta / prev_ce_oi * 100) if prev_ce_oi > 0 else 0
+            w['pe_oi_pct'] = (pe_delta / prev_pe_oi * 100) if prev_pe_oi > 0 else 0
+
+            # Interpretation
+            if pe_delta > 0 and ce_delta <= 0:
+                w['signal'] = 'Support Building'
+                w['type'] = 'Bullish'
+                bullish_count += 1
+            elif ce_delta > 0 and pe_delta <= 0:
+                w['signal'] = 'Resistance Building'
+                w['type'] = 'Bearish'
+                bearish_count += 1
+            elif pe_delta > 0 and ce_delta > 0:
+                if pe_delta > ce_delta:
+                    w['signal'] = 'Both Building (PE > CE)'
+                    w['type'] = 'Bullish'
+                    bullish_count += 1
+                else:
+                    w['signal'] = 'Both Building (CE > PE)'
+                    w['type'] = 'Bearish'
+                    bearish_count += 1
+            elif pe_delta < 0 and ce_delta < 0:
+                if abs(pe_delta) > abs(ce_delta):
+                    w['signal'] = 'Support Breaking'
+                    w['type'] = 'Bearish'
+                    bearish_count += 1
+                else:
+                    w['signal'] = 'Resistance Breaking'
+                    w['type'] = 'Bullish'
+                    bullish_count += 1
+            else:
+                w['signal'] = 'Mixed'
+                w['type'] = 'Neutral'
+
+        result['windows'].append(w)
+
+    # Overall trend summary
+    if bullish_count >= 4:
+        result['trend_summary'] = "Consistent Bullish OI Build-up"
+        result['trend_direction'] = 'Bullish'
+    elif bearish_count >= 4:
+        result['trend_summary'] = "Consistent Bearish OI Build-up"
+        result['trend_direction'] = 'Bearish'
+    elif bullish_count >= 3:
+        result['trend_summary'] = "Mostly Bullish"
+        result['trend_direction'] = 'Bullish'
+    elif bearish_count >= 3:
+        result['trend_summary'] = "Mostly Bearish"
+        result['trend_direction'] = 'Bearish'
+    else:
+        result['trend_summary'] = "Mixed / No Clear Trend"
+        result['trend_direction'] = 'Neutral'
 
     return result
 
@@ -20564,6 +20685,56 @@ def main():
 
         except Exception as _sop_err:
             st.warning(f"Spot OI Pressure error: {str(_sop_err)[:80]}")
+
+        # ===== OI / DEPTH HISTORICAL TIMELINE =====
+        st.markdown("---")
+        st.markdown("## 📅 OI Timeline — Building vs Breaking (5m → 3h)")
+        try:
+            _tl = compute_oi_depth_timeline(mde)
+            _tl_wins = _tl.get('windows', [])
+            _tl_available = [w for w in _tl_wins if w.get('available')]
+
+            if _tl_available:
+                # Trend Summary
+                _tl_dir = _tl.get('trend_direction', 'Neutral')
+                _tl_clr = '#00ff88' if _tl_dir == 'Bullish' else ('#ff4444' if _tl_dir == 'Bearish' else '#FFD700')
+                _tl_emoji = '🟢' if _tl_dir == 'Bullish' else ('🔴' if _tl_dir == 'Bearish' else '⚪')
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_tl_clr};margin-bottom:12px'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>TREND ACROSS TIMEFRAMES</span><br>
+                <span style='font-size:1.2em;font-weight:bold;color:{_tl_clr}'>{_tl_emoji} {_tl['trend_summary']}</span>
+                </div>""", unsafe_allow_html=True)
+
+                # Timeline table
+                _tl_rows = []
+                LOT = 100000
+                for w in _tl_wins:
+                    if w.get('available'):
+                        _w_clr_map = {'Bullish': '🟢', 'Bearish': '🔴', 'Neutral': '⚪'}
+                        _tl_rows.append({
+                            'Window': w['window'],
+                            'CE OI Δ': f"{w['ce_oi_change']/LOT:+.2f}L",
+                            'CE %': f"{w['ce_oi_pct']:+.1f}%",
+                            'PE OI Δ': f"{w['pe_oi_change']/LOT:+.2f}L",
+                            'PE %': f"{w['pe_oi_pct']:+.1f}%",
+                            'Signal': f"{_w_clr_map.get(w.get('type', ''), '⚪')} {w['signal']}",
+                        })
+                    else:
+                        _tl_rows.append({
+                            'Window': w['window'],
+                            'CE OI Δ': '—', 'CE %': '—',
+                            'PE OI Δ': '—', 'PE %': '—',
+                            'Signal': '⏳ No data yet',
+                        })
+
+                st.dataframe(pd.DataFrame(_tl_rows), use_container_width=True, hide_index=True)
+                st.caption("Compares current ATM ± 2 OI with historical snapshots. "
+                           "Data accumulates over the session — more windows become available over time.")
+            else:
+                st.info("📊 Timeline data accumulates over the session. "
+                        "5m, 15m, 30m, 1h, 2h, 3h comparisons will appear as data builds up.")
+
+        except Exception as _tl_err:
+            st.warning(f"OI Timeline error: {str(_tl_err)[:80]}")
 
         # ===== MARKET DEPTH SPOT PRESSURE ANALYSIS =====
         st.markdown("---")
