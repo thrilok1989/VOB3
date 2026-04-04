@@ -733,8 +733,15 @@ CREATE INDEX IF NOT EXISTS idx_option_history_lookup
                 return []
 
             entries = []
+            _ist = pytz.timezone('Asia/Kolkata')
             for row in result.data:
-                entry = {'time': pd.to_datetime(row['recorded_at']).to_pydatetime().replace(tzinfo=None)}
+                _t = pd.to_datetime(row['recorded_at'])
+                # Ensure timezone-aware (IST) to match app's datetime.now(ist)
+                if _t.tzinfo is None:
+                    _t = _ist.localize(_t)
+                else:
+                    _t = _t.astimezone(_ist)
+                entry = {'time': _t.to_pydatetime()}
                 data = row.get('data', {})
                 for k, v in data.items():
                     try:
