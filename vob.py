@@ -14865,6 +14865,7 @@ def compute_spot_oi_pressure(mde):
     expiry manipulation, and OI cluster shift detection.
 
     Uses existing data from MasterDataEngine — no new data fetches.
+    Falls back to Supabase-persisted history when live data is unavailable.
     """
     result = {
         'spot_call_oi': 0, 'spot_put_oi': 0,
@@ -14883,6 +14884,7 @@ def compute_spot_oi_pressure(mde):
         'oi_cluster_shift': {'detected': False, 'direction': '', 'detail': ''},
         'institutional_activity_score': 0,
         'spot_oi_trend': [],  # for graph data
+        'from_history': False,  # flag if using cached data
     }
 
     df_summary = mde.val('df_summary')
@@ -14893,6 +14895,43 @@ def compute_spot_oi_pressure(mde):
     total_pe_chg = mde.val('total_pe_change', 0) or 0
     max_pain = mde.val('max_pain_strike')
     expiry = mde.val('expiry', '')
+
+    # ── Fallback: reconstruct df_summary from Supabase-persisted histories ──
+    if (df_summary is None or df_summary.empty or not atm_strike or not spot):
+        ce_oi_hist = st.session_state.get('call_put_oi_ce_history', [])
+        pe_oi_hist = st.session_state.get('call_put_oi_pe_history', [])
+        ce_chg_hist = st.session_state.get('call_put_chgoi_ce_history', [])
+        pe_chg_hist = st.session_state.get('call_put_chgoi_pe_history', [])
+        current_strikes = st.session_state.get('call_put_oi_current_strikes', [])
+
+        if ce_oi_hist and pe_oi_hist and current_strikes:
+            # Reconstruct from latest history snapshot
+            latest_ce = ce_oi_hist[-1]
+            latest_pe = pe_oi_hist[-1]
+            latest_ce_chg = ce_chg_hist[-1] if ce_chg_hist else {}
+            latest_pe_chg = pe_chg_hist[-1] if pe_chg_hist else {}
+
+            rows = []
+            for s in sorted(current_strikes):
+                sk = str(int(s))
+                rows.append({
+                    'Strike': float(s),
+                    'openInterest_CE': float(latest_ce.get(sk, 0) or 0),
+                    'openInterest_PE': float(latest_pe.get(sk, 0) or 0),
+                    'changeinOpenInterest_CE': float(latest_ce_chg.get(sk, 0) or 0),
+                    'changeinOpenInterest_PE': float(latest_pe_chg.get(sk, 0) or 0),
+                })
+            if rows:
+                df_summary = pd.DataFrame(rows)
+                atm_strike = df_summary['Strike'].iloc[len(df_summary) // 2]
+                # Use last known spot price from PCR history or straddle history
+                if not spot:
+                    pcr_hist = st.session_state.get('pcr_history', [])
+                    if pcr_hist and 'spot' in pcr_hist[-1]:
+                        spot = pcr_hist[-1]['spot']
+                    else:
+                        spot = atm_strike  # best guess
+                result['from_history'] = True
 
     if df_summary is None or df_summary.empty or not atm_strike or not spot:
         return result
@@ -15283,6 +15322,40 @@ def compute_market_depth_spot_pressure(mde):
     atm_strike = mde.val('atm_strike')
 
     if df_summary is None or df_summary.empty or not atm_strike or not spot:
+        # ── Fallback: reconstruct partial depth result from persisted history ──
+        depth_hist = st.session_state.get('depth_history', [])
+        if depth_hist:
+            latest = depth_hist[-1]
+            # Extract support/resistance walls from history
+            for i in range(1, 4):
+                sq = latest.get(f'S{i}_qty', 0) or 0
+                sp = latest.get(f'S{i}_price', 0) or 0
+                rq = latest.get(f'R{i}_qty', 0) or 0
+                rp = latest.get(f'R{i}_price', 0) or 0
+                if sq > 0:
+                    result['spot_put_ask'] += sq
+                    if result['support_wall'] is None or sq > (result.get('_best_sup_qty') or 0):
+                        result['support_wall'] = int(sp) if sp else None
+                        result['_best_sup_qty'] = sq
+                if rq > 0:
+                    result['spot_call_ask'] += rq
+                    if result['resistance_wall'] is None or rq > (result.get('_best_res_qty') or 0):
+                        result['resistance_wall'] = int(rp) if rp else None
+                        result['_best_res_qty'] = rq
+            result['put_liquidity_total'] = result['spot_put_ask']
+            result['call_liquidity_total'] = result['spot_call_ask']
+            total_liq = result['put_liquidity_total'] + result['call_liquidity_total']
+            if total_liq > 0:
+                depth_bias = (result['put_liquidity_total'] - result['call_liquidity_total']) / total_liq * 100
+                result['depth_bias'] = depth_bias
+                result['depth_pressure_score'] = depth_bias
+                if depth_bias > 20:
+                    result['depth_bias_label'] = "Bullish Depth (from history)"
+                elif depth_bias < -20:
+                    result['depth_bias_label'] = "Bearish Depth (from history)"
+                else:
+                    result['depth_bias_label'] = "Balanced Depth (from history)"
+            result['from_history'] = True
         return result
 
     # Check if bid/ask columns exist
@@ -15732,6 +15805,15 @@ def compute_triple_confluence(mde, spot_oi_result, depth_result, df_today):
     }
 
     spot = mde.val('spot_price') or mde.val('underlying_price', 0)
+    # Fallback: get spot from history if MDE is empty
+    if not spot:
+        pcr_hist = st.session_state.get('pcr_history', [])
+        if pcr_hist and 'spot' in pcr_hist[-1]:
+            spot = pcr_hist[-1]['spot']
+        else:
+            current_strikes = st.session_state.get('call_put_oi_current_strikes', [])
+            if current_strikes:
+                spot = current_strikes[len(current_strikes) // 2]
     if not spot:
         return result
 
@@ -20933,6 +21015,8 @@ def main():
         try:
             _sop = compute_spot_oi_pressure(mde)
             _sop_LOT = 100000
+            if _sop.get('from_history'):
+                st.caption("Using last known data from Supabase history (live data unavailable)")
 
             # Row 1 — Market Control + OI Shift + Breakout Probability
             _sop_c1, _sop_c2, _sop_c3 = st.columns(3)
@@ -21159,6 +21243,8 @@ def main():
         try:
             _mdp = compute_market_depth_spot_pressure(mde)
             _mdp_has_data = (_mdp['call_liquidity_total'] + _mdp['put_liquidity_total']) > 0
+            if _mdp.get('from_history'):
+                st.caption("Using last known depth data from Supabase history (live data unavailable)")
 
             if _mdp_has_data:
                 # Row 1 — Liquidity Control + Depth Bias + Liquidity Shift
