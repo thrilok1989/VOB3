@@ -21954,7 +21954,6 @@ def main():
             # ── Time-Series Chart: Spot + Support Zone + Resistance Zone ─
             st.markdown("#### 📈 Zone Tracker — Spot vs Support vs Resistance")
             if len(st.session_state.zone_history) >= 2:
-                import plotly.graph_objects as go
 
                 _zh = st.session_state.zone_history
                 _zh_df = pd.DataFrame(_zh)
