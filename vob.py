@@ -18475,7 +18475,12 @@ def main():
                 _should_add_depth = True
                 if st.session_state.depth_history:
                     _last_depth = st.session_state.depth_history[-1]
-                    if (_depth_now - _last_depth['time']).total_seconds() < 30:
+                    _last_time = _last_depth['time']
+                    if isinstance(_last_time, str):
+                        _last_time = pd.to_datetime(_last_time).to_pydatetime()
+                    if _last_time.tzinfo is None:
+                        _last_time = _ist.localize(_last_time)
+                    if (_depth_now - _last_time).total_seconds() < 30:
                         _should_add_depth = False
                 if _should_add_depth:
                     st.session_state.depth_history.append(_depth_entry)
