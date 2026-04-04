@@ -15935,7 +15935,7 @@ def compute_triple_confluence(mde, spot_oi_result, depth_result, df_today):
     signals.append({
         'layer': 'OI',
         'bias': result['oi_bias'],
-        'detail': f"{oi_control} | {oi_shift} (Score: {oi_score:+d})",
+        'detail': f"{oi_control} | {oi_shift} (Score: {int(oi_score):+d})",
     })
 
     # Depth layer
@@ -15944,7 +15944,7 @@ def compute_triple_confluence(mde, spot_oi_result, depth_result, df_today):
     signals.append({
         'layer': 'Depth',
         'bias': result['depth_bias'],
-        'detail': f"{liq_control} | {liq_shift} (Pressure: {depth_pressure:+d})",
+        'detail': f"{liq_control} | {liq_shift} (Pressure: {int(depth_pressure):+d})",
     })
 
     # Money Flow layer
@@ -21401,7 +21401,7 @@ def main():
                 st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_mc_clr}'>
                 <span style='font-size:0.75em;color:#888;text-transform:uppercase'>MARKET CONTROL</span><br>
                 <span style='font-size:1.1em;font-weight:bold;color:{_mc_clr}'>{_sop['market_control']}</span><br>
-                <span style='font-size:0.8em;color:#666'>Score: {_mc_score:+d} | Bias: {_sop['spot_oi_bias']/_sop_LOT:+.2f}L</span>
+                <span style='font-size:0.8em;color:#666'>Score: {int(_mc_score):+d} | Bias: {_sop['spot_oi_bias']/_sop_LOT:+.2f}L</span>
                 </div>""", unsafe_allow_html=True)
 
             _shift_clr_map = {'Long Build-up': '#00ff88', 'Short Build-up': '#ff4444',
@@ -21480,7 +21480,7 @@ def main():
                 _ia_score = _sop['institutional_activity_score']
                 _ia_clr = '#00ff88' if _ia_score > 2 else ('#ff4444' if _ia_score < -2 else '#FFD700')
                 st.markdown(f"**Bias:** <span style='color:{_ia_clr}'>{_sop['institutional_bias']}</span> "
-                            f"(Score: {_ia_score:+d})", unsafe_allow_html=True)
+                            f"(Score: {int(_ia_score):+d})", unsafe_allow_html=True)
                 for _sig in _sop.get('institutional_signals', [])[:5]:
                     st.caption(f"• {_sig}")
                 if not _sop.get('institutional_signals'):
@@ -21630,7 +21630,7 @@ def main():
                     st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_lc_clr}'>
                     <span style='font-size:0.75em;color:#888;text-transform:uppercase'>LIQUIDITY CONTROL</span><br>
                     <span style='font-size:1.1em;font-weight:bold;color:{_lc_clr}'>{_lc}</span><br>
-                    <span style='font-size:0.8em;color:#666'>Pressure Score: {_mdp['depth_pressure_score']:+d}</span>
+                    <span style='font-size:0.8em;color:#666'>Pressure Score: {int(_mdp['depth_pressure_score']):+d}</span>
                     </div>""", unsafe_allow_html=True)
 
                 _db_lbl = _mdp['depth_bias_label']
