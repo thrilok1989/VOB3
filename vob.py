@@ -734,7 +734,7 @@ CREATE INDEX IF NOT EXISTS idx_option_history_lookup
 
             entries = []
             for row in result.data:
-                entry = {'time': pd.to_datetime(row['recorded_at']).to_pydatetime().replace(tzinfo=None)}
+                entry = {'time': pd.to_datetime(row['recorded_at']).to_pydatetime().astimezone(pytz.timezone('Asia/Kolkata'))}
                 data = row.get('data', {})
                 for k, v in data.items():
                     try:
@@ -15335,12 +15335,12 @@ def compute_market_depth_spot_pressure(mde):
                 if sq > 0:
                     result['spot_put_ask'] += sq
                     if result['support_wall'] is None or sq > (result.get('_best_sup_qty') or 0):
-                        result['support_wall'] = int(sp) if sp else None
+                        result['support_wall'] = {'strike': int(sp), 'qty': sq, 'strength': 'Moderate'} if sp else None
                         result['_best_sup_qty'] = sq
                 if rq > 0:
                     result['spot_call_ask'] += rq
                     if result['resistance_wall'] is None or rq > (result.get('_best_res_qty') or 0):
-                        result['resistance_wall'] = int(rp) if rp else None
+                        result['resistance_wall'] = {'strike': int(rp), 'qty': rq, 'strength': 'Moderate'} if rp else None
                         result['_best_res_qty'] = rq
             result['put_liquidity_total'] = result['spot_put_ask']
             result['call_liquidity_total'] = result['spot_call_ask']
