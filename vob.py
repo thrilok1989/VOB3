@@ -20367,7 +20367,7 @@ def main():
                         st.caption(f"PCR {cur_pcr:.2f} {pcr_sig}")
 
                 # ── Send PCR chart to Telegram every 5 minutes ──
-                _now = datetime.now()
+                _now = datetime.now(pytz.timezone('Asia/Kolkata'))
                 _last_sent = st.session_state.pcr_telegram_last_sent
                 _should_send = (
                     _last_sent is None
@@ -20769,7 +20769,7 @@ def main():
                                 st.caption("--")
 
                 # ── Telegram: send Call OI vs Put OI chart every 5 minutes ──
-                _cp_now = datetime.now()
+                _cp_now = datetime.now(pytz.timezone('Asia/Kolkata'))
                 _cp_last_sent = st.session_state.call_put_oi_telegram_last_sent
                 _cp_should_send = (_cp_last_sent is None or (_cp_now - _cp_last_sent).total_seconds() >= 300)
                 if _cp_should_send and _cp_strikes:
