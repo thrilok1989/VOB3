@@ -616,6 +616,147 @@ CREATE INDEX IF NOT EXISTS idx_signals_time ON signals (signal_time DESC);
         except Exception as e:
             pass
 
+    # ── Option Chain Time-Series History Persistence ─────────────────────
+    OPTION_HISTORY_SCHEMA_SQL = """
+-- Run this once in Supabase SQL Editor to persist option chain histories:
+CREATE TABLE IF NOT EXISTS option_history (
+    id            bigserial PRIMARY KEY,
+    history_type  text          NOT NULL,
+    recorded_at   timestamptz   NOT NULL,
+    data          jsonb         NOT NULL DEFAULT '{}'::jsonb,
+    trade_date    date          NOT NULL DEFAULT CURRENT_DATE,
+    UNIQUE (history_type, recorded_at)
+);
+CREATE INDEX IF NOT EXISTS idx_option_history_lookup
+    ON option_history (history_type, trade_date, recorded_at DESC);
+"""
+
+    def save_option_history(self, history_type: str, entry: dict):
+        """Save a single option history entry to Supabase.
+
+        entry must have a 'time' key with a datetime object.
+        All other keys are strike prices or metric names with numeric values.
+        """
+        try:
+            t = entry.get('time')
+            if t is None:
+                return
+            # Convert datetime to ISO string for storage
+            if isinstance(t, datetime):
+                recorded_at = t.isoformat()
+                trade_date = t.date().isoformat()
+            else:
+                recorded_at = str(t)
+                trade_date = datetime.now(pytz.timezone('Asia/Kolkata')).date().isoformat()
+
+            # Build JSON-safe data (exclude 'time' key, it goes into recorded_at)
+            data = {}
+            for k, v in entry.items():
+                if k == 'time':
+                    continue
+                try:
+                    data[k] = float(v) if v is not None else 0
+                except (ValueError, TypeError):
+                    data[k] = str(v) if v is not None else ''
+
+            record = {
+                'history_type': history_type,
+                'recorded_at': recorded_at,
+                'trade_date': trade_date,
+                'data': data,
+            }
+            self.client.table('option_history').upsert(
+                record, on_conflict="history_type,recorded_at"
+            ).execute()
+        except Exception:
+            pass  # never block the main app
+
+    def save_option_history_batch(self, history_type: str, entries: list):
+        """Save multiple option history entries in one batch."""
+        if not entries:
+            return
+        try:
+            records = []
+            for entry in entries:
+                t = entry.get('time')
+                if t is None:
+                    continue
+                if isinstance(t, datetime):
+                    recorded_at = t.isoformat()
+                    trade_date = t.date().isoformat()
+                else:
+                    recorded_at = str(t)
+                    trade_date = datetime.now(pytz.timezone('Asia/Kolkata')).date().isoformat()
+                data = {}
+                for k, v in entry.items():
+                    if k == 'time':
+                        continue
+                    try:
+                        data[k] = float(v) if v is not None else 0
+                    except (ValueError, TypeError):
+                        data[k] = str(v) if v is not None else ''
+                records.append({
+                    'history_type': history_type,
+                    'recorded_at': recorded_at,
+                    'trade_date': trade_date,
+                    'data': data,
+                })
+            if records:
+                self.client.table('option_history').upsert(
+                    records, on_conflict="history_type,recorded_at"
+                ).execute()
+        except Exception:
+            pass
+
+    def load_option_history(self, history_type: str, trade_date=None):
+        """Load today's option history entries from Supabase.
+
+        Returns a list of dicts with 'time' as datetime and strike/metric keys.
+        """
+        try:
+            if trade_date is None:
+                trade_date = datetime.now(pytz.timezone('Asia/Kolkata')).date().isoformat()
+            elif isinstance(trade_date, (datetime,)):
+                trade_date = trade_date.date().isoformat()
+            elif hasattr(trade_date, 'isoformat'):
+                trade_date = trade_date.isoformat()
+
+            result = self.client.table('option_history')\
+                .select('recorded_at,data')\
+                .eq('history_type', history_type)\
+                .eq('trade_date', trade_date)\
+                .order('recorded_at', desc=False)\
+                .limit(200)\
+                .execute()
+
+            if not result.data:
+                return []
+
+            entries = []
+            for row in result.data:
+                entry = {'time': pd.to_datetime(row['recorded_at']).to_pydatetime().replace(tzinfo=None)}
+                data = row.get('data', {})
+                for k, v in data.items():
+                    try:
+                        entry[k] = float(v)
+                    except (ValueError, TypeError):
+                        entry[k] = v
+                entries.append(entry)
+            return entries
+        except Exception:
+            return []
+
+    def clear_old_option_history(self, days_old=3):
+        """Clear option history older than specified days."""
+        try:
+            cutoff = (datetime.now(pytz.timezone('Asia/Kolkata')).date() - timedelta(days=days_old)).isoformat()
+            self.client.table('option_history')\
+                .delete()\
+                .lt('trade_date', cutoff)\
+                .execute()
+        except Exception:
+            pass
+
 
 class DhanAPI:
     def __init__(self, access_token, client_id):
@@ -15992,6 +16133,34 @@ def main():
         
         db = SupabaseDB(supabase_url, supabase_key)
         db.create_tables()
+
+        # ── Restore option chain time-series histories from Supabase ─────
+        # Only load if session_state lists are empty (i.e. fresh page load)
+        _HISTORY_KEYS = [
+            'pcr_history', 'gex_history', 'pcr_chgoi_history',
+            'pcr_chgoi_strike_history', 'oi_positioning_history',
+            'call_put_oi_ce_history', 'call_put_oi_pe_history',
+            'call_put_chgoi_ce_history', 'call_put_chgoi_pe_history',
+            'call_put_vol_ce_history', 'call_put_vol_pe_history',
+            'call_put_chgvol_ce_history', 'call_put_chgvol_pe_history',
+            'composite_signal_history', 'total_gex_history',
+            'depth_history', 'vol_pcr_history', 'straddle_history',
+            'delta_gamma_history', 'iv_skew_history', 'pressure_history',
+            'pro_trader_history', 'sentiment_history',
+        ]
+        if not st.session_state.get('_option_history_loaded'):
+            try:
+                for _hkey in _HISTORY_KEYS:
+                    if not st.session_state.get(_hkey):
+                        _loaded = db.load_option_history(_hkey)
+                        if _loaded:
+                            st.session_state[_hkey] = _loaded
+                st.session_state['_option_history_loaded'] = True
+                # Clean up old history (older than 3 days)
+                db.clear_old_option_history(days_old=3)
+            except Exception:
+                pass  # don't block app startup
+
     except Exception as e:
         st.error(f"Database connection error: {str(e)}")
         return
@@ -17856,6 +18025,7 @@ def main():
                     st.session_state.depth_history.append(_depth_entry)
                     if len(st.session_state.depth_history) > 200:
                         st.session_state.depth_history = st.session_state.depth_history[-200:]
+                    db.save_option_history('depth_history', _depth_entry)
 
         st.markdown("### 📊 Key Levels from Order Book Depth")
         if st.session_state.depth_history:
@@ -17954,6 +18124,7 @@ def main():
                         st.session_state.gex_history.append(_gex_entry)
                         if len(st.session_state.gex_history) > 200:
                             st.session_state.gex_history = st.session_state.gex_history[-200:]
+                        db.save_option_history('gex_history', _gex_entry)
             except Exception:
                 pass
 
@@ -18228,6 +18399,7 @@ def main():
                         st.session_state.pro_trader_history.append(_pro_entry)
                         if len(st.session_state.pro_trader_history) > 200:
                             st.session_state.pro_trader_history = st.session_state.pro_trader_history[-200:]
+                        db.save_option_history('pro_trader_history', _pro_entry)
 
                     # ── 7a. Composite Direction Signal (PCR × ΔOI × GEX) ────────
                     _comp_position_labels = ['ITM-2', 'ITM-1', 'ATM', 'OTM+1', 'OTM+2']
@@ -18345,6 +18517,7 @@ def main():
                             st.session_state.composite_signal_history.append(_comp_hist_entry)
                             if len(st.session_state.composite_signal_history) > 200:
                                 st.session_state.composite_signal_history = st.session_state.composite_signal_history[-200:]
+                            db.save_option_history('composite_signal_history', _comp_hist_entry)
                     # Fall back to cached composite verdict
                     if not _comp_data_available:
                         _lv = st.session_state.composite_signal_last_valid
@@ -18483,15 +18656,17 @@ def main():
                         (_pro_now - st.session_state.sentiment_history[-1]['time']).total_seconds() >= 28
                     )
                     if _sent_should_add:
-                        st.session_state.sentiment_history.append({
+                        _sent_entry = {
                             'time': _pro_now,
                             'sentiment_score': _sentiment_score,
                             'comp_score_pct': round(_comp_score_pct, 1),
                             'total_gex': round(_comp_total_gex, 2),
                             'verdict': _final_signal,
-                        })
+                        }
+                        st.session_state.sentiment_history.append(_sent_entry)
                         if len(st.session_state.sentiment_history) > 200:
                             st.session_state.sentiment_history = st.session_state.sentiment_history[-200:]
+                        db.save_option_history('sentiment_history', _sent_entry)
 
 
                     # ── 7. Breakout Probability Score (0–100) ──────────────────
@@ -19553,11 +19728,13 @@ def main():
                             st.session_state.pcr_history.append(pcr_entry)
                             if len(st.session_state.pcr_history) > 200:
                                 st.session_state.pcr_history = st.session_state.pcr_history[-200:]
+                            db.save_option_history('pcr_history', pcr_entry)
                             # Also store per-strike ChgOI PCR if data was available
                             if len(chgoi_entry) > 1:
                                 st.session_state.pcr_chgoi_strike_history.append(chgoi_entry)
                                 if len(st.session_state.pcr_chgoi_strike_history) > 200:
                                     st.session_state.pcr_chgoi_strike_history = st.session_state.pcr_chgoi_strike_history[-200:]
+                                db.save_option_history('pcr_chgoi_strike_history', chgoi_entry)
                             # Store raw CE/PE OI and ChgOI per strike
                             if len(ce_oi_entry) > 1:
                                 st.session_state.call_put_oi_ce_history.append(ce_oi_entry)
@@ -19566,6 +19743,8 @@ def main():
                                 st.session_state.call_put_oi_pe_history.append(pe_oi_entry)
                                 if len(st.session_state.call_put_oi_pe_history) > 200:
                                     st.session_state.call_put_oi_pe_history = st.session_state.call_put_oi_pe_history[-200:]
+                                db.save_option_history('call_put_oi_ce_history', ce_oi_entry)
+                                db.save_option_history('call_put_oi_pe_history', pe_oi_entry)
                             if len(ce_chgoi_entry) > 1:
                                 st.session_state.call_put_chgoi_ce_history.append(ce_chgoi_entry)
                                 if len(st.session_state.call_put_chgoi_ce_history) > 200:
@@ -19573,6 +19752,8 @@ def main():
                                 st.session_state.call_put_chgoi_pe_history.append(pe_chgoi_entry)
                                 if len(st.session_state.call_put_chgoi_pe_history) > 200:
                                     st.session_state.call_put_chgoi_pe_history = st.session_state.call_put_chgoi_pe_history[-200:]
+                                db.save_option_history('call_put_chgoi_ce_history', ce_chgoi_entry)
+                                db.save_option_history('call_put_chgoi_pe_history', pe_chgoi_entry)
                             # Store raw CE/PE Volume per strike
                             if len(ce_vol_entry) > 1:
                                 st.session_state.call_put_vol_ce_history.append(ce_vol_entry)
@@ -19581,6 +19762,8 @@ def main():
                                 st.session_state.call_put_vol_pe_history.append(pe_vol_entry)
                                 if len(st.session_state.call_put_vol_pe_history) > 200:
                                     st.session_state.call_put_vol_pe_history = st.session_state.call_put_vol_pe_history[-200:]
+                                db.save_option_history('call_put_vol_ce_history', ce_vol_entry)
+                                db.save_option_history('call_put_vol_pe_history', pe_vol_entry)
                                 # Compute Change-in-Volume (delta from previous snapshot)
                                 _chgvol_ce_entry = {'time': current_time}
                                 _chgvol_pe_entry = {'time': current_time}
@@ -19600,6 +19783,8 @@ def main():
                                 st.session_state.call_put_chgvol_pe_history.append(_chgvol_pe_entry)
                                 if len(st.session_state.call_put_chgvol_pe_history) > 200:
                                     st.session_state.call_put_chgvol_pe_history = st.session_state.call_put_chgvol_pe_history[-200:]
+                                db.save_option_history('call_put_chgvol_ce_history', _chgvol_ce_entry)
+                                db.save_option_history('call_put_chgvol_pe_history', _chgvol_pe_entry)
 
             except Exception as e:
                 st.caption(f"⚠️ Current fetch issue: {str(e)[:50]}...")
@@ -20573,6 +20758,7 @@ def main():
                         st.session_state.oi_positioning_history.append(_oi_entry)
                         if len(st.session_state.oi_positioning_history) > 200:
                             st.session_state.oi_positioning_history = st.session_state.oi_positioning_history[-200:]
+                        db.save_option_history('oi_positioning_history', _oi_entry)
 
                     # Display table
                     _oi_tbl = pd.DataFrame(_oi_rows)
@@ -21265,10 +21451,12 @@ def main():
                         st.session_state.vol_pcr_history.append(_vp_entry)
                         if len(st.session_state.vol_pcr_history) > 200:
                             st.session_state.vol_pcr_history = st.session_state.vol_pcr_history[-200:]
+                        db.save_option_history('vol_pcr_history', _vp_entry)
                         if len(_st_entry) > 1:
                             st.session_state.straddle_history.append(_st_entry)
                             if len(st.session_state.straddle_history) > 200:
                                 st.session_state.straddle_history = st.session_state.straddle_history[-200:]
+                            db.save_option_history('straddle_history', _st_entry)
                     _vp_data_ok = True
             except Exception as _vp_exc:
                 st.caption(f"⚠️ Vol PCR fetch: {str(_vp_exc)[:60]}")
@@ -21945,14 +22133,16 @@ def main():
                         should_add = False
 
                 if should_add:
-                    st.session_state.pcr_chgoi_history.append({
+                    _chgoi_hist_entry = {
                         'time': current_time,
                         'pcr': pcr_chgoi,
                         'ce_chgoi': total_ce_chgoi,
                         'pe_chgoi': total_pe_chgoi
-                    })
+                    }
+                    st.session_state.pcr_chgoi_history.append(_chgoi_hist_entry)
                     if len(st.session_state.pcr_chgoi_history) > 200:
                         st.session_state.pcr_chgoi_history = st.session_state.pcr_chgoi_history[-200:]
+                    db.save_option_history('pcr_chgoi_history', _chgoi_hist_entry)
 
             # Display graph from cached history
             if len(st.session_state.pcr_chgoi_history) > 0:
@@ -22168,6 +22358,7 @@ def main():
                             st.session_state.pcr_chgoi_strike_history.append(chgoi_entry)
                             if len(st.session_state.pcr_chgoi_strike_history) > 200:
                                 st.session_state.pcr_chgoi_strike_history = st.session_state.pcr_chgoi_strike_history[-200:]
+                            db.save_option_history('pcr_chgoi_strike_history', chgoi_entry)
 
             except Exception as e:
                 st.caption(f"⚠️ Current fetch issue: {str(e)[:50]}...")
@@ -22493,14 +22684,16 @@ def main():
                             should_add = False
 
                     if should_add:
-                        st.session_state.total_gex_history.append({
+                        _gex_hist_entry = {
                             'time': current_time,
                             'total_gex': total_gex_val,
                             'signal': gex_signal_val,
                             'flip_level': flip_level
-                        })
+                        }
+                        st.session_state.total_gex_history.append(_gex_hist_entry)
                         if len(st.session_state.total_gex_history) > 200:
                             st.session_state.total_gex_history = st.session_state.total_gex_history[-200:]
+                        db.save_option_history('total_gex_history', _gex_hist_entry)
 
             # Display graph from cached history
             if len(st.session_state.total_gex_history) > 0:
@@ -22872,7 +23065,7 @@ def main():
                         (_ivp_now - st.session_state.iv_skew_history[-1]['time']).total_seconds() >= 30
                     )
                     if _should_append_iv:
-                        st.session_state.iv_skew_history.append({
+                        _iv_entry = {
                             'time': _ivp_now,
                             'iv_skew': round(_iv_skew, 4),
                             'avg_iv_ce': round(_avg_iv_ce, 2),
@@ -22880,18 +23073,22 @@ def main():
                             **{f"iv_ce_{k}": round(v, 2) for k, v in _ivp_per_iv_ce.items()},
                             **{f"iv_pe_{k}": round(v, 2) for k, v in _ivp_per_iv_pe.items()},
                             **{f"pres_{k}": v for k, v in _ivp_per_net_pres.items()},
-                        })
+                        }
+                        st.session_state.iv_skew_history.append(_iv_entry)
                         if len(st.session_state.iv_skew_history) > 200:
                             st.session_state.iv_skew_history = st.session_state.iv_skew_history[-200:]
+                        db.save_option_history('iv_skew_history', _iv_entry)
 
-                        st.session_state.pressure_history.append({
+                        _pres_entry = {
                             'time': _ivp_now,
                             'call_pressure': round(_avg_call_pres, 4),
                             'put_pressure': round(_avg_put_pres, 4),
                             'net_pressure': round(_net_pressure, 4),
-                        })
+                        }
+                        st.session_state.pressure_history.append(_pres_entry)
                         if len(st.session_state.pressure_history) > 200:
                             st.session_state.pressure_history = st.session_state.pressure_history[-200:]
+                        db.save_option_history('pressure_history', _pres_entry)
 
 
                     # ======== UI OUTPUT ========
@@ -23403,15 +23600,17 @@ def main():
                         (_dg_now - st.session_state.delta_gamma_history[-1]['time']).total_seconds() >= 30
                     )
                     if _dg_should_append:
-                        st.session_state.delta_gamma_history.append({
+                        _dg_entry = {
                             'time': _dg_now,
                             'net_delta': _net_delta,
                             'net_gamma': _net_gamma,
                             **{f"delta_{k}": v for k, v in _dg_delta_per.items()},
                             **{f"gamma_{k}": v for k, v in _dg_gamma_per.items()},
-                        })
+                        }
+                        st.session_state.delta_gamma_history.append(_dg_entry)
                         if len(st.session_state.delta_gamma_history) > 200:
                             st.session_state.delta_gamma_history = st.session_state.delta_gamma_history[-200:]
+                        db.save_option_history('delta_gamma_history', _dg_entry)
 
                     # --- CHANGE vs PREVIOUS ---
                     _prev_dg = st.session_state.delta_gamma_history
