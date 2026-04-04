@@ -16022,6 +16022,375 @@ def compute_triple_confluence(mde, spot_oi_result, depth_result, df_today):
     return result
 
 
+# ── Strike Zone Classification Engine ─────────────────────────────────
+def compute_strike_zone_classification(mde):
+    """
+    Per-strike zone classification engine that identifies major support/resistance
+    zones near spot and tracks whether they are BUILDING, STABLE, or WEAKENING.
+
+    Uses the 6-scenario model:
+    1. Long Build-up:   Price↑ + OI↑ + Call OI↑ → Bullish aggression
+    2. Short Build-up:  Price↓ + OI↑ + Call OI↑ → Bearish (call writing resistance)
+    3. Short Covering:  Price↑ + OI↓ + Call OI↓ → Fast bullish (shorts exiting)
+    4. Long Unwinding:  Price↓ + OI↓ + Call OI↓ → Bearish exit
+    5. Put Writing:     Price→/↑ + Put OI↑ → Support-based bullish
+    6. Call Writing:    Price→/↓ + Call OI↑ → Resistance-based bearish
+
+    Combines: OI, Depth (bid/ask), Volume (delta), Delta/Gamma Greeks
+    Returns a zone entry dict for time-series graphing.
+    """
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
+    LOT = 100000
+
+    entry = {
+        'time': now,
+        'spot_price': 0,
+        'support_zone': 0, 'support_status': 'STABLE', 'support_score': 0,
+        'support_color': 'YELLOW',
+        'resistance_zone': 0, 'resistance_status': 'STABLE', 'resistance_score': 0,
+        'resistance_color': 'YELLOW',
+        'zone_shift': 'NONE',
+        'market_bias': 'RANGE',
+        'breakout_probability': 'LOW',
+        'signal': 'NONE',
+        'confidence_score': 0,
+        'strike_details': [],  # per-strike classification
+        'from_history': False,
+    }
+
+    # ── Get live data from MDE ───────────────────────────────────────
+    df_summary = mde.val('df_summary')
+    spot = mde.val('spot_price') or mde.val('underlying_price', 0)
+    atm_strike = mde.val('atm_strike')
+
+    # ── Fallback to Supabase history ─────────────────────────────────
+    if (df_summary is None or df_summary.empty or not atm_strike or not spot):
+        ce_oi_hist = st.session_state.get('call_put_oi_ce_history', [])
+        pe_oi_hist = st.session_state.get('call_put_oi_pe_history', [])
+        ce_chg_hist = st.session_state.get('call_put_chgoi_ce_history', [])
+        pe_chg_hist = st.session_state.get('call_put_chgoi_pe_history', [])
+        current_strikes = st.session_state.get('call_put_oi_current_strikes', [])
+
+        if ce_oi_hist and pe_oi_hist and current_strikes:
+            latest_ce = ce_oi_hist[-1]
+            latest_pe = pe_oi_hist[-1]
+            latest_ce_chg = ce_chg_hist[-1] if ce_chg_hist else {}
+            latest_pe_chg = pe_chg_hist[-1] if pe_chg_hist else {}
+
+            rows = []
+            for s in sorted(current_strikes):
+                sk = str(int(s))
+                rows.append({
+                    'Strike': float(s),
+                    'openInterest_CE': float(latest_ce.get(sk, 0) or 0),
+                    'openInterest_PE': float(latest_pe.get(sk, 0) or 0),
+                    'changeinOpenInterest_CE': float(latest_ce_chg.get(sk, 0) or 0),
+                    'changeinOpenInterest_PE': float(latest_pe_chg.get(sk, 0) or 0),
+                })
+            if rows:
+                df_summary = pd.DataFrame(rows)
+                atm_strike = df_summary['Strike'].iloc[len(df_summary) // 2]
+                if not spot:
+                    spot = atm_strike
+                entry['from_history'] = True
+        else:
+            return entry
+
+    if df_summary is None or df_summary.empty or not spot:
+        return entry
+
+    entry['spot_price'] = spot
+    ds = df_summary.sort_values('Strike').reset_index(drop=True)
+
+    # Fill NaN
+    _num_cols = ['openInterest_CE', 'openInterest_PE', 'changeinOpenInterest_CE',
+                 'changeinOpenInterest_PE', 'bidQty_CE', 'askQty_CE', 'bidQty_PE', 'askQty_PE',
+                 'totalTradedVolume_CE', 'totalTradedVolume_PE',
+                 'Delta_CE', 'Delta_PE', 'Gamma_CE', 'Gamma_PE']
+    for _c in _num_cols:
+        if _c in ds.columns:
+            ds[_c] = pd.to_numeric(ds[_c], errors='coerce').fillna(0)
+
+    # ── Price direction from history ─────────────────────────────────
+    prev_spot = st.session_state.get('_zone_prev_spot', spot)
+    price_delta = spot - prev_spot
+    price_up = price_delta > 0
+    price_down = price_delta < 0
+    price_flat = abs(price_delta) < 5  # within 5 points = flat
+    st.session_state['_zone_prev_spot'] = spot
+
+    # ── Per-strike classification ────────────────────────────────────
+    strike_details = []
+    support_candidates = []
+    resistance_candidates = []
+
+    # Get previous OI snapshot for delta comparison
+    ce_oi_hist = st.session_state.get('call_put_oi_ce_history', [])
+    pe_oi_hist = st.session_state.get('call_put_oi_pe_history', [])
+    ce_vol_hist = st.session_state.get('call_put_vol_ce_history', [])
+    pe_vol_hist = st.session_state.get('call_put_vol_pe_history', [])
+    prev_ce_oi = ce_oi_hist[-2] if len(ce_oi_hist) >= 2 else (ce_oi_hist[-1] if ce_oi_hist else {})
+    prev_pe_oi = pe_oi_hist[-2] if len(pe_oi_hist) >= 2 else (pe_oi_hist[-1] if pe_oi_hist else {})
+    prev_ce_vol = ce_vol_hist[-2] if len(ce_vol_hist) >= 2 else {}
+    prev_pe_vol = pe_vol_hist[-2] if len(pe_vol_hist) >= 2 else {}
+
+    for _, row in ds.iterrows():
+        strike = int(row['Strike'])
+        sk = str(strike)
+
+        # Current values
+        ce_oi = float(row.get('openInterest_CE', 0) or 0)
+        pe_oi = float(row.get('openInterest_PE', 0) or 0)
+        ce_chg = float(row.get('changeinOpenInterest_CE', 0) or 0)
+        pe_chg = float(row.get('changeinOpenInterest_PE', 0) or 0)
+        ce_bid = float(row.get('bidQty_CE', 0) or 0)
+        ce_ask = float(row.get('askQty_CE', 0) or 0)
+        pe_bid = float(row.get('bidQty_PE', 0) or 0)
+        pe_ask = float(row.get('askQty_PE', 0) or 0)
+        ce_vol = float(row.get('totalTradedVolume_CE', 0) or 0)
+        pe_vol = float(row.get('totalTradedVolume_PE', 0) or 0)
+        delta_ce = float(row.get('Delta_CE', 0) or 0)
+        delta_pe = float(row.get('Delta_PE', 0) or 0)
+        gamma_ce = float(row.get('Gamma_CE', 0) or 0)
+
+        # Volume delta (change from previous snapshot)
+        prev_ce_v = float(prev_ce_vol.get(sk, ce_vol) or ce_vol)
+        prev_pe_v = float(prev_pe_vol.get(sk, pe_vol) or pe_vol)
+        vol_delta_ce = ce_vol - prev_ce_v
+        vol_delta_pe = pe_vol - prev_pe_v
+
+        # OI delta from history
+        oi_delta_ce = ce_chg  # already change in OI
+        oi_delta_pe = pe_chg
+
+        total_oi = ce_oi + pe_oi
+        total_oi_chg = oi_delta_ce + oi_delta_pe
+        oi_increasing = total_oi_chg > 0
+        oi_decreasing = total_oi_chg < 0
+
+        # ── Classify scenario ────────────────────────────────────────
+        scenario = 'Neutral'
+        zone_type = 'neutral'
+        strength = 0
+
+        # Call writing detection: Call OI↑, Ask strong, price flat/down
+        if oi_delta_ce > abs(oi_delta_pe) * 0.5 and oi_delta_ce > 0 and (price_down or price_flat):
+            if ce_ask > ce_bid * 1.2:  # Ask dominates = writers
+                scenario = 'Call Writing'
+                zone_type = 'resistance'
+                strength = min(100, int(30 + abs(oi_delta_ce) / LOT * 20 + (ce_ask / max(ce_bid, 1)) * 10))
+            elif ce_bid > ce_ask and price_down:
+                scenario = 'Short Build-up'
+                zone_type = 'resistance'
+                strength = min(100, int(25 + abs(oi_delta_ce) / LOT * 15))
+
+        # Put writing detection: Put OI↑, Bid strong, price flat/up
+        if oi_delta_pe > abs(oi_delta_ce) * 0.5 and oi_delta_pe > 0 and (price_up or price_flat):
+            if pe_ask > pe_bid * 1.2:  # Put Ask = writers = institutional support
+                scenario = 'Put Writing'
+                zone_type = 'support'
+                strength = min(100, int(30 + abs(oi_delta_pe) / LOT * 20 + (pe_ask / max(pe_bid, 1)) * 10))
+
+        # Long Build-up: Price↑ + OI↑ + Call OI↑
+        if price_up and oi_increasing and oi_delta_ce > 0 and ce_bid > ce_ask:
+            scenario = 'Long Build-up'
+            zone_type = 'support'
+            strength = min(100, int(35 + vol_delta_ce / max(ce_vol, 1) * 30 + abs(delta_ce) * 50))
+
+        # Short Covering: Price↑ + OI↓ + Call OI↓
+        if price_up and oi_decreasing and oi_delta_ce < 0:
+            scenario = 'Short Covering'
+            zone_type = 'support'  # resistance breaking = becomes support
+            strength = min(100, int(20 + abs(oi_delta_ce) / LOT * 15))
+
+        # Long Unwinding: Price↓ + OI↓ + Call OI↓
+        if price_down and oi_decreasing and oi_delta_ce < 0 and pe_ask > pe_bid:
+            scenario = 'Long Unwinding'
+            zone_type = 'resistance'  # support breaking
+            strength = min(100, int(20 + abs(oi_delta_ce) / LOT * 15))
+
+        # Override: dominant PE OI always contributes to support
+        if pe_oi > ce_oi * 1.3 and zone_type == 'neutral':
+            zone_type = 'support'
+            strength = min(100, int(25 + pe_oi / LOT * 5))
+            scenario = 'PE OI Dominant'
+        elif ce_oi > pe_oi * 1.3 and zone_type == 'neutral':
+            zone_type = 'resistance'
+            strength = min(100, int(25 + ce_oi / LOT * 5))
+            scenario = 'CE OI Dominant'
+
+        detail = {
+            'strike': strike, 'scenario': scenario, 'zone_type': zone_type,
+            'strength': strength, 'ce_oi': ce_oi, 'pe_oi': pe_oi,
+            'ce_chg': oi_delta_ce, 'pe_chg': oi_delta_pe,
+            'ce_bid': ce_bid, 'ce_ask': ce_ask, 'pe_bid': pe_bid, 'pe_ask': pe_ask,
+            'vol_delta_ce': vol_delta_ce, 'vol_delta_pe': vol_delta_pe,
+            'delta_ce': delta_ce, 'delta_pe': delta_pe,
+        }
+        strike_details.append(detail)
+
+        if zone_type == 'support' and strength > 0:
+            support_candidates.append(detail)
+        elif zone_type == 'resistance' and strength > 0:
+            resistance_candidates.append(detail)
+
+    entry['strike_details'] = strike_details
+
+    # ── Pick strongest support and resistance zones ──────────────────
+    support_candidates.sort(key=lambda x: x['strength'], reverse=True)
+    resistance_candidates.sort(key=lambda x: x['strength'], reverse=True)
+
+    if support_candidates:
+        best_sup = support_candidates[0]
+        entry['support_zone'] = best_sup['strike']
+        entry['support_score'] = best_sup['strength']
+    else:
+        # Fallback: highest PE OI strike below/at spot
+        below_spot = ds[ds['Strike'] <= spot]
+        if not below_spot.empty and 'openInterest_PE' in below_spot.columns:
+            max_pe_idx = below_spot['openInterest_PE'].idxmax()
+            entry['support_zone'] = int(below_spot.loc[max_pe_idx, 'Strike'])
+            entry['support_score'] = 20  # weak default
+
+    if resistance_candidates:
+        best_res = resistance_candidates[0]
+        entry['resistance_zone'] = best_res['strike']
+        entry['resistance_score'] = best_res['strength']
+    else:
+        # Fallback: highest CE OI strike above/at spot
+        above_spot = ds[ds['Strike'] >= spot]
+        if not above_spot.empty and 'openInterest_CE' in above_spot.columns:
+            max_ce_idx = above_spot['openInterest_CE'].idxmax()
+            entry['resistance_zone'] = int(above_spot.loc[max_ce_idx, 'Strike'])
+            entry['resistance_score'] = 20
+
+    # ── Determine zone status (BUILDING / STABLE / WEAKENING) ────────
+    zone_hist = st.session_state.get('zone_history', [])
+
+    if zone_hist:
+        prev = zone_hist[-1]
+        prev_sup_score = prev.get('support_score', 0)
+        prev_res_score = prev.get('resistance_score', 0)
+        prev_sup_zone = prev.get('support_zone', 0)
+        prev_res_zone = prev.get('resistance_zone', 0)
+
+        # Support status
+        sup_delta = entry['support_score'] - prev_sup_score
+        if sup_delta > 5:
+            entry['support_status'] = 'BUILDING'
+            entry['support_color'] = 'GREEN'
+        elif sup_delta < -5:
+            entry['support_status'] = 'WEAKENING'
+            entry['support_color'] = 'RED'
+        else:
+            entry['support_status'] = 'STABLE'
+            entry['support_color'] = 'YELLOW'
+
+        # Resistance status
+        res_delta = entry['resistance_score'] - prev_res_score
+        if res_delta > 5:
+            entry['resistance_status'] = 'BUILDING'
+            entry['resistance_color'] = 'RED'  # resistance building = bearish
+        elif res_delta < -5:
+            entry['resistance_status'] = 'WEAKENING'
+            entry['resistance_color'] = 'GREEN'  # resistance weakening = bullish
+        else:
+            entry['resistance_status'] = 'STABLE'
+            entry['resistance_color'] = 'YELLOW'
+
+        # Zone shift detection
+        if entry['support_zone'] != prev_sup_zone or entry['resistance_zone'] != prev_res_zone:
+            if entry['support_zone'] > prev_sup_zone:
+                entry['zone_shift'] = 'UP'
+            elif entry['resistance_zone'] < prev_res_zone:
+                entry['zone_shift'] = 'DOWN'
+            else:
+                entry['zone_shift'] = 'SHIFT'
+    else:
+        # First entry — classify by score
+        if entry['support_score'] >= 50:
+            entry['support_status'] = 'BUILDING'
+            entry['support_color'] = 'GREEN'
+        if entry['resistance_score'] >= 50:
+            entry['resistance_status'] = 'BUILDING'
+            entry['resistance_color'] = 'RED'
+
+    # ── Market Bias ──────────────────────────────────────────────────
+    sup_score = entry['support_score']
+    res_score = entry['resistance_score']
+    sup_status = entry['support_status']
+    res_status = entry['resistance_status']
+
+    # Count bullish/bearish scenarios
+    bull_scenarios = sum(1 for d in strike_details
+                        if d['scenario'] in ('Long Build-up', 'Short Covering', 'Put Writing'))
+    bear_scenarios = sum(1 for d in strike_details
+                        if d['scenario'] in ('Short Build-up', 'Call Writing', 'Long Unwinding'))
+
+    if sup_status == 'WEAKENING' and res_status == 'BUILDING':
+        entry['market_bias'] = 'BEARISH'
+    elif sup_status == 'BUILDING' and res_status == 'WEAKENING':
+        entry['market_bias'] = 'BULLISH'
+    elif sup_status == 'WEAKENING' and res_status == 'WEAKENING':
+        # Both breaking = trap or breakout
+        if price_up:
+            entry['market_bias'] = 'TRAP'  # Bull trap — supports breaking but price up
+        else:
+            entry['market_bias'] = 'TRAP'
+    elif bull_scenarios > bear_scenarios + 1:
+        entry['market_bias'] = 'BULLISH'
+    elif bear_scenarios > bull_scenarios + 1:
+        entry['market_bias'] = 'BEARISH'
+    else:
+        entry['market_bias'] = 'RANGE'
+
+    # ── Breakout Probability ─────────────────────────────────────────
+    bo_score = 0
+    if res_status == 'WEAKENING' and price_up:
+        bo_score += 35
+    if sup_status == 'WEAKENING' and price_down:
+        bo_score += 35
+    if entry['zone_shift'] != 'NONE':
+        bo_score += 20
+    if abs(spot - entry['resistance_zone']) < 30:  # within 30 pts of resistance
+        bo_score += 15
+    if abs(spot - entry['support_zone']) < 30:
+        bo_score += 15
+    # Volume surge
+    total_vol_delta = sum(d.get('vol_delta_ce', 0) + d.get('vol_delta_pe', 0) for d in strike_details)
+    if total_vol_delta > 0:
+        bo_score += 10
+
+    if bo_score >= 60:
+        entry['breakout_probability'] = 'HIGH'
+    elif bo_score >= 35:
+        entry['breakout_probability'] = 'MEDIUM'
+    else:
+        entry['breakout_probability'] = 'LOW'
+
+    # ── Signal ───────────────────────────────────────────────────────
+    if res_status == 'WEAKENING' and price_up and bo_score >= 50:
+        entry['signal'] = 'BREAKOUT'
+    elif sup_status == 'WEAKENING' and price_down and bo_score >= 50:
+        entry['signal'] = 'BREAKDOWN'
+    else:
+        entry['signal'] = 'NONE'
+
+    # ── Confidence Score (0-100) ─────────────────────────────────────
+    conf = 0
+    conf += min(30, sup_score * 0.3)
+    conf += min(30, res_score * 0.3)
+    conf += min(20, abs(bull_scenarios - bear_scenarios) * 5)
+    if entry['market_bias'] != 'RANGE':
+        conf += 10
+    if entry['signal'] != 'NONE':
+        conf += 10
+    entry['confidence_score'] = min(100, int(conf))
+
+    return entry
+
+
 def main():
     st.title("📈 Nifty Trading & Options Analyzer")
 
@@ -16171,6 +16540,10 @@ def main():
     if 'itm_last_alert' not in st.session_state:
         st.session_state.itm_last_alert = (None, None)
 
+    # Initialize session state for Strike Zone Classification Engine
+    if 'zone_history' not in st.session_state:
+        st.session_state.zone_history = []
+
     # ===== NEW ENGINE HISTORIES =====
     if 'spike_history' not in st.session_state:
         st.session_state.spike_history = []          # Options Spike Detector snapshots
@@ -16229,6 +16602,7 @@ def main():
             'depth_history', 'vol_pcr_history', 'straddle_history',
             'delta_gamma_history', 'iv_skew_history', 'pressure_history',
             'pro_trader_history', 'sentiment_history',
+            'zone_history',
         ]
         if not st.session_state.get('_option_history_loaded'):
             try:
@@ -21479,6 +21853,245 @@ def main():
 
         except Exception as _tc_err:
             st.warning(f"Triple Confluence error: {str(_tc_err)[:80]}")
+
+        # ===== STRIKE ZONE CLASSIFICATION ENGINE =====
+        st.markdown("---")
+        st.markdown("## 🗺️ Dynamic Support & Resistance Zones")
+        try:
+            _zone = compute_strike_zone_classification(mde)
+
+            # ── Append to history + save to Supabase ─────────────────
+            _zone_now = datetime.now(pytz.timezone('Asia/Kolkata'))
+            _zone_should_add = True
+            if st.session_state.zone_history:
+                _last_zone = st.session_state.zone_history[-1]
+                if (_zone_now - _last_zone['time']).total_seconds() < 30:
+                    _zone_should_add = False
+
+            # Build saveable entry (strip non-serializable strike_details)
+            _zone_save = {k: v for k, v in _zone.items() if k != 'strike_details'}
+            if _zone_should_add and _zone['spot_price'] > 0:
+                st.session_state.zone_history.append(_zone_save)
+                if len(st.session_state.zone_history) > 200:
+                    st.session_state.zone_history = st.session_state.zone_history[-200:]
+                db.save_option_history('zone_history', _zone_save)
+
+            if _zone.get('from_history'):
+                st.caption("Using last known data from Supabase history (live data unavailable)")
+
+            # ── Status Cards Row ─────────────────────────────────────
+            _zc1, _zc2, _zc3, _zc4 = st.columns(4)
+
+            _sup_clr_map = {'GREEN': '#00ff88', 'YELLOW': '#FFD700', 'RED': '#ff4444'}
+            _res_clr_map = {'RED': '#ff4444', 'YELLOW': '#FFD700', 'GREEN': '#00ff88'}
+            _sup_clr = _sup_clr_map.get(_zone['support_color'], '#888')
+            _res_clr = _res_clr_map.get(_zone['resistance_color'], '#888')
+            _bias_clr = {'BULLISH': '#00ff88', 'BEARISH': '#ff4444', 'RANGE': '#FFD700', 'TRAP': '#ff8800'}
+            _bias_emoji = {'BULLISH': '🟢', 'BEARISH': '🔴', 'RANGE': '🟡', 'TRAP': '⚠️'}
+
+            with _zc1:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_sup_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>SUPPORT ZONE</span><br>
+                <span style='font-size:1.3em;font-weight:bold;color:{_sup_clr}'>₹{_zone['support_zone']:,}</span><br>
+                <span style='font-size:0.85em;color:{_sup_clr}'>{_zone['support_status']}</span>
+                <span style='font-size:0.8em;color:#666'> | Score: {_zone['support_score']}/100</span>
+                </div>""", unsafe_allow_html=True)
+
+            with _zc2:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_res_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>RESISTANCE ZONE</span><br>
+                <span style='font-size:1.3em;font-weight:bold;color:{_res_clr}'>₹{_zone['resistance_zone']:,}</span><br>
+                <span style='font-size:0.85em;color:{_res_clr}'>{_zone['resistance_status']}</span>
+                <span style='font-size:0.8em;color:#666'> | Score: {_zone['resistance_score']}/100</span>
+                </div>""", unsafe_allow_html=True)
+
+            _mb = _zone['market_bias']
+            _mb_c = _bias_clr.get(_mb, '#888')
+            _mb_e = _bias_emoji.get(_mb, '⚪')
+            with _zc3:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_mb_c}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>MARKET BIAS</span><br>
+                <span style='font-size:1.3em;font-weight:bold;color:{_mb_c}'>{_mb_e} {_mb}</span><br>
+                <span style='font-size:0.8em;color:#666'>Zone Shift: {_zone['zone_shift']} | Breakout: {_zone['breakout_probability']}</span>
+                </div>""", unsafe_allow_html=True)
+
+            _sig = _zone['signal']
+            _sig_clr = '#00ff88' if _sig == 'BREAKOUT' else ('#ff4444' if _sig == 'BREAKDOWN' else '#888')
+            _sig_emoji = '🚀' if _sig == 'BREAKOUT' else ('💥' if _sig == 'BREAKDOWN' else '⏳')
+            with _zc4:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_sig_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>SIGNAL</span><br>
+                <span style='font-size:1.3em;font-weight:bold;color:{_sig_clr}'>{_sig_emoji} {_sig}</span><br>
+                <span style='font-size:0.8em;color:#666'>Confidence: {_zone['confidence_score']}%</span>
+                </div>""", unsafe_allow_html=True)
+
+            # ── Per-Strike Classification Table ──────────────────────
+            if _zone.get('strike_details'):
+                st.markdown("#### 🔍 Per-Strike Zone Classification")
+                _sd_rows = []
+                for _sd in _zone['strike_details']:
+                    _sc = _sd['scenario']
+                    _zt = _sd['zone_type']
+                    _emoji = {'support': '🟢', 'resistance': '🔴', 'neutral': '⚪'}.get(_zt, '⚪')
+                    _sd_rows.append({
+                        'Strike': f"₹{_sd['strike']:,}",
+                        'Zone': f"{_emoji} {_zt.upper()}",
+                        'Scenario': _sc,
+                        'Strength': f"{_sd['strength']}/100",
+                        'CE OI': f"{_sd['ce_oi']/100000:.2f}L",
+                        'PE OI': f"{_sd['pe_oi']/100000:.2f}L",
+                        'CE ΔOI': f"{_sd['ce_chg']/100000:+.2f}L",
+                        'PE ΔOI': f"{_sd['pe_chg']/100000:+.2f}L",
+                        'CE Bid|Ask': f"{_sd['ce_bid']:.0f}|{_sd['ce_ask']:.0f}",
+                        'PE Bid|Ask': f"{_sd['pe_bid']:.0f}|{_sd['pe_ask']:.0f}",
+                        'Vol Δ CE': f"{_sd['vol_delta_ce']:+,.0f}",
+                        'Vol Δ PE': f"{_sd['vol_delta_pe']:+,.0f}",
+                    })
+                if _sd_rows:
+                    _sd_df = pd.DataFrame(_sd_rows)
+                    st.dataframe(_sd_df, use_container_width=True, hide_index=True)
+
+            # ── Time-Series Chart: Spot + Support Zone + Resistance Zone ─
+            st.markdown("#### 📈 Zone Tracker — Spot vs Support vs Resistance")
+            if len(st.session_state.zone_history) >= 2:
+                import plotly.graph_objects as go
+
+                _zh = st.session_state.zone_history
+                _zh_df = pd.DataFrame(_zh)
+
+                _fig_zone = go.Figure()
+
+                # Spot price line
+                _fig_zone.add_trace(go.Scatter(
+                    x=_zh_df['time'], y=_zh_df['spot_price'],
+                    name='Spot Price', mode='lines',
+                    line=dict(color='#00BFFF', width=2.5),
+                ))
+
+                # Support zone — color by status
+                _sup_colors = []
+                for _, _r in _zh_df.iterrows():
+                    _sc = _r.get('support_color', 'YELLOW')
+                    _sup_colors.append(_sup_clr_map.get(_sc, '#FFD700'))
+
+                _fig_zone.add_trace(go.Scatter(
+                    x=_zh_df['time'], y=_zh_df['support_zone'],
+                    name='Support Zone', mode='lines+markers',
+                    line=dict(color='#00ff88', width=2, dash='dot'),
+                    marker=dict(
+                        size=8, color=_sup_colors,
+                        line=dict(width=1, color='white')
+                    ),
+                ))
+
+                # Resistance zone — color by status
+                _res_colors = []
+                for _, _r in _zh_df.iterrows():
+                    _rc = _r.get('resistance_color', 'YELLOW')
+                    _res_colors.append(_res_clr_map.get(_rc, '#FFD700'))
+
+                _fig_zone.add_trace(go.Scatter(
+                    x=_zh_df['time'], y=_zh_df['resistance_zone'],
+                    name='Resistance Zone', mode='lines+markers',
+                    line=dict(color='#ff4444', width=2, dash='dot'),
+                    marker=dict(
+                        size=8, color=_res_colors,
+                        line=dict(width=1, color='white')
+                    ),
+                ))
+
+                # Fill between support and resistance
+                _fig_zone.add_trace(go.Scatter(
+                    x=list(_zh_df['time']) + list(_zh_df['time'][::-1]),
+                    y=list(_zh_df['resistance_zone']) + list(_zh_df['support_zone'][::-1]),
+                    fill='toself', fillcolor='rgba(255,215,0,0.08)',
+                    line=dict(width=0), showlegend=False, name='Range',
+                ))
+
+                # Mark BREAKOUT/BREAKDOWN signals
+                _sig_df = _zh_df[_zh_df['signal'].isin(['BREAKOUT', 'BREAKDOWN'])]
+                if not _sig_df.empty:
+                    _fig_zone.add_trace(go.Scatter(
+                        x=_sig_df['time'], y=_sig_df['spot_price'],
+                        name='Signal', mode='markers',
+                        marker=dict(
+                            size=14, symbol='star',
+                            color=['#00ff88' if s == 'BREAKOUT' else '#ff4444' for s in _sig_df['signal']],
+                            line=dict(width=2, color='white')
+                        ),
+                    ))
+
+                _fig_zone.update_layout(
+                    template='plotly_dark',
+                    height=450,
+                    margin=dict(l=10, r=10, t=30, b=10),
+                    legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
+                    xaxis=dict(title='Time', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                    yaxis=dict(title='Price', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                    hovermode='x unified',
+                )
+
+                st.plotly_chart(_fig_zone, use_container_width=True, key="zone_tracker_chart")
+
+                # ── Support & Resistance Score Chart ─────────────────
+                st.markdown("#### 📊 Zone Strength Over Time")
+                _fig_score = go.Figure()
+                _fig_score.add_trace(go.Scatter(
+                    x=_zh_df['time'], y=_zh_df['support_score'],
+                    name='Support Strength', mode='lines',
+                    line=dict(color='#00ff88', width=2),
+                    fill='tozeroy', fillcolor='rgba(0,255,136,0.1)',
+                ))
+                _fig_score.add_trace(go.Scatter(
+                    x=_zh_df['time'], y=_zh_df['resistance_score'],
+                    name='Resistance Strength', mode='lines',
+                    line=dict(color='#ff4444', width=2),
+                    fill='tozeroy', fillcolor='rgba(255,68,68,0.1)',
+                ))
+                _fig_score.update_layout(
+                    template='plotly_dark', height=300,
+                    margin=dict(l=10, r=10, t=30, b=10),
+                    legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
+                    xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                    yaxis=dict(title='Score (0-100)', range=[0, 100],
+                               showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                    hovermode='x unified',
+                )
+                st.plotly_chart(_fig_score, use_container_width=True, key="zone_score_chart")
+
+                # ── Confidence + Market Bias timeline ────────────────
+                st.markdown("#### 🎯 Confidence & Bias Timeline")
+                _bias_map = {'BULLISH': 1, 'BEARISH': -1, 'RANGE': 0, 'TRAP': 0.5}
+                _zh_df['_bias_val'] = _zh_df['market_bias'].map(_bias_map).fillna(0)
+
+                _fig_conf = go.Figure()
+                _fig_conf.add_trace(go.Scatter(
+                    x=_zh_df['time'], y=_zh_df['confidence_score'],
+                    name='Confidence %', mode='lines',
+                    line=dict(color='#FFD700', width=2),
+                ))
+                _fig_conf.add_trace(go.Bar(
+                    x=_zh_df['time'], y=_zh_df['_bias_val'] * 50,
+                    name='Bias (Bull +50 / Bear -50)',
+                    marker_color=['#00ff88' if v > 0 else '#ff4444' if v < 0 else '#FFD700'
+                                  for v in _zh_df['_bias_val']],
+                    opacity=0.4,
+                ))
+                _fig_conf.update_layout(
+                    template='plotly_dark', height=280,
+                    margin=dict(l=10, r=10, t=30, b=10),
+                    legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
+                    xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                    yaxis=dict(title='Score', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                    hovermode='x unified',
+                    barmode='overlay',
+                )
+                st.plotly_chart(_fig_conf, use_container_width=True, key="zone_confidence_chart")
+            else:
+                st.info("Zone history accumulating... charts appear after 2+ snapshots (every 30s).")
+
+        except Exception as _zone_err:
+            st.warning(f"Strike Zone Classification error: {str(_zone_err)[:100]}")
 
         # ===== VOLUME PCR + STRADDLE + COMBINED SIGNAL (ATM ± 2) =====
         st.markdown("---")
