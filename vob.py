@@ -23,6 +23,20 @@ try:
 except ImportError:
     _YF_AVAILABLE = False
 
+_IST = pytz.timezone('Asia/Kolkata')
+
+def _to_ist(t):
+    """Return t as an IST-aware datetime. Handles naive, UTC-aware, and string inputs."""
+    if t is None:
+        return datetime.now(_IST)
+    if isinstance(t, str):
+        t = pd.to_datetime(t).to_pydatetime()
+    if isinstance(t, datetime):
+        if t.tzinfo is None:
+            return _IST.localize(t)
+        return t.astimezone(_IST)
+    return datetime.now(_IST)
+
 # Page configuration - ADD THIS AT THE VERY TOP
 st.set_page_config(
     page_title="Nifty Trading & Options Analyzer",
@@ -732,10 +746,20 @@ CREATE INDEX IF NOT EXISTS idx_option_history_lookup
             if not result.data:
                 return []
 
+            _ist_tz = pytz.timezone('Asia/Kolkata')
             entries = []
             for row in result.data:
-                entry = {'time': pd.to_datetime(row['recorded_at']).to_pydatetime().astimezone(pytz.timezone('Asia/Kolkata'))}
+                try:
+                    _dt = pd.to_datetime(row['recorded_at'])
+                    if _dt.tzinfo is None:
+                        _dt = _dt.tz_localize('UTC')
+                    _time_ist = _dt.to_pydatetime().astimezone(_ist_tz)
+                except Exception:
+                    _time_ist = datetime.now(_ist_tz)
+                entry = {'time': _time_ist}
                 data = row.get('data', {})
+                if not isinstance(data, dict):
+                    data = {}
                 for k, v in data.items():
                     try:
                         entry[k] = float(v)
@@ -13186,7 +13210,7 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
         st.session_state.ml_report_history = []
     _now_ist = datetime.now(pytz.timezone('Asia/Kolkata'))
     if (not st.session_state.ml_report_history or
-            (_now_ist - st.session_state.ml_report_history[-1]['time']).total_seconds() >= 30):
+            (_now_ist - _to_ist(st.session_state.ml_report_history[-1]['time'])).total_seconds() >= 30):
         st.session_state.ml_report_history.append({
             'time': _now_ist, 'score': round(ensemble_score, 4),
             'confidence': confidence, 'sent': sent_score,
@@ -18579,7 +18603,7 @@ def main():
                         [int(_gr['Strike']) for _, _gr in _gex_df_pre.iterrows()])
                     _should_gex = True
                     if st.session_state.gex_history:
-                        if (_gex_now - st.session_state.gex_history[-1]['time']).total_seconds() < 30:
+                        if (_gex_now - _to_ist(st.session_state.gex_history[-1]['time'])).total_seconds() < 30:
                             _should_gex = False
                     if _should_gex:
                         st.session_state.gex_history.append(_gex_entry)
@@ -18854,7 +18878,7 @@ def main():
                     }
                     _pro_should_add = (
                         not st.session_state.pro_trader_history or
-                        (_pro_now - st.session_state.pro_trader_history[-1]['time']).total_seconds() >= 28
+                        (_pro_now - _to_ist(st.session_state.pro_trader_history[-1]['time'])).total_seconds() >= 28
                     )
                     if _pro_should_add:
                         st.session_state.pro_trader_history.append(_pro_entry)
@@ -18962,7 +18986,7 @@ def main():
                         }
                         _comp_should_add = (
                             not st.session_state.composite_signal_history or
-                            (_pro_now - st.session_state.composite_signal_history[-1]['time']).total_seconds() >= 30
+                            (_pro_now - _to_ist(st.session_state.composite_signal_history[-1]['time'])).total_seconds() >= 30
                         )
                         if _comp_should_add:
                             _comp_hist_entry = {
@@ -19114,7 +19138,7 @@ def main():
                     # ── Store sentiment history ──────────────────────────────────
                     _sent_should_add = (
                         not st.session_state.sentiment_history or
-                        (_pro_now - st.session_state.sentiment_history[-1]['time']).total_seconds() >= 28
+                        (_pro_now - _to_ist(st.session_state.sentiment_history[-1]['time'])).total_seconds() >= 28
                     )
                     if _sent_should_add:
                         _sent_entry = {
@@ -20181,7 +20205,7 @@ def main():
                         should_add = True
                         if st.session_state.pcr_history:
                             last_entry = st.session_state.pcr_history[-1]
-                            time_diff = (current_time - last_entry['time']).total_seconds()
+                            time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
                             if time_diff < 30:
                                 should_add = False
 
@@ -21213,7 +21237,7 @@ def main():
                     _oi_should_add = True
                     if st.session_state.oi_positioning_history:
                         _oi_last = st.session_state.oi_positioning_history[-1]
-                        if (_oi_now - _oi_last['time']).total_seconds() < 30:
+                        if (_oi_now - _to_ist(_oi_last['time'])).total_seconds() < 30:
                             _oi_should_add = False
                     if _oi_should_add:
                         st.session_state.oi_positioning_history.append(_oi_entry)
@@ -21870,7 +21894,7 @@ def main():
             _zone_should_add = True
             if st.session_state.zone_history:
                 _last_zone = st.session_state.zone_history[-1]
-                if (_zone_now - _last_zone['time']).total_seconds() < 30:
+                if (_zone_now - _to_ist(_last_zone['time'])).total_seconds() < 30:
                     _zone_should_add = False
 
             # Build saveable entry (strip non-serializable strike_details)
@@ -22148,7 +22172,7 @@ def main():
                     # Avoid duplicates within 30 seconds
                     _vp_add = True
                     if st.session_state.vol_pcr_history:
-                        if (_vp_now - st.session_state.vol_pcr_history[-1]['time']).total_seconds() < 30:
+                        if (_vp_now - _to_ist(st.session_state.vol_pcr_history[-1]['time'])).total_seconds() < 30:
                             _vp_add = False
                     if _vp_add:
                         st.session_state.vol_pcr_history.append(_vp_entry)
@@ -22831,7 +22855,7 @@ def main():
                 should_add = True
                 if st.session_state.pcr_chgoi_history:
                     last_entry = st.session_state.pcr_chgoi_history[-1]
-                    time_diff = (current_time - last_entry['time']).total_seconds()
+                    time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
                     if time_diff < 30:
                         should_add = False
 
@@ -23053,7 +23077,7 @@ def main():
                         should_add = True
                         if st.session_state.pcr_chgoi_strike_history:
                             last_entry = st.session_state.pcr_chgoi_strike_history[-1]
-                            time_diff = (current_time - last_entry['time']).total_seconds()
+                            time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
                             if time_diff < 30:
                                 should_add = False
 
@@ -23382,7 +23406,7 @@ def main():
                     should_add = True
                     if st.session_state.total_gex_history:
                         last_entry = st.session_state.total_gex_history[-1]
-                        time_diff = (current_time - last_entry['time']).total_seconds()
+                        time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
                         if time_diff < 30:
                             should_add = False
 
@@ -23765,7 +23789,7 @@ def main():
 
                     _should_append_iv = (
                         not st.session_state.iv_skew_history or
-                        (_ivp_now - st.session_state.iv_skew_history[-1]['time']).total_seconds() >= 30
+                        (_ivp_now - _to_ist(st.session_state.iv_skew_history[-1]['time'])).total_seconds() >= 30
                     )
                     if _should_append_iv:
                         _iv_entry = {
@@ -24300,7 +24324,7 @@ def main():
                     _dg_now = datetime.now(pytz.timezone('Asia/Kolkata'))
                     _dg_should_append = (
                         not st.session_state.delta_gamma_history or
-                        (_dg_now - st.session_state.delta_gamma_history[-1]['time']).total_seconds() >= 30
+                        (_dg_now - _to_ist(st.session_state.delta_gamma_history[-1]['time'])).total_seconds() >= 30
                     )
                     if _dg_should_append:
                         _dg_entry = {
