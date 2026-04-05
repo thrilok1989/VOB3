@@ -148,6 +148,16 @@ NIFTY_UNDERLYING_SEG = "IDX_I"
 
 SENSEX_SCRIP_ID = "51"        # BSE Sensex security ID in Dhan API
 SENSEX_EXCHANGE_SEG = "IDX_I"  # All indices (NSE + BSE) share IDX_I segment in Dhan API
+SENSEX_UNDERLYING_SCRIP = 51  # for option chain API
+
+BANKNIFTY_SCRIP_ID = "25"     # NSE Bank Nifty index security ID in Dhan API
+BANKNIFTY_EXCHANGE_SEG = "IDX_I"
+BANKNIFTY_UNDERLYING_SCRIP = 25  # for option chain API
+BANKNIFTY_LOT_SIZE = 15
+BANKNIFTY_STRIKE_STEP = 100
+
+SENSEX_LOT_SIZE = 10
+SENSEX_STRIKE_STEP = 100
 
 # ── BankNifty Dashboard: yfinance symbol map ──────────────────────────
 BN_DASH_TICKERS = [
@@ -5665,12 +5675,27 @@ def get_combined_acceleration_signal(sentiment_verdict, spike_result, gamma_resu
         return 'MONITORING', '#aaaaaa', 'Normal Market Flow'
 
 
-def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, live_spot_price=None):
-    """Enhanced options chain analysis with expiry selection, HTF pivot data, and VOB data"""
+def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, live_spot_price=None,
+                         underlying_scrip=None, underlying_seg=None, symbol_name=None, lot_size=None):
+    """Enhanced options chain analysis with expiry selection, HTF pivot data, and VOB data.
+
+    Pass underlying_scrip / underlying_seg / symbol_name / lot_size to use for any index
+    (Bank Nifty, Sensex). Defaults to NIFTY constants for backward compatibility.
+    """
+    # Apply defaults for Nifty backward-compat
+    if underlying_scrip is None:
+        underlying_scrip = NIFTY_UNDERLYING_SCRIP
+    if underlying_seg is None:
+        underlying_seg = NIFTY_UNDERLYING_SEG
+    if symbol_name is None:
+        symbol_name = "NIFTY"
+    if lot_size is None:
+        lot_size = 75
+
     now = datetime.now(timezone("Asia/Kolkata"))
-    
+
     # Get expiry list - use cached version for performance
-    expiry_data = get_dhan_expiry_list_cached(NIFTY_UNDERLYING_SCRIP, NIFTY_UNDERLYING_SEG)
+    expiry_data = get_dhan_expiry_list_cached(underlying_scrip, underlying_seg)
     if not expiry_data or 'data' not in expiry_data:
         st.error("Failed to get expiry list from Dhan API")
         return None
@@ -5683,7 +5708,7 @@ def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, l
     # Use selected expiry or default to first
     expiry = selected_expiry if selected_expiry else expiry_dates[0]
 
-    option_chain_data = get_dhan_option_chain(NIFTY_UNDERLYING_SCRIP, NIFTY_UNDERLYING_SEG, expiry)
+    option_chain_data = get_dhan_option_chain(underlying_scrip, underlying_seg, expiry)
     if not option_chain_data or 'data' not in option_chain_data:
         st.error("Failed to get option chain from Dhan API")
         return {'underlying': None, 'df_summary': None, 'expiry_dates': expiry_dates, 'expiry': None, 'sr_data': [], 'max_pain_strike': None, 'styled_df': None, 'df_display': None, 'display_cols': [], 'bias_cols': [], 'total_ce_change': 0, 'total_pe_change': 0}
@@ -8898,7 +8923,8 @@ def _mda_find_clusters(levels: list, cluster_pct: float = 0.005):
     return result
 
 def show_market_depth_engine(api=None, option_data: dict = None,
-                              current_price: float = None, df: pd.DataFrame = None):
+                              current_price: float = None, df: pd.DataFrame = None,
+                              security_id: str = "13", exchange_segment: str = "IDX_I"):
     """11-Module Market Depth Analysis Engine."""
     st.markdown("### 📖 Market Depth Analysis Engine")
 
@@ -8907,24 +8933,24 @@ def show_market_depth_engine(api=None, option_data: dict = None,
         if option_data and option_data.get("underlying"):
             spot = float(option_data["underlying"])
     if spot <= 0:
-        st.warning("No spot price available. Load NIFTY price data first.")
+        st.warning("No spot price available. Load price data first.")
         return
 
     # ── MODULE 1+2: Data Collection ───────────────────────────────────
     data_source = "none"
     bids, asks = [], []
+    _depth_cache_key = f'depth_cache_{security_id}'
 
     # Try 1 — Dhan market depth API (cache result for reuse by other engines)
     if api is not None:
-        raw_depth = st.session_state.get('nifty_depth_cache') or api.get_market_depth(security_id="13", exchange_segment="IDX_I")
+        raw_depth = st.session_state.get(_depth_cache_key) or api.get_market_depth(security_id=security_id, exchange_segment=exchange_segment)
         if raw_depth:
-            st.session_state['nifty_depth_cache'] = raw_depth
-            bids, asks = _mda_parse_dhan_depth(raw_depth, "IDX_I", "13")
+            st.session_state[_depth_cache_key] = raw_depth
+            bids, asks = _mda_parse_dhan_depth(raw_depth, exchange_segment, security_id)
         if not bids and not asks:
-            # Try NSE_FO NIFTY futures (near-month security ID 35001 is a placeholder)
-            raw_depth2 = api.get_market_depth(security_id="13", exchange_segment="NSE_FO")
+            raw_depth2 = api.get_market_depth(security_id=security_id, exchange_segment="NSE_FO")
             if raw_depth2:
-                bids, asks = _mda_parse_dhan_depth(raw_depth2, "NSE_FO", "13")
+                bids, asks = _mda_parse_dhan_depth(raw_depth2, "NSE_FO", security_id)
         if bids or asks:
             data_source = "dhan"
 
@@ -16680,6 +16706,441 @@ def compute_strike_zone_classification(mde):
     return entry
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# GENERIC INDEX TAB — works for NIFTY, BANK NIFTY, SENSEX
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def show_index_tab_content(
+    api, db, interval, selected_timeframe, timeframes, days_back,
+    pivot_settings, enable_signals, pivot_proximity, use_cache,
+    index_config, selected_expiry=None,
+):
+    """Render a full trading tab for any NSE/BSE index.
+
+    index_config keys:
+        security_id      str   e.g. "25"
+        exchange_seg     str   e.g. "IDX_I"
+        underlying_scrip int   e.g. 25
+        symbol_name      str   e.g. "BANKNIFTY"
+        display_name     str   e.g. "Bank Nifty"
+        lot_size         int   e.g. 15
+        strike_step      int   e.g. 100
+        cache_key        str   e.g. "BANKNIFTY"
+    """
+    security_id      = index_config['security_id']
+    exchange_seg     = index_config['exchange_seg']
+    underlying_scrip = index_config['underlying_scrip']
+    symbol_name      = index_config['symbol_name']
+    display_name     = index_config['display_name']
+    lot_size         = index_config['lot_size']
+    cache_key        = index_config['cache_key']
+
+    # ── Market overview metrics (LTP + intraday stats) ─────────────────
+    ltp_key  = f'{cache_key}_ltp_data'
+    chart_key = f'{cache_key}_chart_df'
+
+    # ── Data fetching ──────────────────────────────────────────────────
+    df = pd.DataFrame()
+    current_price = None
+
+    import time as _time_mod
+    if use_cache:
+        df = db.get_candle_data(cache_key, exchange_seg, interval, hours_back=days_back * 24)
+        _max_ts = int(df['timestamp'].max()) if not df.empty and 'timestamp' in df.columns else None
+        _interval_secs = int(interval) * 60
+        if df.empty or _max_ts is None or (_time_mod.time() - _max_ts) > _interval_secs:
+            with st.spinner(f"Fetching {display_name} data from Dhan API..."):
+                raw = api.get_intraday_data(
+                    security_id=security_id,
+                    exchange_segment=exchange_seg,
+                    instrument="INDEX",
+                    interval=interval,
+                    days_back=days_back,
+                )
+                if raw:
+                    df = process_candle_data(raw, interval)
+                    db.save_candle_data(cache_key, exchange_seg, interval, df)
+    else:
+        with st.spinner(f"Fetching {display_name} data from Dhan API..."):
+            raw = api.get_intraday_data(
+                security_id=security_id,
+                exchange_segment=exchange_seg,
+                instrument="INDEX",
+                interval=interval,
+                days_back=days_back,
+            )
+            if raw:
+                df = process_candle_data(raw, interval)
+                db.save_candle_data(cache_key, exchange_seg, interval, df)
+
+    if not df.empty:
+        st.session_state[chart_key] = df
+
+    # ── LTP ────────────────────────────────────────────────────────────
+    ltp_resp = api.get_ltp_data(security_id, exchange_seg)
+    if ltp_resp:
+        st.session_state[ltp_key] = ltp_resp
+    if ltp_resp and 'data' in ltp_resp:
+        for _exc, _d in ltp_resp['data'].items():
+            for _sid, _pd in _d.items():
+                current_price = _pd.get('last_price', 0)
+                break
+    if current_price is None and not df.empty:
+        current_price = float(df['close'].iloc[-1])
+
+    # ── Live header metrics ────────────────────────────────────────────
+    if not df.empty and current_price:
+        _ist = pytz.timezone('Asia/Kolkata')
+        _today = datetime.now(_ist).date()
+        _df_today = df[pd.to_datetime(df['datetime']).dt.date == _today].copy()
+        if _df_today.empty:
+            _df_today = df.copy()
+        prev_close = float(_df_today['close'].iloc[-2]) if len(_df_today) > 1 else float(_df_today['close'].iloc[0])
+        chg = current_price - prev_close
+        sign = "+" if chg >= 0 else ""
+        mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+        mc1.metric(f"{display_name} LTP", f"₹{current_price:,.2f}")
+        mc2.metric("Change", f"{sign}{chg:,.2f}", delta=f"{sign}{(chg/prev_close*100):.2f}%")
+        mc3.metric("Day High", f"₹{float(_df_today['high'].max()):,.2f}")
+        mc4.metric("Day Low",  f"₹{float(_df_today['low'].min()):,.2f}")
+        mc5.metric("Day Open", f"₹{float(_df_today['open'].iloc[0]):,.2f}")
+
+    st.markdown("---")
+
+    # ── Two-column layout: Chart | Options ────────────────────────────
+    col1, col2 = st.columns([2, 1])
+    pivots = None
+    vob_data = None
+    option_data = None
+
+    # ─────────────────── COL 1 — Trading Chart ────────────────────────
+    with col1:
+        st.header(f"📈 {display_name} Chart")
+
+        vob_blocks_for_chart = None
+        poc_data_for_chart   = None
+        swing_data_for_chart = None
+        rsi_sz_data_for_chart      = None
+        ultimate_rsi_data_for_chart = None
+        _cached_vob_sr = None
+        _cached_vob_blks = None
+
+        if not df.empty and len(df) > 30:
+            try:
+                vob_detector = VolumeOrderBlocks(sensitivity=5)
+                _cached_vob_sr, _cached_vob_blks = vob_detector.get_sr_levels(df)
+                vob_blocks_for_chart = _cached_vob_blks
+                vob_data = {'sr_levels': _cached_vob_sr, 'blocks': _cached_vob_blks}
+            except Exception:
+                pass
+
+        if not df.empty:
+            _ist_tz = pytz.timezone('Asia/Kolkata')
+            _target_date = datetime.now(_ist_tz).date()
+            _df_today = df[pd.to_datetime(df['datetime']).dt.date == _target_date].copy()
+            if _df_today.empty:
+                _df_today = df.copy()
+            _df_today = _df_today.reset_index(drop=True)
+
+            # Indicators
+            if len(_df_today) > 30:
+                try:
+                    poc_data_for_chart = TriplePOC(period1=10, period2=25, period3=70).calculate_all_pocs(_df_today)
+                except Exception:
+                    pass
+                try:
+                    swing_data_for_chart = FutureSwing(swing_length=30, history_samples=5, calc_type='Average').analyze(_df_today)
+                except Exception:
+                    pass
+            if len(_df_today) > 20:
+                try:
+                    rsi_sz_data_for_chart = RSIVolatilitySuppression(rsi_length=14, vol_length=5).analyze(_df_today)
+                except Exception:
+                    pass
+            if len(_df_today) > 14:
+                try:
+                    ultimate_rsi_data_for_chart = UltimateRSI(length=7, smo_type='RMA', signal_length=14,
+                                                               signal_type='EMA', ob_value=70, os_value=40).calculate(_df_today)
+                except Exception:
+                    pass
+
+            # Pivot levels
+            try:
+                _show_pivots = any(pivot_settings.values())
+                _htf_pivots_raw = None
+                if _show_pivots:
+                    _pivot_calc = PivotIndicator(df=_df_today, timeframes=['3m', '5m', '10m', '15m'])
+                    _htf_pivots_raw = _pivot_calc.calculate_all_pivots()
+                    pivots = {'data': _htf_pivots_raw, 'settings': pivot_settings}
+            except Exception:
+                _show_pivots = False
+
+            # Candle pattern markers
+            try:
+                _chart_candle_markers = _detect_chart_candle_types(_df_today)
+            except Exception:
+                _chart_candle_markers = None
+
+            # Geometric patterns
+            _geo_patterns_live = []
+            try:
+                _geo_patterns_live = GeometricPatternDetector().detect_all(_df_today)
+            except Exception:
+                pass
+
+            fig = create_candlestick_chart(
+                _df_today,
+                f"{display_name} — {selected_timeframe} Chart",
+                interval,
+                show_pivots=any(pivot_settings.values()),
+                pivot_settings=pivot_settings,
+                vob_blocks=vob_blocks_for_chart,
+                poc_data=poc_data_for_chart,
+                swing_data=swing_data_for_chart,
+                rsi_sz_data=rsi_sz_data_for_chart,
+                ultimate_rsi_data=ultimate_rsi_data_for_chart,
+                candle_patterns=_chart_candle_markers,
+                geo_patterns=_geo_patterns_live,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # POC + Swing tables
+            if poc_data_for_chart:
+                with st.expander("📊 Triple POC + Future Swing", expanded=False):
+                    poc_rows = []
+                    _cp = float(_df_today['close'].iloc[-1]) if not _df_today.empty else 0
+                    for poc_key, label in [('poc1', 'Short (10)'), ('poc2', 'Medium (25)'), ('poc3', 'Long (70)')]:
+                        poc = poc_data_for_chart.get(poc_key)
+                        if poc:
+                            pos = "🟢 Above" if _cp > poc.get('poc', 0) else "🔴 Below"
+                            poc_rows.append({'POC': label, 'Value': f"₹{poc.get('poc', 0):.2f}",
+                                             'High': f"₹{poc.get('high', 0):.0f}", 'Low': f"₹{poc.get('low', 0):.0f}",
+                                             'Position': pos})
+                    if poc_rows:
+                        st.dataframe(pd.DataFrame(poc_rows), use_container_width=True, hide_index=True)
+
+            # Ultimate RSI
+            if ultimate_rsi_data_for_chart:
+                with st.expander("📈 Ultimate RSI [LuxAlgo]", expanded=False):
+                    ursi_val  = ultimate_rsi_data_for_chart.get('latest_arsi', 50)
+                    ursi_sig  = ultimate_rsi_data_for_chart.get('latest_signal', 50)
+                    ursi_zone = ultimate_rsi_data_for_chart.get('zone', 'Neutral')
+                    ursi_cross = ultimate_rsi_data_for_chart.get('cross_signal', 'None')
+                    ursi_mom  = ultimate_rsi_data_for_chart.get('momentum', 'Neutral')
+                    uc1, uc2, uc3, uc4 = st.columns(4)
+                    uc1.metric("URSI", f"{ursi_val:.1f}", delta=ursi_mom,
+                               delta_color="normal" if ursi_mom == 'Bullish' else ("inverse" if ursi_mom == 'Bearish' else "off"))
+                    uc2.metric("Signal", f"{ursi_sig:.1f}")
+                    uc3.metric("Zone", f"{'🟢' if ursi_zone == 'Overbought' else ('🔴' if ursi_zone == 'Oversold' else '⚪')} {ursi_zone}")
+                    uc4.metric("Cross", f"{'🔼' if 'Bullish' in ursi_cross else ('🔽' if 'Bearish' in ursi_cross else '➖')} {ursi_cross}")
+        else:
+            st.error(f"No {display_name} chart data available. Check Dhan API credentials.")
+
+    # ─────────────────── COL 2 — Options Analysis ─────────────────────
+    with col2:
+        st.header("📊 Options Analysis")
+
+        option_data = analyze_option_chain(
+            selected_expiry=selected_expiry,
+            pivot_data=pivots,
+            vob_data=vob_data,
+            live_spot_price=current_price,
+            underlying_scrip=underlying_scrip,
+            underlying_seg=exchange_seg,
+            symbol_name=symbol_name,
+            lot_size=lot_size,
+        )
+
+        if option_data and option_data.get('underlying'):
+            underlying_price = option_data['underlying']
+            df_summary = option_data['df_summary']
+            st.info(f"**{display_name} SPOT:** {underlying_price:.2f}")
+
+            # OI Change
+            oi_c1, oi_c2 = st.columns(2)
+            oi_c1.metric("CALL ΔOI", f"{option_data['total_ce_change']:+.1f}L", delta_color="inverse")
+            oi_c2.metric("PUT ΔOI",  f"{option_data['total_pe_change']:+.1f}L", delta_color="normal")
+        else:
+            option_data = None
+            st.warning(f"Option chain data unavailable for {display_name}.")
+
+    # ─────────────────── BELOW CHART — Full Analysis ──────────────────
+    if option_data and option_data.get('underlying'):
+        st.markdown("---")
+        st.header("📊 Options Chain Analysis")
+
+        # Smart Money Panel
+        try:
+            render_smart_money_master_analysis(option_data, current_price)
+        except Exception as _e:
+            st.warning(f"Smart money panel error: {_e}")
+
+        # Strike Price vs LTP table (ATM ± 5)
+        st.markdown("---")
+        st.markdown(f"## Strike Price vs LTP (ATM ± 5) — {display_name}")
+        df_summary_ltp = option_data.get('df_summary')
+        atm_strike_ltp = option_data.get('atm_strike')
+        _expiry = option_data.get('expiry', '')
+        try:
+            from datetime import datetime as _dt
+            _exp_sfx = _dt.strptime(_expiry, "%Y-%m-%d").strftime('%y%b%d').upper()
+        except Exception:
+            _exp_sfx = ''
+
+        if df_summary_ltp is not None and 'lastPrice_CE' in df_summary_ltp.columns:
+            ltp_extra = [c for c in ('scrp_cd_CE', 'scrp_cd_PE') if c in df_summary_ltp.columns]
+            ltp_tbl = df_summary_ltp[['Strike', 'lastPrice_CE', 'lastPrice_PE', 'Zone'] + ltp_extra].copy()
+            ltp_tbl = ltp_tbl.sort_values('Strike', ascending=False).reset_index(drop=True)
+            has_scrp = 'scrp_cd_CE' in ltp_tbl.columns
+
+            hdr = st.columns([2, 1.5, 1, 2, 1, 2, 1.5])
+            for col_h, label, color in zip(hdr,
+                [f"CE LTP", f"CE Val (x{lot_size})", "BUY CE", "STRIKE", "BUY PE", f"PE LTP", f"PE Val (x{lot_size})"],
+                ["#00cc66", "#00cc66", "#aaa", "#FFD700", "#aaa", "#ff6b6b", "#ff6b6b"]):
+                col_h.markdown(f"<b style='color:{color}'>{label}</b>", unsafe_allow_html=True)
+            st.markdown("<hr style='margin:4px 0; border-color:#333'>", unsafe_allow_html=True)
+
+            for _, row in ltp_tbl.iterrows():
+                strike = int(row['Strike'])
+                ce_ltp = float(row['lastPrice_CE'])
+                pe_ltp = float(row['lastPrice_PE'])
+                is_atm = row['Zone'] == 'ATM'
+                scrp_ce = str(row['scrp_cd_CE']) if has_scrp else ''
+                scrp_pe = str(row['scrp_cd_PE']) if has_scrp else ''
+                ts_ce = f"{symbol_name}{_exp_sfx}{strike}CE" if _exp_sfx else f"{symbol_name}{strike}CE"
+                ts_pe = f"{symbol_name}{_exp_sfx}{strike}PE" if _exp_sfx else f"{symbol_name}{strike}PE"
+                fw = "bold" if is_atm else "normal"
+                ce_color = "#00ff88" if is_atm else "#00cc66"
+                pe_color = "#ff8888" if is_atm else "#ff6b6b"
+                strike_style = "color:#FFD700; font-weight:bold; font-size:1.1em" if is_atm else "color:#c0c0c0"
+                r = st.columns([2, 1.5, 1, 2, 1, 2, 1.5])
+                r[0].markdown(f"<span style='color:{ce_color}; font-weight:{fw}'>{ce_ltp:.2f}</span>", unsafe_allow_html=True)
+                r[1].markdown(f"<span style='color:{ce_color}'>₹{ce_ltp*lot_size:,.0f}</span>", unsafe_allow_html=True)
+                buy_ce = r[2].button("BUY", key=f"{cache_key}_buy_ce_{strike}", type="primary",
+                                     disabled=not (has_scrp and scrp_ce))
+                r[3].markdown(f"<div style='text-align:center'><span style='{strike_style}'>{strike}</span></div>",
+                               unsafe_allow_html=True)
+                buy_pe = r[4].button("BUY", key=f"{cache_key}_buy_pe_{strike}", type="primary",
+                                     disabled=not (has_scrp and scrp_pe))
+                r[5].markdown(f"<span style='color:{pe_color}; font-weight:{fw}'>{pe_ltp:.2f}</span>", unsafe_allow_html=True)
+                r[6].markdown(f"<span style='color:{pe_color}'>₹{pe_ltp*lot_size:,.0f}</span>", unsafe_allow_html=True)
+                if buy_ce:
+                    ok, res = api.place_order(scrp_ce, ts_ce)
+                    st.success(f"CE BUY placed: {ts_ce}" ) if ok else st.error(f"CE BUY failed: {res}")
+                if buy_pe:
+                    ok, res = api.place_order(scrp_pe, ts_pe)
+                    st.success(f"PE BUY placed: {ts_pe}") if ok else st.error(f"PE BUY failed: {res}")
+
+        # ATM ±3 Strike Data Table
+        st.markdown("---")
+        st.markdown(f"## 📋 ATM ±3 Strike Data — {display_name}")
+        try:
+            _t5_src = option_data.get('df_summary')
+            if _t5_src is not None:
+                _t5_atm_idx = _t5_src[_t5_src['Zone'] == 'ATM'].index
+                if len(_t5_atm_idx) > 0:
+                    _t5_atm_pos = _t5_src.index.get_loc(_t5_atm_idx[0])
+                    _t5 = _t5_src.iloc[max(0, _t5_atm_pos - 3):min(len(_t5_src), _t5_atm_pos + 4)].copy().reset_index(drop=True)
+                    _disp_cols = [c for c in ['Strike', 'Zone', 'lastPrice_CE', 'lastPrice_PE',
+                                               'openInterest_CE', 'openInterest_PE', 'impliedVolatility_CE',
+                                               'impliedVolatility_PE', 'PCR_OI', 'BiasScore', 'Verdict']
+                                  if c in _t5.columns]
+                    if _disp_cols:
+                        st.dataframe(_t5[_disp_cols], use_container_width=True, hide_index=True)
+        except Exception as _te:
+            st.warning(f"ATM table error: {_te}")
+
+    # ─────────────────── ANALYSIS ENGINES ─────────────────────────────
+    st.markdown("---")
+
+    # Market Depth Engine
+    with st.expander(f"📊 Market Depth Engine — {display_name}", expanded=False):
+        try:
+            show_market_depth_engine(
+                api=api,
+                option_data=option_data,
+                security_id=security_id,
+                exchange_segment=exchange_seg,
+            )
+        except Exception as _e:
+            st.warning(f"Market Depth error: {_e}")
+
+    # Candlestick Intelligence Engine
+    with st.expander(f"🕯️ Candlestick Intelligence Engine — {display_name}", expanded=False):
+        try:
+            if not df.empty and current_price:
+                _straddle_hist = st.session_state.get('straddle_history', [])
+                _cie_underlying = (option_data.get('underlying') if option_data and option_data.get('underlying')
+                                   else current_price)
+                _cie_signals = run_candlestick_intelligence_engine(
+                    df, option_data, _straddle_hist, _cie_underlying, is_expiry=False
+                )
+                _cie_sup, _cie_res = _cie_detect_swing_sr(df)
+                _h1, _h2, _h3, _h4 = st.columns(4)
+                _h1.metric("Total Signals", len(_cie_signals))
+                _h2.metric("BUY", sum(1 for s in _cie_signals if s['direction'] == 'BUY'))
+                _h3.metric("SELL", sum(1 for s in _cie_signals if s['direction'] == 'SELL'))
+                _h4.metric("Avg Confidence", f"{sum(s.get('confidence', 0) for s in _cie_signals)/max(len(_cie_signals),1):.0f}%")
+                if _cie_signals:
+                    _sig_rows = [{'Time': s.get('time', ''), 'Direction': s.get('direction', ''),
+                                  'Pattern': s.get('pattern', ''), 'Confidence': f"{s.get('confidence',0):.0f}%",
+                                  'Price': f"₹{s.get('price', 0):,.2f}"} for s in _cie_signals[-10:]]
+                    st.dataframe(pd.DataFrame(_sig_rows), use_container_width=True, hide_index=True)
+        except Exception as _e:
+            st.warning(f"CIE error: {_e}")
+
+    # Cross-Market Confirmation Engine
+    with st.expander(f"🌐 Cross-Market Confirmation — {display_name}", expanded=False):
+        try:
+            show_cross_market_confirmation_engine(
+                cie_signals=st.session_state.get('straddle_history', []),
+                send_telegram=enable_signals,
+                db=db,
+                option_data=option_data,
+            )
+        except Exception as _e:
+            st.warning(f"CMCE error: {_e}")
+
+    # Institutional Order Flow
+    with st.expander(f"🏛️ Institutional Order Flow — {display_name}", expanded=False):
+        try:
+            if option_data and current_price:
+                show_iofce(
+                    option_data=option_data,
+                    df=df if not df.empty else None,
+                    underlying_price=current_price,
+                    cie_signals=[],
+                )
+        except Exception as _e:
+            st.warning(f"IOFCE error: {_e}")
+
+    # Futures Analysis Engine
+    with st.expander(f"🔮 Futures Market Analysis Engine — {display_name}", expanded=False):
+        try:
+            if not df.empty:
+                show_futures_analysis_engine(df=df, option_data=option_data or {}, current_price=current_price or 0)
+        except Exception as _e:
+            st.warning(f"Futures Analysis error: {_e}")
+
+    # ML Market Report
+    with st.expander(f"🤖 ML Market Intelligence — {display_name}", expanded=False):
+        try:
+            show_ml_market_report(option_data=option_data, df=df if not df.empty else None, current_price=current_price)
+        except Exception as _e:
+            st.warning(f"ML Report error: {_e}")
+
+    # Advanced Market Intelligence Engine
+    with st.expander(f"🧠 Advanced Market Intelligence — {display_name}", expanded=False):
+        try:
+            show_advanced_market_intelligence_engine(
+                df=df if not df.empty else None,
+                option_data=option_data,
+                current_price=current_price,
+            )
+        except Exception as _e:
+            st.warning(f"AMIE error: {_e}")
+
+
 def main():
     st.title("📈 Nifty Trading & Options Analyzer")
 
@@ -17038,12 +17499,42 @@ def main():
     if expiry_dates:
         expiry_options = [f"{exp} ({'Weekly' if i < 4 else 'Monthly'})" for i, exp in enumerate(expiry_dates)]
         selected_expiry_idx = st.sidebar.selectbox(
-            "Select Expiry",
+            "Select Expiry (Nifty)",
             range(len(expiry_options)),
             format_func=lambda x: expiry_options[x]
         )
         selected_expiry = expiry_dates[selected_expiry_idx]
-    
+
+    # Bank Nifty expiry selection
+    bn_expiry_data = get_dhan_expiry_list_cached(BANKNIFTY_UNDERLYING_SCRIP, BANKNIFTY_EXCHANGE_SEG)
+    bn_expiry_dates = []
+    if bn_expiry_data and 'data' in bn_expiry_data:
+        bn_expiry_dates = bn_expiry_data['data']
+    selected_bn_expiry = None
+    if bn_expiry_dates:
+        _bn_exp_opts = [f"{e} ({'Weekly' if i < 4 else 'Monthly'})" for i, e in enumerate(bn_expiry_dates)]
+        _bn_idx = st.sidebar.selectbox(
+            "Select Expiry (Bank Nifty)",
+            range(len(_bn_exp_opts)),
+            format_func=lambda x: _bn_exp_opts[x]
+        )
+        selected_bn_expiry = bn_expiry_dates[_bn_idx]
+
+    # Sensex expiry selection
+    sx_expiry_data = get_dhan_expiry_list_cached(SENSEX_UNDERLYING_SCRIP, SENSEX_EXCHANGE_SEG)
+    sx_expiry_dates = []
+    if sx_expiry_data and 'data' in sx_expiry_data:
+        sx_expiry_dates = sx_expiry_data['data']
+    selected_sx_expiry = None
+    if sx_expiry_dates:
+        _sx_exp_opts = [f"{e} ({'Weekly' if i < 4 else 'Monthly'})" for i, e in enumerate(sx_expiry_dates)]
+        _sx_idx = st.sidebar.selectbox(
+            "Select Expiry (Sensex)",
+            range(len(_sx_exp_opts)),
+            format_func=lambda x: _sx_exp_opts[x]
+        )
+        selected_sx_expiry = sx_expiry_dates[_sx_idx]
+
     # Auto-refresh settings
     auto_refresh = st.sidebar.checkbox("Auto Refresh (2 min)", value=user_prefs['auto_refresh'])
     
@@ -26142,10 +26633,52 @@ def main():
         st.sidebar.info(f"Last Updated: {current_time}")
 
     with tab_bn:
-        show_bn_dashboard(interval=timeframes.get(selected_timeframe, "1"))
+        show_index_tab_content(
+            api=api, db=db,
+            interval=timeframes.get(selected_timeframe, "1"),
+            selected_timeframe=selected_timeframe,
+            timeframes=timeframes,
+            days_back=days_back,
+            pivot_settings=pivot_settings,
+            enable_signals=enable_signals,
+            pivot_proximity=pivot_proximity,
+            use_cache=use_cache,
+            index_config={
+                'security_id':      BANKNIFTY_SCRIP_ID,
+                'exchange_seg':     BANKNIFTY_EXCHANGE_SEG,
+                'underlying_scrip': BANKNIFTY_UNDERLYING_SCRIP,
+                'symbol_name':      'BANKNIFTY',
+                'display_name':     'Bank Nifty',
+                'lot_size':         BANKNIFTY_LOT_SIZE,
+                'strike_step':      BANKNIFTY_STRIKE_STEP,
+                'cache_key':        'BANKNIFTY',
+            },
+            selected_expiry=selected_bn_expiry,
+        )
 
     with tab_sensex:
-        show_sensex_dashboard(api=api, interval=timeframes.get(selected_timeframe, "1"), days_back=days_back)
+        show_index_tab_content(
+            api=api, db=db,
+            interval=timeframes.get(selected_timeframe, "1"),
+            selected_timeframe=selected_timeframe,
+            timeframes=timeframes,
+            days_back=days_back,
+            pivot_settings=pivot_settings,
+            enable_signals=enable_signals,
+            pivot_proximity=pivot_proximity,
+            use_cache=use_cache,
+            index_config={
+                'security_id':      SENSEX_SCRIP_ID,
+                'exchange_seg':     SENSEX_EXCHANGE_SEG,
+                'underlying_scrip': SENSEX_UNDERLYING_SCRIP,
+                'symbol_name':      'SENSEX',
+                'display_name':     'Sensex',
+                'lot_size':         SENSEX_LOT_SIZE,
+                'strike_step':      SENSEX_STRIKE_STEP,
+                'cache_key':        'SENSEX',
+            },
+            selected_expiry=selected_sx_expiry,
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
