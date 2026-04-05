@@ -16506,6 +16506,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
     if not option_data or not option_data.get('underlying'):
         return
 
+    # Resolve singleton and key derived values — were in main() scope before extraction
+    mde = MasterDataEngine.get_instance()
+    underlying_price = option_data.get('underlying', 0) or 0
+
     st.markdown("---")
     # Anchor for sidebar navigation
     st.markdown('<a name="smart-money-panel"></a>', unsafe_allow_html=True)
