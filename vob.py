@@ -149,6 +149,76 @@ NIFTY_UNDERLYING_SEG = "IDX_I"
 SENSEX_SCRIP_ID = "51"        # BSE Sensex security ID in Dhan API
 SENSEX_EXCHANGE_SEG = "IDX_I"  # All indices (NSE + BSE) share IDX_I segment in Dhan API
 
+# Multi-index support — BankNifty and Sensex option chain analysis
+BANKNIFTY_UNDERLYING_SCRIP = 25
+BANKNIFTY_UNDERLYING_SEG   = "IDX_I"
+SENSEX_UNDERLYING_SCRIP    = 51
+SENSEX_UNDERLYING_SEG      = "IDX_I"
+
+# Per-index lot sizes and strike intervals
+INDEX_CONFIGS = {
+    "NIFTY":     {"scrip": 13, "seg": "IDX_I", "lot_size": 65,  "strike_step": 50,  "display_name": "NIFTY 50",   "symbol_prefix": "NIFTY"},
+    "BANKNIFTY": {"scrip": 25, "seg": "IDX_I", "lot_size": 35,  "strike_step": 100, "display_name": "BANK NIFTY", "symbol_prefix": "BANKNIFTY"},
+    "SENSEX":    {"scrip": 51, "seg": "IDX_I", "lot_size": 10,  "strike_step": 100, "display_name": "SENSEX",     "symbol_prefix": "SENSEX"},
+}
+
+# Session state keys that hold per-index time-series data (used for isolation across tabs)
+_OPT_SS_KEYS = [
+    'pcr_history', 'pcr_last_valid_data', 'pcr_current_strikes',
+    'gex_history', 'gex_last_valid_data', 'gex_current_strikes', 'last_gex_alert',
+    'pcr_chgoi_history', 'pcr_chgoi_last_valid',
+    'pcr_chgoi_strike_history', 'pcr_chgoi_strike_last_valid', 'pcr_chgoi_strike_current_strikes',
+    'oi_positioning_history',
+    'call_put_oi_ce_history', 'call_put_oi_pe_history',
+    'call_put_chgoi_ce_history', 'call_put_chgoi_pe_history',
+    'call_put_oi_current_strikes', 'call_put_oi_telegram_last_sent',
+    'call_put_vol_ce_history', 'call_put_vol_pe_history',
+    'call_put_chgvol_ce_history', 'call_put_chgvol_pe_history',
+    'composite_signal_history', 'composite_signal_last_valid',
+    'total_gex_history', 'total_gex_last_valid',
+    'vol_pcr_history', 'vol_pcr_current_strikes',
+    'straddle_history', 'zone_history',
+    'delta_gamma_history', 'delta_gamma_last_valid', 'delta_gamma_last_alert',
+    'iv_skew_history', 'iv_skew_last_valid',
+    'pressure_history', 'pressure_last_valid',
+    'iv_skew_signal_last', 'ml_report_history',
+    'pro_trader_history', 'pro_smart_signal_last',
+    'sentiment_history', 'itm_last_alert',
+    'depth_history',
+    'spike_history', 'expiry_spike_history', 'expiry_intel_history', 'gamma_seq_history',
+    'last_spike_alert', 'last_gamma_alert', 'last_expiry_spike_alert',
+    'last_confluence_alert', 'last_expiry_spike_alert',
+    '_oi_prev_underlying', '_oi_tracker_prev_price',
+    'pcr_telegram_last_sent',
+]
+
+
+def _idx_swap_in(prefix):
+    """Load index-specific session state into standard keys, backing up existing values."""
+    for key in _OPT_SS_KEYS:
+        pkey = f'{prefix}_{key}'
+        st.session_state[f'_bkp_{prefix}_{key}'] = st.session_state.get(key)
+        pval = st.session_state.get(pkey)
+        if pval is not None:
+            st.session_state[key] = pval
+        elif key.endswith('_history'):
+            st.session_state[key] = []
+        else:
+            st.session_state[key] = None
+
+
+def _idx_swap_out(prefix):
+    """Save standard session state back to index-specific keys, then restore backups."""
+    for key in _OPT_SS_KEYS:
+        pkey = f'{prefix}_{key}'
+        st.session_state[pkey] = st.session_state.get(key)
+        backup_key = f'_bkp_{prefix}_{key}'
+        backup = st.session_state.pop(backup_key, None)
+        if backup is not None:
+            st.session_state[key] = backup
+        elif backup_key in st.session_state:
+            st.session_state.pop(key, None)
+
 # ── BankNifty Dashboard: yfinance symbol map ──────────────────────────
 BN_DASH_TICKERS = [
     {"name": "BANKNIFTY", "yf": "^NSEBANK",    "weight": 35.0, "inverse": False},
@@ -5651,25 +5721,30 @@ def get_combined_acceleration_signal(sentiment_verdict, spike_result, gamma_resu
         return 'MONITORING', '#aaaaaa', 'Normal Market Flow'
 
 
-def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, live_spot_price=None):
-    """Enhanced options chain analysis with expiry selection, HTF pivot data, and VOB data"""
+def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, live_spot_price=None,
+                          underlying_scrip=None, underlying_seg=None, index_name="NIFTY"):
+    """Enhanced options chain analysis with expiry selection, HTF pivot data, and VOB data.
+    Supports NIFTY, BANKNIFTY, and SENSEX via underlying_scrip/underlying_seg parameters.
+    """
     now = datetime.now(timezone("Asia/Kolkata"))
-    
+    _scrip = underlying_scrip if underlying_scrip is not None else NIFTY_UNDERLYING_SCRIP
+    _seg   = underlying_seg   if underlying_seg   is not None else NIFTY_UNDERLYING_SEG
+
     # Get expiry list - use cached version for performance
-    expiry_data = get_dhan_expiry_list_cached(NIFTY_UNDERLYING_SCRIP, NIFTY_UNDERLYING_SEG)
+    expiry_data = get_dhan_expiry_list_cached(_scrip, _seg)
     if not expiry_data or 'data' not in expiry_data:
-        st.error("Failed to get expiry list from Dhan API")
+        st.error(f"Failed to get expiry list from Dhan API for {index_name}")
         return None
 
     expiry_dates = expiry_data['data']
     if not expiry_dates:
-        st.error("No expiry dates available")
+        st.error(f"No expiry dates available for {index_name}")
         return None
 
     # Use selected expiry or default to first
     expiry = selected_expiry if selected_expiry else expiry_dates[0]
 
-    option_chain_data = get_dhan_option_chain(NIFTY_UNDERLYING_SCRIP, NIFTY_UNDERLYING_SEG, expiry)
+    option_chain_data = get_dhan_option_chain(_scrip, _seg, expiry)
     if not option_chain_data or 'data' not in option_chain_data:
         st.error("Failed to get option chain from Dhan API")
         return {'underlying': None, 'df_summary': None, 'expiry_dates': expiry_dates, 'expiry': None, 'sr_data': [], 'max_pain_strike': None, 'styled_df': None, 'df_display': None, 'display_cols': [], 'bias_cols': [], 'total_ce_change': 0, 'total_pe_change': 0}
@@ -5747,10 +5822,15 @@ def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, l
         df.at[idx, 'impliedVolatility_PE'] = iv_pe
 
     atm_strike = min(df['strikePrice'], key=lambda x: abs(x - underlying))
-    
-    # Limit to ATM ± 2 strikes for faster UI (performance optimization)
-    atm_plus_minus_2 = df[abs(df['strikePrice'] - atm_strike) <= 100]  # Assuming 50 point strikes
-    df = atm_plus_minus_2.copy()
+
+    # Dynamically detect strike step and compute ATM ± 5 range
+    _strikes_sorted = sorted(df['strikePrice'].unique())
+    _strike_step = int(_strikes_sorted[1] - _strikes_sorted[0]) if len(_strikes_sorted) >= 2 else (
+        INDEX_CONFIGS.get(index_name, {}).get('strike_step', 50)
+    )
+    _atm_range = _strike_step * 5  # ATM ± 5 strikes
+    atm_plus_minus_5 = df[abs(df['strikePrice'] - atm_strike) <= _atm_range]
+    df = atm_plus_minus_5.copy()
     
     df['Zone'] = df['strikePrice'].apply(lambda x: 'ATM' if x == atm_strike else 'ITM' if x < underlying else 'OTM')
     df['Level'] = df.apply(determine_level, axis=1)
@@ -16415,6 +16495,6477 @@ def compute_strike_zone_classification(mde):
     return entry
 
 
+
+def render_options_analysis_panel(option_data, current_price, api,
+                                   lot_size=65, index_name="NIFTY", symbol_prefix="NIFTY"):
+    """Render the full options chain analysis panel for any index.
+    Supports NIFTY (lot_size=65, step=50), BANKNIFTY (lot_size=35, step=100),
+    and SENSEX (lot_size=10, step=100). Session state isolation is handled
+    by the caller via _idx_swap_in/_idx_swap_out before/after this call.
+    """
+    if not option_data or not option_data.get('underlying'):
+        return
+
+    st.markdown("---")
+    # Anchor for sidebar navigation
+    st.markdown('<a name="smart-money-panel"></a>', unsafe_allow_html=True)
+    st.header("📊 Options Chain Analysis")
+    st.info(
+        "⬇️ **Smart Money & Market Sentiment Analysis** panel is directly below — scroll down to see "
+        "OI activity, sentiment score, trap & breakout detection, support/resistance strength, and key levels."
+    )
+
+    # ── 🧠 SMART MONEY PANEL — shown first so it's always visible ────────
+    render_smart_money_master_analysis(option_data, current_price)
+
+    # ── 🧠 VOB2 PRE-MARKET INTELLIGENCE REPORT ──────────────────────────
+    render_pre_market_intelligence_report(option_data, current_price)
+
+    # OI Change metrics
+    st.markdown("## Open Interest Change (in Lakhs)")
+    oi_col1, oi_col2 = st.columns(2)
+    with oi_col1:
+        st.metric("CALL ΔOI", f"{option_data['total_ce_change']:+.1f}L", delta_color="inverse")
+    with oi_col2:
+        st.metric("PUT ΔOI", f"{option_data['total_pe_change']:+.1f}L", delta_color="normal")
+
+    # ===== STRIKE PRICE vs LTP TABLE (ATM ± 5) =====
+    st.markdown("---")
+    st.markdown("## Strike Price vs LTP (ATM ± 5)")
+
+    df_summary_ltp = option_data.get('df_summary')
+    atm_strike_ltp = option_data.get('atm_strike')
+
+    if (df_summary_ltp is not None
+            and 'lastPrice_CE' in df_summary_ltp.columns
+            and 'lastPrice_PE' in df_summary_ltp.columns):
+
+        _lot_size = lot_size
+        _expiry = option_data.get('expiry', '')
+
+        # Collect scrp_cd columns if available (for order placement)
+        ltp_extra = [c for c in ('scrp_cd_CE', 'scrp_cd_PE') if c in df_summary_ltp.columns]
+        ltp_tbl = df_summary_ltp[['Strike', 'lastPrice_CE', 'lastPrice_PE', 'Zone'] + ltp_extra].copy()
+        ltp_tbl = ltp_tbl.sort_values('Strike', ascending=False).reset_index(drop=True)
+
+        has_scrp = 'scrp_cd_CE' in ltp_tbl.columns and 'scrp_cd_PE' in ltp_tbl.columns
+        if not has_scrp:
+            st.info("Security IDs (scrp_cd) not available in option chain data — Buy buttons disabled.")
+
+        # Build expiry suffix for trading symbol e.g. "25FEB27"
+        try:
+            from datetime import datetime as _dt
+            _exp_sfx = _dt.strptime(_expiry, "%Y-%m-%d").strftime('%y%b%d').upper()
+        except Exception:
+            _exp_sfx = ''
+
+        # Header row
+        hdr = st.columns([2, 1.5, 1, 2, 1, 2, 1.5])
+        for col_h, label, color in zip(
+            hdr,
+            ["CE LTP", f"CE Val (x{_lot_size})", "BUY CE", "STRIKE", "BUY PE", "PE LTP", f"PE Val (x{_lot_size})"],
+            ["#00cc66", "#00cc66", "#aaa", "#FFD700", "#aaa", "#ff6b6b", "#ff6b6b"]
+        ):
+            col_h.markdown(f"<b style='color:{color}'>{label}</b>", unsafe_allow_html=True)
+
+        st.markdown("<hr style='margin:4px 0; border-color:#333'>", unsafe_allow_html=True)
+
+        for _, row in ltp_tbl.iterrows():
+            strike = int(row['Strike'])
+            ce_ltp = float(row['lastPrice_CE'])
+            pe_ltp = float(row['lastPrice_PE'])
+            ce_val = ce_ltp * _lot_size
+            pe_val = pe_ltp * _lot_size
+            is_atm = row['Zone'] == 'ATM'
+            scrp_ce = str(row['scrp_cd_CE']) if has_scrp else ''
+            scrp_pe = str(row['scrp_cd_PE']) if has_scrp else ''
+            ts_ce = f"{symbol_prefix}{_exp_sfx}{strike}CE" if _exp_sfx else f"{symbol_prefix}{strike}CE"
+            ts_pe = f"{symbol_prefix}{_exp_sfx}{strike}PE" if _exp_sfx else f"{symbol_prefix}{strike}PE"
+
+            ce_color = "#00ff88" if is_atm else "#00cc66"
+            pe_color = "#ff8888" if is_atm else "#ff6b6b"
+            fw = "bold" if is_atm else "normal"
+            strike_style = "color:#FFD700; font-weight:bold; font-size:1.1em" if is_atm else "color:#c0c0c0"
+
+            r = st.columns([2, 1.5, 1, 2, 1, 2, 1.5])
+            r[0].markdown(f"<span style='color:{ce_color}; font-weight:{fw}'>{ce_ltp:.2f}</span>", unsafe_allow_html=True)
+            r[1].markdown(f"<span style='color:{ce_color}'>₹{ce_val:,.0f}</span>", unsafe_allow_html=True)
+            buy_ce = r[2].button("BUY", key=f"buy_ce_{strike}", type="primary",
+                                 disabled=not (has_scrp and scrp_ce))
+            r[3].markdown(f"<div style='text-align:center'><span style='{strike_style}'>{strike}</span></div>",
+                           unsafe_allow_html=True)
+            buy_pe = r[4].button("BUY", key=f"buy_pe_{strike}", type="primary",
+                                 disabled=not (has_scrp and scrp_pe))
+            r[5].markdown(f"<span style='color:{pe_color}; font-weight:{fw}'>{pe_ltp:.2f}</span>", unsafe_allow_html=True)
+            r[6].markdown(f"<span style='color:{pe_color}'>₹{pe_val:,.0f}</span>", unsafe_allow_html=True)
+
+            if buy_ce:
+                ok, res = api.place_order(scrp_ce, ts_ce)
+                if ok:
+                    st.success(f"CE BUY order placed for {ts_ce} | Order ID: {res.get('orderId', res)}")
+                else:
+                    st.error(f"CE BUY failed for {ts_ce}: {res}")
+
+            if buy_pe:
+                ok, res = api.place_order(scrp_pe, ts_pe)
+                if ok:
+                    st.success(f"PE BUY order placed for {ts_pe} | Order ID: {res.get('orderId', res)}")
+                else:
+                    st.error(f"PE BUY failed for {ts_pe}: {res}")
+
+    # ===== ATM ±3 STRIKE DATA TABLE =====
+    st.markdown("---")
+    st.markdown("## 📋 ATM ±3 Strike Data — Full Tabulation (7 Strikes)")
+    try:
+        _t5_src = option_data.get('df_summary') if option_data else None
+        if _t5_src is not None:
+            _t5_atm_idx = _t5_src[_t5_src['Zone'] == 'ATM'].index
+            if len(_t5_atm_idx) > 0:
+                _t5_atm_pos = _t5_src.index.get_loc(_t5_atm_idx[0])
+                _t5_start   = max(0, _t5_atm_pos - 3)
+                _t5_end     = min(len(_t5_src), _t5_atm_pos + 4)
+                _t5         = _t5_src.iloc[_t5_start:_t5_end].copy().reset_index(drop=True)
+
+                _t5_atm_strike  = _t5[_t5['Zone'] == 'ATM']['Strike'].values[0]
+                _t5_stk_list    = _t5['Strike'].tolist()
+                _t5_atm_i       = _t5_stk_list.index(_t5_atm_strike)
+                def _t5_zone(i):
+                    d = i - _t5_atm_i
+                    return '🟡 ATM' if d == 0 else (f'🟣 ITM{d}' if d < 0 else f'🔵 OTM+{d}')
+
+                # Underlying direction for OI type
+                _t5_und = option_data.get('underlying', 0) or 0
+                if '_oi_prev_underlying' not in st.session_state:
+                    st.session_state['_oi_prev_underlying'] = _t5_und
+                _t5_und_up = _t5_und >= st.session_state['_oi_prev_underlying']
+                st.session_state['_oi_prev_underlying'] = _t5_und
+
+                def _t5_oi_type(chgoi, price_up):
+                    oi_up = (chgoi or 0) > 0
+                    if price_up and oi_up:     return "🟢 Long Build-up"
+                    if not price_up and oi_up: return "🔴 Short Build-up"
+                    if price_up and not oi_up: return "🟡 Short Covering"
+                    return "🟠 Long Unwinding"
+
+                _t5_tbl = pd.DataFrame()
+                _t5_tbl['Strike']   = _t5['Strike']
+                _t5_tbl['Zone']     = [_t5_zone(i) for i in range(len(_t5))]
+
+                # LTP + Straddle
+                if 'lastPrice_CE' in _t5.columns:
+                    _t5_tbl['CE LTP']   = _t5['lastPrice_CE'].round(2)
+                    _t5_tbl['PE LTP']   = _t5['lastPrice_PE'].round(2)
+                    _t5_tbl['Straddle'] = (_t5['lastPrice_CE'] + _t5['lastPrice_PE']).round(2)
+
+                # PCR (OI)
+                if 'PCR' in _t5.columns:
+                    _t5_tbl['PCR OI']   = _t5['PCR']
+                    _t5_tbl['OI Sig']   = _t5['PCR'].apply(
+                        lambda v: '🟢 Bull' if v > 1.2 else ('🔴 Bear' if v < 0.7 else '🟡 Ntrl'))
+
+                # PCR (ChgOI)
+                if 'changeinOpenInterest_CE' in _t5.columns:
+                    _ce_chg = _t5['changeinOpenInterest_CE'].replace(0, np.nan)
+                    _t5_tbl['PCR ΔOI']  = (_t5['changeinOpenInterest_PE'] / _ce_chg).round(3)
+                    _t5_tbl['ΔOI Sig']  = _t5_tbl['PCR ΔOI'].apply(
+                        lambda v: '🟢 Bull' if (pd.notna(v) and v > 1.2) else (
+                                  '🔴 Bear' if (pd.notna(v) and v < 0.7) else '🟡 Ntrl'))
+
+                # Vol PCR
+                if 'totalTradedVolume_CE' in _t5.columns:
+                    _ce_vol = _t5['totalTradedVolume_CE'].replace(0, np.nan)
+                    _t5_tbl['Vol PCR']  = (_t5['totalTradedVolume_PE'] / _ce_vol).round(3)
+
+                # OI in Lakhs
+                if 'openInterest_CE' in _t5.columns:
+                    _t5_tbl['CE OI(L)'] = (_t5['openInterest_CE'] / 100000).round(2)
+                    _t5_tbl['PE OI(L)'] = (_t5['openInterest_PE'] / 100000).round(2)
+
+                # ΔOI + OI Type (separately for CE and PE)
+                if 'changeinOpenInterest_CE' in _t5.columns:
+                    _t5_tbl['CE ΔOI']    = _t5['changeinOpenInterest_CE'].fillna(0).astype(int)
+                    _t5_tbl['CE OI Type'] = _t5['changeinOpenInterest_CE'].apply(
+                        lambda v: _t5_oi_type(v, _t5_und_up))
+                    _t5_tbl['PE ΔOI']    = _t5['changeinOpenInterest_PE'].fillna(0).astype(int)
+                    _t5_tbl['PE OI Type'] = _t5['changeinOpenInterest_PE'].apply(
+                        lambda v: _t5_oi_type(v, _t5_und_up))
+
+                # IV
+                if 'impliedVolatility_CE' in _t5.columns:
+                    _t5_tbl['IV CE']    = _t5['impliedVolatility_CE'].round(2)
+                    _t5_tbl['IV PE']    = _t5['impliedVolatility_PE'].round(2)
+
+                # GEX Net (Lakhs)
+                if 'GammaExp_Net' in _t5.columns:
+                    _t5_tbl['GEX(L)']   = (_t5['GammaExp_Net'] / 100000).round(2)
+
+                # Bias + Verdict
+                if 'BiasScore' in _t5.columns:
+                    _t5_tbl['Bias%']    = _t5['BiasScore'].round(1)
+                if 'Verdict' in _t5.columns:
+                    _t5_tbl['Verdict']  = _t5['Verdict']
+
+                # Row styling
+                def _t5_style(row):
+                    if row['Zone'] == '🟡 ATM':
+                        return ['background-color: rgba(255,200,0,0.18)'] * len(row)
+                    pcr = row.get('PCR OI', 1.0)
+                    if pd.notna(pcr) and pcr > 1.2:
+                        return ['background-color: rgba(0,255,136,0.07)'] * len(row)
+                    if pd.notna(pcr) and pcr < 0.7:
+                        return ['background-color: rgba(255,68,68,0.07)'] * len(row)
+                    return [''] * len(row)
+
+                st.dataframe(
+                    _t5_tbl.style.apply(_t5_style, axis=1),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                _t5_und_dir = "↑" if _t5_und_up else "↓"
+                st.caption(
+                    f"📍 ATM ₹{_t5_atm_strike} · ATM±3 ({len(_t5_tbl)} strikes) · "
+                    f"Underlying {_t5_und_dir} ₹{_t5_und:.0f} · "
+                    f"🟢 Long Build-up  🔴 Short Build-up  🟡 Short Covering  🟠 Long Unwinding"
+                )
+            else:
+                st.info("ATM strike not identified in current data.")
+        else:
+            st.info("Option data not available yet — wait for first refresh.")
+    except Exception as _t5_exc:
+        st.warning(f"ATM ±3 table error: {str(_t5_exc)[:120]}")
+
+    # Option Chain Bias Summary Table
+    st.markdown("---")
+    st.markdown("## Option Chain Bias Summary")
+    if option_data.get('styled_df') is not None:
+        st.dataframe(option_data['styled_df'], use_container_width=True)
+
+    # ===== HTF SUPPORT & RESISTANCE TABLES (SPLIT) =====
+    st.markdown("---")
+    st.markdown("## 📈 HTF Support & Resistance Levels")
+
+    sr_data = option_data.get('sr_data', [])
+    max_pain_strike = option_data.get('max_pain_strike')
+
+    if sr_data:
+        # Split into Support and Resistance
+        support_data = [d for d in sr_data if '🟢' in d['Type'] or '🎯' in d['Type']]
+        resistance_data = [d for d in sr_data if '🔴' in d['Type']]
+
+        sr_col1, sr_col2 = st.columns(2)
+
+        with sr_col1:
+            st.markdown("### 🟢 SUPPORT LEVELS")
+            if support_data:
+                support_df = pd.DataFrame(support_data)
+                st.dataframe(support_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No support levels identified")
+
+        with sr_col2:
+            st.markdown("### 🔴 RESISTANCE LEVELS")
+            if resistance_data:
+                resistance_df = pd.DataFrame(resistance_data)
+                st.dataframe(resistance_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No resistance levels identified")
+
+        # Max Pain summary
+        if max_pain_strike:
+            st.info(f"🎯 **Max Pain Level:** ₹{max_pain_strike:.0f} - Price magnet at expiry")
+
+    # ===== KEY LEVELS FROM ORDER BOOK DEPTH CHART (time-series) =====
+    st.markdown("---")
+    _depth_df_summary = option_data.get('df_summary')
+    if _depth_df_summary is not None:
+        _has_bid = 'bidQty_PE' in _depth_df_summary.columns and not _depth_df_summary['bidQty_PE'].isna().all()
+        _has_ask = 'askQty_CE' in _depth_df_summary.columns and not _depth_df_summary['askQty_CE'].isna().all()
+        if _has_bid or _has_ask:
+            _ist = pytz.timezone('Asia/Kolkata')
+            _depth_now = datetime.now(_ist)
+            _depth_entry = {'time': _depth_now}
+            if _has_bid:
+                _top3_sup = _depth_df_summary.nlargest(3, 'bidQty_PE')[['Strike', 'bidQty_PE']].copy()
+                _top3_sup = _top3_sup.sort_values('Strike', ascending=False).reset_index(drop=True)
+                for _i, _r in _top3_sup.iterrows():
+                    _depth_entry[f'S{_i+1}_qty'] = _r['bidQty_PE']
+                    _depth_entry[f'S{_i+1}_price'] = _r['Strike']
+            if _has_ask:
+                _top3_res = _depth_df_summary.nlargest(3, 'askQty_CE')[['Strike', 'askQty_CE']].copy()
+                _top3_res = _top3_res.sort_values('Strike').reset_index(drop=True)
+                for _i, _r in _top3_res.iterrows():
+                    _depth_entry[f'R{_i+1}_qty'] = _r['askQty_CE']
+                    _depth_entry[f'R{_i+1}_price'] = _r['Strike']
+            _should_add_depth = True
+            if st.session_state.depth_history:
+                _last_depth = st.session_state.depth_history[-1]
+                _last_time = _last_depth['time']
+                if isinstance(_last_time, str):
+                    _last_time = pd.to_datetime(_last_time).to_pydatetime()
+                if _last_time.tzinfo is None:
+                    _last_time = _ist.localize(_last_time)
+                if (_depth_now - _last_time).total_seconds() < 30:
+                    _should_add_depth = False
+            if _should_add_depth:
+                st.session_state.depth_history.append(_depth_entry)
+                if len(st.session_state.depth_history) > 200:
+                    st.session_state.depth_history = st.session_state.depth_history[-200:]
+                db.save_option_history('depth_history', _depth_entry)
+
+    st.markdown("### 📊 Key Levels from Order Book Depth")
+    if st.session_state.depth_history:
+        _depth_hist_df = pd.DataFrame(st.session_state.depth_history)
+        _support_colors = ['#00cc66', '#00aa55', '#008844']
+        _resist_colors  = ['#ff4444', '#dd3333', '#bb2222']
+        _depth_levels = (
+            [('S', i+1, _support_colors[i], 'Support', 'bidQty_PE') for i in range(3)] +
+            [('R', i+1, _resist_colors[i],  'Resistance', 'askQty_CE') for i in range(3)]
+        )
+        _depth_cols = st.columns(6)
+        for _col_idx, (_col, (_side, _n, _clr, _label, _)) in enumerate(zip(_depth_cols, _depth_levels)):
+            with _col:
+                _qty_col   = f'{_side}{_n}_qty'
+                _price_col = f'{_side}{_n}_price'
+                if _qty_col not in _depth_hist_df.columns:
+                    st.info(f"{_side}{_n} N/A")
+                    continue
+                _cur_qty = _depth_hist_df[_qty_col].iloc[-1]
+                _cur_price = (
+                    _depth_hist_df[_price_col].iloc[-1]
+                    if _price_col in _depth_hist_df.columns else None
+                )
+                _price_str = f'₹{_cur_price:,.0f}' if _cur_price is not None else ''
+                _rgb = tuple(int(_clr.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
+                _fill = f'rgba({_rgb[0]},{_rgb[1]},{_rgb[2]},0.15)'
+                _qty_vals = _depth_hist_df[_qty_col].dropna()
+                _max_qty = _qty_vals.max() if len(_qty_vals) > 0 else 1
+                _fig_d = go.Figure()
+                _fig_d.add_trace(go.Scatter(
+                    x=_depth_hist_df['time'],
+                    y=_depth_hist_df[_qty_col],
+                    mode='lines+markers',
+                    name=_label,
+                    line=dict(color=_clr, width=2),
+                    marker=dict(size=3),
+                    fill='tozeroy',
+                    fillcolor=_fill,
+                    hovertemplate=f'{_side}{_n} {_label}<br>Qty: %{{y:,.0f}}<br>Time: %{{x|%H:%M}}<extra></extra>',
+                ))
+                _fig_d.update_layout(
+                    title=dict(
+                        text=f"{'🟢' if _side=='S' else '🔴'} {_side}{_n} {_label}<br>{_price_str}<br>Qty: {_cur_qty:,.0f}",
+                        font=dict(size=11)
+                    ),
+                    template='plotly_dark',
+                    height=300,
+                    showlegend=False,
+                    margin=dict(l=5, r=10, t=70, b=30),
+                    xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                    yaxis=dict(
+                        title='Bid Qty' if _side == 'S' else 'Ask Qty',
+                        tickformat=',.0f',
+                        range=[0, _max_qty * 1.2],
+                        title_font=dict(color=_clr, size=9),
+                        tickfont=dict(size=8),
+                    ),
+                    plot_bgcolor='#1e1e1e',
+                    paper_bgcolor='#1e1e1e',
+                )
+                st.plotly_chart(_fig_d, use_container_width=True)
+                _caption = f"{'PE Bid' if _side=='S' else 'CE Ask'} {_cur_qty:,.0f}"
+                if _cur_price is not None:
+                    _caption += f" @ {_price_str}"
+                st.caption(_caption)
+    else:
+        depth_fig = plot_depth_levels(
+            option_data.get('df_summary'),
+            option_data.get('underlying')
+        )
+        if depth_fig is not None:
+            st.plotly_chart(depth_fig, use_container_width=True)
+
+    # ===== PRE-COMPUTE GEX + TRACK HISTORY (before comparison view) =====
+    _gex_pre_summary = option_data.get('df_summary')
+    _gex_pre_underlying = option_data.get('underlying')
+    gex_data_pre = None
+    if _gex_pre_summary is not None and _gex_pre_underlying:
+        try:
+            gex_data_pre = calculate_dealer_gex(_gex_pre_summary, _gex_pre_underlying)
+            if gex_data_pre:
+                st.session_state.gex_last_valid_data = gex_data_pre
+                _gex_df_pre = gex_data_pre['gex_df']
+                _gex_ist = pytz.timezone('Asia/Kolkata')
+                _gex_now = datetime.now(_gex_ist)
+                _gex_entry = {'time': _gex_now, 'total_gex': gex_data_pre['total_gex']}
+                for _, _gr in _gex_df_pre.iterrows():
+                    _gex_entry[str(int(_gr['Strike']))] = _gr['Net_GEX']
+                st.session_state.gex_current_strikes = sorted(
+                    [int(_gr['Strike']) for _, _gr in _gex_df_pre.iterrows()])
+                _should_gex = True
+                if st.session_state.gex_history:
+                    if (_gex_now - _to_ist(st.session_state.gex_history[-1]['time'])).total_seconds() < 30:
+                        _should_gex = False
+                if _should_gex:
+                    st.session_state.gex_history.append(_gex_entry)
+                    if len(st.session_state.gex_history) > 200:
+                        st.session_state.gex_history = st.session_state.gex_history[-200:]
+                    db.save_option_history('gex_history', _gex_entry)
+        except Exception:
+            pass
+
+    # ===== COMPOSITE SCORE & VERDICT — TOP DISPLAY =====
+    st.markdown("---")
+    st.markdown("## 🧭 Composite Direction Signal — PCR × ΔOI × GEX")
+    _cs_last   = st.session_state.get('composite_signal_last_valid')
+    _cs_hist   = st.session_state.get('composite_signal_history', [])
+
+    if _cs_last:
+        _cs_verdict      = _cs_last['verdict']
+        _cs_icon         = _cs_last['verdict_icon']
+        _cs_color        = _cs_last['verdict_color']
+        _cs_desc         = _cs_last['verdict_desc']
+        _cs_score        = _cs_last['total_score']
+        _cs_pct          = _cs_last['score_pct']
+        _cs_gex          = _cs_last['total_net_gex']
+        _cs_pcr          = _cs_last['avg_pcr']
+        _cs_chgoi        = _cs_last['avg_chgoi']
+        _cs_max          = 14.0
+        _cs_gex_trending = _cs_gex < -10
+        _cs_gex_pinning  = _cs_gex > 10
+        _cs_gex_lbl      = 'Trending' if _cs_gex_trending else 'Pinning' if _cs_gex_pinning else 'Neutral'
+
+        # Main verdict card
+        st.markdown(f"""
+        <div style="background: linear-gradient(135deg, {_cs_color}15, {_cs_color}30);
+                    padding: 22px; border-radius: 15px; border: 3px solid {_cs_color};
+                    text-align: center; margin-bottom: 16px;">
+            <h1 style="color: {_cs_color}; margin: 0; font-size: 44px;">{_cs_icon} {_cs_verdict}</h1>
+            <p style="color: #cccccc; margin: 8px 0 0 0; font-size: 15px;">{_cs_desc}</p>
+            <p style="color: {_cs_color}; margin: 5px 0 0 0; font-size: 13px;">
+                Composite Score: {_cs_score:+.1f} / {_cs_max:.0f} ({_cs_pct:+.0f}%) &nbsp;|&nbsp;
+                Net GEX: {_cs_gex:.1f}L ({_cs_gex_lbl})
+            </p>
+        </div>""", unsafe_allow_html=True)
+
+        # Three metric cards
+        _cm1, _cm2, _cm3 = st.columns(3)
+        with _cm1:
+            _c = "#00ff88" if _cs_pcr > 1.2 else "#ff4444" if _cs_pcr < 0.7 else "#FFD700"
+            st.markdown(f"""
+            <div style="background:{_c}20;padding:12px;border-radius:10px;border:2px solid {_c};text-align:center;">
+            <h4 style="color:{_c};margin:0;">Avg PCR (OI)</h4>
+            <h2 style="color:{_c};margin:5px 0;">{_cs_pcr:.2f}</h2>
+            <p style="color:white;margin:0;font-size:12px;">{'Bullish' if _cs_pcr > 1.2 else 'Bearish' if _cs_pcr < 0.7 else 'Neutral'}</p>
+            </div>""", unsafe_allow_html=True)
+        with _cm2:
+            _c = "#00ff88" if _cs_chgoi > 1.2 else "#ff4444" if _cs_chgoi < 0.7 else "#FFD700"
+            st.markdown(f"""
+            <div style="background:{_c}20;padding:12px;border-radius:10px;border:2px solid {_c};text-align:center;">
+            <h4 style="color:{_c};margin:0;">Avg PCR (ΔOI)</h4>
+            <h2 style="color:{_c};margin:5px 0;">{_cs_chgoi:.2f}</h2>
+            <p style="color:white;margin:0;font-size:12px;">{'Bullish' if _cs_chgoi > 1.2 else 'Bearish' if _cs_chgoi < 0.7 else 'Neutral'}</p>
+            </div>""", unsafe_allow_html=True)
+        with _cm3:
+            _c = "#00ff88" if _cs_gex > 10 else "#ff4444" if _cs_gex < -10 else "#FFD700"
+            st.markdown(f"""
+            <div style="background:{_c}20;padding:12px;border-radius:10px;border:2px solid {_c};text-align:center;">
+            <h4 style="color:{_c};margin:0;">Total GEX (ATM±2)</h4>
+            <h2 style="color:{_c};margin:5px 0;">{_cs_gex:.1f}L</h2>
+            <p style="color:white;margin:0;font-size:12px;">{'Pin/Chop' if _cs_gex > 10 else 'Trend/Accel' if _cs_gex < -10 else 'Neutral'}</p>
+            </div>""", unsafe_allow_html=True)
+
+        # Time-series chart if history available
+        if len(_cs_hist) >= 2:
+            _cs_df = pd.DataFrame(_cs_hist)
+            _cs_marker_colors = [
+                '#00ff88' if r.get('verdict_numeric', 0) >= 2 else
+                '#90EE90' if r.get('verdict_numeric', 0) == 1 else
+                '#ff4444' if r.get('verdict_numeric', 0) <= -2 else
+                '#FFB6C1' if r.get('verdict_numeric', 0) == -1 else '#FFD700'
+                for _, r in _cs_df.iterrows()
+            ]
+            _fig_cs = go.Figure()
+            _fig_cs.add_trace(go.Scatter(
+                x=_cs_df['time'], y=_cs_df['score_pct'],
+                mode='lines+markers', name='Score %',
+                line=dict(color='#00aaff', width=3),
+                marker=dict(size=8, color=_cs_marker_colors),
+                fill='tozeroy', fillcolor='rgba(0,170,255,0.08)'
+            ))
+            _y_max = max(abs(_cs_df['score_pct'].max()), abs(_cs_df['score_pct'].min()), 30) * 1.2
+            _fig_cs.add_hline(y=0, line_dash="dash", line_color="white", line_width=1.5,
+                              annotation_text="Neutral (0%)", annotation_position="right")
+            _fig_cs.add_hline(y=15, line_dash="dot", line_color="#00ff88", line_width=1,
+                              annotation_text="Bullish Zone", annotation_position="right")
+            _fig_cs.add_hline(y=-15, line_dash="dot", line_color="#ff4444", line_width=1,
+                              annotation_text="Bearish Zone", annotation_position="right")
+            _fig_cs.add_hrect(y0=15, y1=_y_max, fillcolor="rgba(0,255,136,0.06)", line_width=0)
+            _fig_cs.add_hrect(y0=-_y_max, y1=-15, fillcolor="rgba(255,68,68,0.06)", line_width=0)
+            # Sparse verdict labels
+            _step = max(1, len(_cs_df) // 10)
+            for _ci, (_cii, _crow) in enumerate(_cs_df.iterrows()):
+                if _ci % _step == 0:
+                    _fig_cs.add_annotation(
+                        x=_crow['time'], y=_crow['score_pct'],
+                        text=_crow['verdict'], showarrow=False,
+                        yshift=14, font=dict(size=8, color='white'),
+                        bgcolor='rgba(0,0,0,0.5)', borderpad=2
+                    )
+            # Companion: PCR + GEX sub-charts inline
+            _cc1, _cc2 = st.columns(2)
+            with _cc1:
+                _fig_cs.update_layout(
+                    title=f"Composite Score Time-Series | Now: {_cs_pct:+.0f}% ({_cs_verdict})",
+                    template='plotly_dark', height=360,
+                    showlegend=False,
+                    xaxis=dict(tickformat='%H:%M', title='Time'),
+                    yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
+                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    margin=dict(l=50, r=60, t=55, b=40)
+                )
+                st.plotly_chart(_fig_cs, use_container_width=True)
+            with _cc2:
+                _fig_cs2 = go.Figure()
+                if 'avg_pcr' in _cs_df.columns:
+                    _fig_cs2.add_trace(go.Scatter(
+                        x=_cs_df['time'], y=_cs_df['avg_pcr'],
+                        mode='lines+markers', name='PCR OI',
+                        line=dict(color='#00aaff', width=2), marker=dict(size=4)
+                    ))
+                if 'avg_chgoi' in _cs_df.columns:
+                    _fig_cs2.add_trace(go.Scatter(
+                        x=_cs_df['time'], y=_cs_df['avg_chgoi'],
+                        mode='lines+markers', name='PCR ΔOI',
+                        line=dict(color='#ff44ff', width=2), marker=dict(size=4)
+                    ))
+                if 'total_gex' in _cs_df.columns:
+                    _fig_cs2.add_trace(go.Scatter(
+                        x=_cs_df['time'], y=_cs_df['total_gex'],
+                        mode='lines', name='GEX (L)',
+                        line=dict(color='#FFD700', width=2, dash='dot'),
+                        yaxis='y2'
+                    ))
+                _fig_cs2.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
+                _fig_cs2.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
+                _fig_cs2.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
+                _pcr_all = _cs_df['avg_pcr'].dropna().tolist() + _cs_df['avg_chgoi'].dropna().tolist() + [0.7, 1.2]
+                _fig_cs2.update_layout(
+                    title="PCR OI · PCR ΔOI · GEX",
+                    template='plotly_dark', height=360,
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right"),
+                    xaxis=dict(tickformat='%H:%M', title=''),
+                    yaxis=dict(title='PCR', range=[max(0, min(_pcr_all)*0.9), max(_pcr_all)*1.1]),
+                    yaxis2=dict(title='GEX (L)', overlaying='y', side='right',
+                                showgrid=False, zeroline=True, zerolinecolor='rgba(255,255,255,0.3)'),
+                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    margin=dict(l=40, r=55, t=55, b=40)
+                )
+                st.plotly_chart(_fig_cs2, use_container_width=True)
+
+        st.caption(f"📊 {len(_cs_hist)} data points · updates every ~30s · "
+                   f"Full analysis with per-strike breakdown further below ↓")
+    else:
+        st.info("🕐 Composite Score builds up after first refresh — data will appear here on the next cycle.")
+
+    # ===== UNIFIED OPTIONS FLOW SENTIMENT ENGINE =====
+    st.markdown("---")
+    st.markdown("## 🧭 Unified Options Flow Sentiment Engine")
+    try:
+        _pro_df    = option_data.get('df_summary') if option_data else None
+        _pro_spot  = option_data.get('underlying') if option_data else None
+
+        # Ensure optional columns exist
+        if _pro_df is not None:
+            for _c in ['impliedVolatility_CE', 'impliedVolatility_PE',
+                       'bidQty_CE', 'askQty_CE', 'bidQty_PE', 'askQty_PE',
+                       'Delta_CE', 'Delta_PE', 'Gamma_CE', 'Gamma_PE',
+                       'changeinOpenInterest_CE', 'changeinOpenInterest_PE',
+                       'totalTradedVolume_CE', 'totalTradedVolume_PE']:
+                if _c not in _pro_df.columns:
+                    _pro_df[_c] = 0.0
+
+        if _pro_df is not None and _pro_spot and 'Zone' in _pro_df.columns:
+            _pro_atm_idx = _pro_df[_pro_df['Zone'] == 'ATM'].index
+            if len(_pro_atm_idx) > 0:
+                _pro_atm_pos = _pro_df.index.get_loc(_pro_atm_idx[0])
+                _pro_start   = max(0, _pro_atm_pos - 2)
+                _pro_end     = min(len(_pro_df), _pro_atm_pos + 3)
+                _pro_slice   = _pro_df.iloc[_pro_start:_pro_end].copy()
+                _pro_atm_val = float(_pro_df[_pro_df['Zone'] == 'ATM']['Strike'].values[0])
+                _pro_strikes = sorted(_pro_slice['Strike'].unique())
+                _pro_step    = int(_pro_strikes[1] - _pro_strikes[0]) if len(_pro_strikes) >= 2 else 50
+
+                def _pro_lbl(s):
+                    d = int(round((s - _pro_atm_val) / _pro_step))
+                    if d == 0: return "ATM"
+                    return f"ATM+{d}" if d > 0 else f"ATM{d}"
+
+                _pro_now = datetime.now(pytz.timezone('Asia/Kolkata'))
+                _pro_lot = 25
+
+                # ── 1. Straddle per strike ──────────────────────────────────
+                _pro_straddles = {}
+                for _, _r in _pro_slice.iterrows():
+                    _lbl = _pro_lbl(_r['Strike'])
+                    _pro_straddles[_lbl] = round(
+                        float(_r.get('lastPrice_CE', 0) or 0) +
+                        float(_r.get('lastPrice_PE', 0) or 0), 2)
+                _pro_atm_straddle = _pro_straddles.get('ATM', 0)
+
+                # ── 2. IV per strike ───────────────────────────────────────
+                _pro_iv_ce, _pro_iv_pe = {}, {}
+                for _, _r in _pro_slice.iterrows():
+                    _lbl = _pro_lbl(_r['Strike'])
+                    _pro_iv_ce[_lbl] = float(_r.get('impliedVolatility_CE', 0) or 0)
+                    _pro_iv_pe[_lbl] = float(_r.get('impliedVolatility_PE', 0) or 0)
+                _pro_avg_iv_ce    = sum(_pro_iv_ce.values()) / max(len(_pro_iv_ce), 1)
+                _pro_avg_iv_pe    = sum(_pro_iv_pe.values()) / max(len(_pro_iv_pe), 1)
+                _pro_market_iv_sk = round(_pro_avg_iv_pe - _pro_avg_iv_ce, 2)
+
+                # ── 3. PCR (OI, Volume, ΔOI) ──────────────────────────────
+                _pro_ce_oi    = _pro_slice['openInterest_CE'].fillna(0).sum()
+                _pro_pe_oi    = _pro_slice['openInterest_PE'].fillna(0).sum()
+                _pro_pcr_oi   = round(_pro_pe_oi / (_pro_ce_oi + 1e-6), 3)
+                _pro_ce_vol   = _pro_slice['totalTradedVolume_CE'].fillna(0).sum()
+                _pro_pe_vol   = _pro_slice['totalTradedVolume_PE'].fillna(0).sum()
+                _pro_pcr_vol  = round(_pro_pe_vol / (_pro_ce_vol + 1e-6), 3)
+                _pro_ce_chg   = _pro_slice['changeinOpenInterest_CE'].fillna(0).sum()
+                _pro_pe_chg   = _pro_slice['changeinOpenInterest_PE'].fillna(0).sum()
+                _pro_pcr_chg  = round(abs(_pro_pe_chg) / (abs(_pro_ce_chg) + 1e-6), 3)
+
+                # ── 4. Bid/Ask Pressure ────────────────────────────────────
+                _pro_cp_list, _pro_pp_list = [], []
+                for _, _r in _pro_slice.iterrows():
+                    _bc = float(_r.get('bidQty_CE', 0) or 0)
+                    _ac = float(_r.get('askQty_CE', 0) or 0)
+                    _bp = float(_r.get('bidQty_PE', 0) or 0)
+                    _ap = float(_r.get('askQty_PE', 0) or 0)
+                    _pro_cp_list.append(_bc / (_bc + _ac + 1e-6))
+                    _pro_pp_list.append(_bp / (_bp + _ap + 1e-6))
+                _pro_call_pres = round(sum(_pro_cp_list) / max(len(_pro_cp_list), 1), 4)
+                _pro_put_pres  = round(sum(_pro_pp_list) / max(len(_pro_pp_list), 1), 4)
+
+                # ── 5. Delta Exposure ──────────────────────────────────────
+                _pro_call_dexp = sum(
+                    float(_r.get('Delta_CE', 0) or 0) *
+                    float(_r.get('openInterest_CE', 0) or 0) * _pro_lot
+                    for _, _r in _pro_slice.iterrows())
+                _pro_put_dexp  = sum(
+                    float(_r.get('Delta_PE', 0) or 0) *
+                    float(_r.get('openInterest_PE', 0) or 0) * _pro_lot
+                    for _, _r in _pro_slice.iterrows())
+                _pro_net_delta = round(_pro_call_dexp + _pro_put_dexp, 0)
+
+                # ── 6. Net Gamma Exposure (Lakhs) ──────────────────────────
+                _pro_net_gex = round(sum(
+                    (float(_r.get('Gamma_CE', 0) or 0) * float(_r.get('openInterest_CE', 0) or 0) -
+                     float(_r.get('Gamma_PE', 0) or 0) * float(_r.get('openInterest_PE', 0) or 0))
+                    * _pro_lot * _pro_spot
+                    for _, _r in _pro_slice.iterrows()) / 100000, 2)
+
+                # ── Store in history ───────────────────────────────────────
+                _pro_entry = {
+                    'time': _pro_now, 'spot': _pro_spot, 'atm_strike': _pro_atm_val,
+                    'straddle_atm': _pro_atm_straddle,
+                    **{f'straddle_{k}': v for k, v in _pro_straddles.items()},
+                    'avg_iv_ce': round(_pro_avg_iv_ce, 2),
+                    'avg_iv_pe': round(_pro_avg_iv_pe, 2),
+                    'iv_skew': _pro_market_iv_sk,
+                    'pcr_oi': _pro_pcr_oi, 'pcr_vol': _pro_pcr_vol, 'pcr_chgoi': _pro_pcr_chg,
+                    'call_pressure': _pro_call_pres, 'put_pressure': _pro_put_pres,
+                    'net_delta': _pro_net_delta, 'net_gex': _pro_net_gex,
+                }
+                _pro_should_add = (
+                    not st.session_state.pro_trader_history or
+                    (_pro_now - _to_ist(st.session_state.pro_trader_history[-1]['time'])).total_seconds() >= 28
+                )
+                if _pro_should_add:
+                    st.session_state.pro_trader_history.append(_pro_entry)
+                    if len(st.session_state.pro_trader_history) > 200:
+                        st.session_state.pro_trader_history = st.session_state.pro_trader_history[-200:]
+                    db.save_option_history('pro_trader_history', _pro_entry)
+
+                # ── 7a. Composite Direction Signal (PCR × ΔOI × GEX) ────────
+                _comp_position_labels = ['ITM-2', 'ITM-1', 'ATM', 'OTM+1', 'OTM+2']
+                _comp_weights = [1.0, 1.5, 2.0, 1.5, 1.0]
+                _comp_strike_scores, _comp_strike_details, _comp_per_strike_scores = [], [], {}
+                _comp_data_available = False
+                _verdict = _verdict_icon = _verdict_color = _verdict_desc = None
+                _comp_total_score = _comp_score_pct = 0.0
+                _comp_total_gex = _comp_avg_pcr = _comp_avg_chgoi = 0.0
+                _comp_gex_trending = _comp_gex_pinning = False
+                _comp_max_possible = 14.0
+                _verdict_numeric = 0
+                _slice_has_comp = ('PCR' in _pro_slice.columns and
+                                   'changeinOpenInterest_CE' in _pro_slice.columns and
+                                   'Gamma_CE' in _pro_slice.columns)
+                if _slice_has_comp:
+                    _sc = _pro_slice.copy()
+                    _sc['_PCR_ChgOI'] = _sc.apply(
+                        lambda r: abs(float(r['changeinOpenInterest_PE']) /
+                                      float(r['changeinOpenInterest_CE']))
+                        if float(r['changeinOpenInterest_CE']) != 0 else 0.0, axis=1)
+                    _sc['_Net_GEX'] = (
+                        -1 * _sc['Gamma_CE'].fillna(0) * _sc['openInterest_CE'].fillna(0) *
+                        _pro_lot * _pro_spot / 100000 +
+                        _sc['Gamma_PE'].fillna(0) * _sc['openInterest_PE'].fillna(0) *
+                        _pro_lot * _pro_spot / 100000)
+                    _comp_total_gex  = _sc['_Net_GEX'].sum()
+                    _comp_avg_pcr    = float(_sc['PCR'].mean()) if 'PCR' in _sc.columns else 1.0
+                    _comp_avg_chgoi  = float(_sc['_PCR_ChgOI'].mean())
+                    _comp_gex_trending = _comp_total_gex < -10
+                    _comp_gex_pinning  = _comp_total_gex > 10
+                    for _ci, (_, _cr) in enumerate(_sc.iterrows()):
+                        _pv = float(_cr.get('PCR', 1.0) or 1.0)
+                        _cv = float(_cr['_PCR_ChgOI'])
+                        _gv = float(_cr['_Net_GEX'])
+                        _ps = 1 if _pv > 1.2 else (-1 if _pv < 0.7 else 0)
+                        _cs = 1 if _cv > 1.2 else (-1 if _cv < 0.7 else 0)
+                        _ds = _ps + _cs
+                        _cw = _comp_weights[_ci] if _ci < len(_comp_weights) else 1.0
+                        _comp_strike_scores.append(_ds * _cw)
+                        _slbl2 = str(int(_cr['Strike']))
+                        _comp_per_strike_scores[_slbl2] = round(_ds * _cw, 2)
+                        _clbl = _comp_position_labels[_ci] if _ci < len(_comp_position_labels) else f"S{_ci}"
+                        _comp_strike_details.append({
+                            'Position': _clbl, 'Strike': int(_cr['Strike']),
+                            'PCR (OI)': round(_pv, 2),
+                            'PCR Signal': 'Bull' if _ps > 0 else ('Bear' if _ps < 0 else 'Neut'),
+                            'PCR (ΔOI)': round(_cv, 2),
+                            'ΔOI Signal': 'Bull' if _cs > 0 else ('Bear' if _cs < 0 else 'Neut'),
+                            'Net GEX': round(_gv, 2),
+                            'GEX Signal': 'Pin' if _gv > 10 else ('Accel' if _gv < -10 else 'Neut'),
+                            'Score': round(_ds * _cw, 1)
+                        })
+                    _comp_total_score = sum(_comp_strike_scores)
+                    _comp_score_pct   = (_comp_total_score / _comp_max_possible) * 100
+                    if abs(_comp_score_pct) < 15:
+                        if _comp_gex_pinning:
+                            _verdict, _verdict_icon, _verdict_color = "SIDEWAYS", "↔️", "#FFD700"
+                            _verdict_desc = "Mixed signals + Positive GEX = Range-bound / Choppy"
+                            _verdict_numeric = 0
+                        else:
+                            _verdict, _verdict_icon, _verdict_color = "NEUTRAL", "⚪", "#888888"
+                            _verdict_desc = "No clear directional bias from ATM±2 strikes"
+                            _verdict_numeric = 0
+                    elif _comp_score_pct > 0:
+                        if _comp_gex_trending:
+                            _verdict, _verdict_icon, _verdict_color = "STRONG UP", "🟢🔥", "#00ff88"
+                            _verdict_desc = "Bullish PCR + Fresh put writing + Negative GEX = Breakout UP"
+                            _verdict_numeric = 3
+                        elif _comp_gex_pinning:
+                            _verdict, _verdict_icon, _verdict_color = "UP (CAPPED)", "🟢📍", "#90EE90"
+                            _verdict_desc = "Bullish bias but positive GEX may cap upside momentum"
+                            _verdict_numeric = 1
+                        else:
+                            _verdict, _verdict_icon, _verdict_color = "UP", "🟢", "#00ff88"
+                            _verdict_desc = "Bullish PCR + Put writing activity across ATM±2 strikes"
+                            _verdict_numeric = 2
+                    else:
+                        if _comp_gex_trending:
+                            _verdict, _verdict_icon, _verdict_color = "STRONG DOWN", "🔴🔥", "#ff4444"
+                            _verdict_desc = "Bearish PCR + Fresh call writing + Negative GEX = Breakdown"
+                            _verdict_numeric = -3
+                        elif _comp_gex_pinning:
+                            _verdict, _verdict_icon, _verdict_color = "DOWN (SUPPORTED)", "🔴📍", "#FFB6C1"
+                            _verdict_desc = "Bearish PCR + Positive GEX may provide support"
+                            _verdict_numeric = -1
+                        else:
+                            _verdict, _verdict_icon, _verdict_color = "DOWN", "🔴", "#ff4444"
+                            _verdict_desc = "Bearish PCR + Call writing activity across ATM±2 strikes"
+                            _verdict_numeric = -2
+                    _comp_data_available = True
+                    st.session_state.composite_signal_last_valid = {
+                        'verdict': _verdict, 'verdict_icon': _verdict_icon,
+                        'verdict_color': _verdict_color, 'verdict_desc': _verdict_desc,
+                        'total_score': _comp_total_score, 'score_pct': _comp_score_pct,
+                        'total_net_gex': _comp_total_gex, 'avg_pcr': _comp_avg_pcr,
+                        'avg_chgoi': _comp_avg_chgoi, 'strike_details': _comp_strike_details,
+                        'per_strike_scores': _comp_per_strike_scores
+                    }
+                    _comp_should_add = (
+                        not st.session_state.composite_signal_history or
+                        (_pro_now - _to_ist(st.session_state.composite_signal_history[-1]['time'])).total_seconds() >= 30
+                    )
+                    if _comp_should_add:
+                        _comp_hist_entry = {
+                            'time': _pro_now, 'score': round(_comp_total_score, 2),
+                            'score_pct': round(_comp_score_pct, 1), 'verdict': _verdict,
+                            'verdict_numeric': _verdict_numeric,
+                            'avg_pcr': round(_comp_avg_pcr, 3),
+                            'avg_chgoi': round(_comp_avg_chgoi, 3),
+                            'total_gex': round(_comp_total_gex, 2),
+                        }
+                        for _ck, _cv2 in _comp_per_strike_scores.items():
+                            _comp_hist_entry[f'score_{_ck}'] = _cv2
+                        st.session_state.composite_signal_history.append(_comp_hist_entry)
+                        if len(st.session_state.composite_signal_history) > 200:
+                            st.session_state.composite_signal_history = st.session_state.composite_signal_history[-200:]
+                        db.save_option_history('composite_signal_history', _comp_hist_entry)
+                # Fall back to cached composite verdict
+                if not _comp_data_available:
+                    _lv = st.session_state.composite_signal_last_valid
+                    if _lv:
+                        _verdict, _verdict_icon = _lv['verdict'], _lv['verdict_icon']
+                        _verdict_color = _lv['verdict_color']
+                        _verdict_desc  = _lv['verdict_desc']
+                        _comp_total_score = _lv['total_score']
+                        _comp_score_pct   = _lv['score_pct']
+                        _comp_total_gex   = _lv['total_net_gex']
+                        _comp_avg_pcr     = _lv['avg_pcr']
+                        _comp_avg_chgoi   = _lv['avg_chgoi']
+                        _comp_strike_details = _lv.get('strike_details', [])
+                        _comp_gex_trending   = _comp_total_gex < -10
+                        _comp_gex_pinning    = _comp_total_gex > 10
+
+                # ── 7b. Weighted PCR per strike (ATM±2) ─────────────────────
+                _wts_map = {'ATM-2': 1.0, 'ATM-1': 1.5, 'ATM': 2.0, 'ATM+1': 1.5, 'ATM+2': 1.0}
+                _wpcr_oi = _wpcr_chgoi = _wpcr_vol = _wtotal = 0.0
+                for _, _wr in _pro_slice.iterrows():
+                    _wlbl = _pro_lbl(float(_wr['Strike']))
+                    _ww = _wts_map.get(_wlbl, 1.0)
+                    _wtotal += _ww
+                    _wce_oi = float(_wr.get('openInterest_CE', 0) or 0)
+                    _wpe_oi = float(_wr.get('openInterest_PE', 0) or 0)
+                    _wce_ch = abs(float(_wr.get('changeinOpenInterest_CE', 0) or 0))
+                    _wpe_ch = abs(float(_wr.get('changeinOpenInterest_PE', 0) or 0))
+                    _wce_vl = float(_wr.get('totalTradedVolume_CE', 0) or 0)
+                    _wpe_vl = float(_wr.get('totalTradedVolume_PE', 0) or 0)
+                    _wpcr_oi    += (_wpe_oi / (_wce_oi + 1e-6)) * _ww
+                    _wpcr_chgoi += (_wpe_ch / (_wce_ch + 1e-6)) * _ww
+                    _wpcr_vol   += (_wpe_vl / (_wce_vl + 1e-6)) * _ww
+                if _wtotal > 0:
+                    _wpcr_oi /= _wtotal
+                    _wpcr_chgoi /= _wtotal
+                    _wpcr_vol /= _wtotal
+
+                # ── 7c. Unified Sentiment Score (0–100) ─────────────────────
+                _pro_h_tmp = st.session_state.pro_trader_history
+                _pro_h_df_tmp = pd.DataFrame(_pro_h_tmp) if len(_pro_h_tmp) >= 2 else None
+                # PCR OI score (±20)
+                _ss_pcr = (20 if _wpcr_oi > 1.2 else
+                           -20 if _wpcr_oi < 0.7 else
+                           int((_wpcr_oi - 0.95) / 0.25 * 20))
+                # ΔOI trend score (±20)
+                _ss_chgoi = 0
+                if _pro_h_df_tmp is not None and 'pcr_chgoi' in _pro_h_df_tmp.columns and len(_pro_h_df_tmp) >= 3:
+                    _chgoi_tr = _pro_h_df_tmp['pcr_chgoi'].iloc[-1] - _pro_h_df_tmp['pcr_chgoi'].iloc[-3]
+                    _ss_chgoi = (20 if _chgoi_tr > 0.05 else
+                                 -20 if _chgoi_tr < -0.05 else int(_chgoi_tr * 200))
+                elif _wpcr_chgoi > 1.2:
+                    _ss_chgoi = 20
+                elif _wpcr_chgoi < 0.7:
+                    _ss_chgoi = -20
+                # GEX conviction score (±20) — amplifies PCR direction
+                _gex_mag = abs(_pro_net_gex)
+                _ss_gex_raw = (20 if _gex_mag > 50 else 14 if _gex_mag > 20 else
+                               10 if _gex_mag > 10 else 5 if _gex_mag > 5 else 0)
+                _ss_gex_dir = 1 if _ss_pcr >= 0 else -1
+                if _pro_net_gex < -10:
+                    _ss_gex = _ss_gex_raw * _ss_gex_dir
+                elif _pro_net_gex < 0:
+                    _ss_gex = int(_ss_gex_raw * 0.5) * _ss_gex_dir
+                elif _pro_net_gex > 10:
+                    _ss_gex = -5
+                else:
+                    _ss_gex = 0
+                # Straddle momentum score (±20)
+                _ss_straddle = 0
+                if _pro_h_df_tmp is not None and 'straddle_atm' in _pro_h_df_tmp.columns and len(_pro_h_df_tmp) >= 3:
+                    _st_roc2 = (_pro_h_df_tmp['straddle_atm'].iloc[-1] -
+                                _pro_h_df_tmp['straddle_atm'].iloc[-3]) / (
+                        abs(_pro_h_df_tmp['straddle_atm'].iloc[-3]) + 1e-6) * 100
+                    _ss_straddle = (20 if _st_roc2 > 2 else 10 if _st_roc2 > 0.5 else
+                                    -10 if _st_roc2 < -2 else 0)
+                # Pressure imbalance score (±20)
+                _pres_diff = _pro_call_pres - _pro_put_pres
+                _ss_pressure = (20 if _pres_diff > 0.10 else
+                                -20 if _pres_diff < -0.10 else int(_pres_diff * 100))
+                # Combine: raw range −20 to +20, map to 0–100
+                _sentiment_raw = (0.25 * _ss_pcr + 0.20 * _ss_chgoi + 0.20 * _ss_gex +
+                                  0.20 * _ss_straddle + 0.15 * _ss_pressure)
+                _sentiment_score = int(max(0, min(100, (_sentiment_raw + 20) * 2.5)))
+
+                if _sentiment_score >= 80:
+                    _sent_verdict = "STRONG BULLISH TREND"; _sent_icon = "🚀"; _sent_color = "#00ff88"
+                elif _sentiment_score >= 60:
+                    _sent_verdict = "BULLISH BIAS"; _sent_icon = "🟢"; _sent_color = "#00C853"
+                elif _sentiment_score >= 40:
+                    _sent_verdict = "SIDEWAYS MARKET"; _sent_icon = "↔️"; _sent_color = "#FFD700"
+                elif _sentiment_score >= 20:
+                    _sent_verdict = "BEARISH BIAS"; _sent_icon = "🔴"; _sent_color = "#FF5252"
+                else:
+                    _sent_verdict = "STRONG BEARISH TREND"; _sent_icon = "🔥"; _sent_color = "#FF1744"
+
+                _market_bias = ("BULLISH" if _sentiment_score > 65 else
+                                "BEARISH" if _sentiment_score < 35 else "SIDEWAYS")
+
+                # ── 7d. Final Institutional Signal ──────────────────────────
+                if _verdict == "STRONG UP" and _sentiment_score > 70:
+                    _final_signal = "🔥 INSTITUTIONAL BULLISH FLOW"
+                    _final_color  = "#00ff88"
+                    _final_desc   = "Options flow + PCR × GEX aligned — Smart money buying"
+                elif _verdict == "STRONG DOWN" and _sentiment_score < 30:
+                    _final_signal = "⚡ INSTITUTIONAL BEARISH FLOW"
+                    _final_color  = "#FF5252"
+                    _final_desc   = "Options flow + PCR × GEX aligned — Smart money selling"
+                elif _verdict in ("STRONG UP", "UP") and _sentiment_score < 40:
+                    _final_signal = "⚠️ FLOW DIVERGENCE — BULL TRAP POSSIBLE"
+                    _final_color  = "#FF9800"
+                    _final_desc   = "Composite bullish but sentiment weak — caution"
+                elif _verdict in ("STRONG DOWN", "DOWN") and _sentiment_score > 60:
+                    _final_signal = "⚠️ FLOW DIVERGENCE — BEAR TRAP POSSIBLE"
+                    _final_color  = "#FF9800"
+                    _final_desc   = "Composite bearish but sentiment strong — caution"
+                elif _sentiment_score >= 60:
+                    _final_signal = f"{_sent_icon} {_sent_verdict}"
+                    _final_color  = _sent_color
+                    _final_desc   = f"Sentiment Score: {_sentiment_score}/100"
+                elif _sentiment_score <= 40:
+                    _final_signal = f"{_sent_icon} {_sent_verdict}"
+                    _final_color  = _sent_color
+                    _final_desc   = f"Sentiment Score: {_sentiment_score}/100"
+                elif _verdict:
+                    _final_signal = f"{_verdict_icon} {_verdict}"
+                    _final_color  = _verdict_color
+                    _final_desc   = _verdict_desc or ""
+                else:
+                    _final_signal = "⚪ NEUTRAL"
+                    _final_color  = "#888888"
+                    _final_desc   = "Insufficient data for signal"
+
+                # ── Store sentiment history ──────────────────────────────────
+                _sent_should_add = (
+                    not st.session_state.sentiment_history or
+                    (_pro_now - _to_ist(st.session_state.sentiment_history[-1]['time'])).total_seconds() >= 28
+                )
+                if _sent_should_add:
+                    _sent_entry = {
+                        'time': _pro_now,
+                        'sentiment_score': _sentiment_score,
+                        'comp_score_pct': round(_comp_score_pct, 1),
+                        'total_gex': round(_comp_total_gex, 2),
+                        'verdict': _final_signal,
+                    }
+                    st.session_state.sentiment_history.append(_sent_entry)
+                    if len(st.session_state.sentiment_history) > 200:
+                        st.session_state.sentiment_history = st.session_state.sentiment_history[-200:]
+                    db.save_option_history('sentiment_history', _sent_entry)
+
+
+                # ── 7. Breakout Probability Score (0–100) ──────────────────
+                _pro_h    = st.session_state.pro_trader_history
+                _pro_h_df = pd.DataFrame(_pro_h) if len(_pro_h) >= 2 else None
+
+                def _rate_of_change(series, window=5):
+                    if series is None or len(series) < 2: return 0.0
+                    s = series.tail(window)
+                    return (s.iloc[-1] - s.iloc[0]) / (abs(s.iloc[0]) + 1e-6) * 100
+
+                # Straddle momentum score (0–20)
+                _s1 = 10
+                if _pro_h_df is not None and 'straddle_atm' in _pro_h_df.columns:
+                    _roc = _rate_of_change(_pro_h_df['straddle_atm'])
+                    _s1 = int(min(20, max(0, _roc * 2 + 10)))
+
+                # IV expansion score (0–20)
+                _s2 = 10
+                if _pro_h_df is not None and 'avg_iv_ce' in _pro_h_df.columns:
+                    _roc_ce = _rate_of_change(_pro_h_df['avg_iv_ce'])
+                    _roc_pe = _rate_of_change(_pro_h_df['avg_iv_pe'])
+                    _s2 = int(min(20, max(0, (_roc_ce + _roc_pe) + 10)))
+
+                # Gamma shift score — negative GEX → trending (0–20)
+                _s3 = (20 if _pro_net_gex < -50 else 16 if _pro_net_gex < -20 else
+                       12 if _pro_net_gex < -10 else 10 if _pro_net_gex < 0 else
+                       8  if _pro_net_gex < 10  else 6  if _pro_net_gex < 20  else 4)
+
+                # Volume spike score (0–20)
+                _s4 = 10
+                if _pro_h_df is not None and 'pcr_vol' in _pro_h_df.columns and len(_pro_h_df) >= 3:
+                    _pv = _pro_h_df['pcr_vol']
+                    _dev = abs(_pv.iloc[-1] - _pv.mean()) / (_pv.std() + 1e-6)
+                    _s4 = int(min(20, max(0, _dev * 5 + 8)))
+
+                # Pressure imbalance score (0–20)
+                _s5 = int(min(20, max(0, abs(_pro_call_pres - _pro_put_pres) * 80 + 5)))
+
+                _pro_score = min(100, _s1 + _s2 + _s3 + _s4 + _s5)
+                if st.session_state.pro_trader_history:
+                    st.session_state.pro_trader_history[-1]['breakout_score'] = _pro_score
+
+                _pro_mode_color = "#FF5252" if _pro_net_gex < 0 else "#00C853"
+                _pro_market_mode = "⚡ TRENDING" if _pro_net_gex < 0 else "📌 RANGE"
+                _bs_color = ("#FF5252" if _pro_score >= 70 else
+                             "#FFD740" if _pro_score >= 40 else "#00BCD4")
+                _bs_label = ("🔥 High Prob Breakout" if _pro_score >= 70 else
+                             "⚡ Possible Move"       if _pro_score >= 40 else "📌 Range")
+
+                # ── 8. Smart Signal Engine ─────────────────────────────────
+                _pro_alert = None
+                _pro_alert_color = "#888"
+                if _pro_h_df is not None and len(_pro_h_df) >= 3:
+                    _st_rising  = _pro_h_df['straddle_atm'].iloc[-1] > _pro_h_df['straddle_atm'].iloc[-3]
+                    _gex_dec    = _pro_h_df['net_gex'].iloc[-1] < _pro_h_df['net_gex'].iloc[-3]
+                    _nd_rising  = _pro_h_df['net_delta'].iloc[-1] > _pro_h_df['net_delta'].iloc[-3]
+                    if _st_rising and _pro_call_pres > _pro_put_pres and _gex_dec and _nd_rising:
+                        _pro_alert = "🚀 BULLISH BREAKOUT PROBABLE"
+                        _pro_alert_color = "#00C853"
+                    elif _st_rising and _pro_put_pres > _pro_call_pres and _gex_dec and not _nd_rising:
+                        _pro_alert = "🔥 BEARISH BREAKDOWN PROBABLE"
+                        _pro_alert_color = "#FF5252"
+                    if _pro_alert and enable_signals:
+                        _last_sig = st.session_state.pro_smart_signal_last
+                        if (_last_sig is None or
+                                (_pro_now - _last_sig[0]).total_seconds() > 300 or
+                                _last_sig[1] != _pro_alert):
+                            st.session_state.pro_smart_signal_last = (_pro_now, _pro_alert)
+
+                # ── Supabase write ─────────────────────────────────────────
+                if _pro_should_add:
+                    try:
+                        db.client.table('pro_trader_metrics').upsert({
+                            'timestamp':      _pro_now.isoformat(),
+                            'spot':           float(_pro_spot),
+                            'atm_strike':     int(_pro_atm_val),
+                            'straddle_atm':   float(_pro_atm_straddle),
+                            'iv_skew':        float(_pro_market_iv_sk),
+                            'pcr_oi':         float(_pro_pcr_oi),
+                            'pcr_vol':        float(_pro_pcr_vol),
+                            'pcr_chgoi':      float(_pro_pcr_chg),
+                            'call_pressure':  float(_pro_call_pres),
+                            'put_pressure':   float(_pro_put_pres),
+                            'net_delta':      float(_pro_net_delta),
+                            'net_gex':        float(_pro_net_gex),
+                            'breakout_score': int(_pro_score),
+                        }, on_conflict='timestamp').execute()
+                    except Exception:
+                        pass  # Supabase table may not exist yet; fail silently
+
+                # ══════════════════════════════════════════════════════════
+                # UNIFIED SENTIMENT TOP PANEL
+                # ══════════════════════════════════════════════════════════
+                _prev_atm_st = (_pro_h_df['straddle_atm'].iloc[-2]
+                                if _pro_h_df is not None and len(_pro_h_df) >= 2
+                                else _pro_atm_straddle)
+                _st_chg = _pro_atm_straddle - _prev_atm_st
+                _st_clr = "#FF5252" if _st_chg > 5 else ("#00C853" if _st_chg < -5 else "#FFD740")
+
+                # Row 1: Large FinalSignal verdict (left) + 4 metric cards (right)
+                _uf1, _uf2 = st.columns([3, 2])
+                with _uf1:
+                    _vc_txt = _verdict_color if _verdict_color else "#888888"
+                    st.markdown(f"""
+                    <div style="background:linear-gradient(135deg,{_final_color}10,{_final_color}25);
+                                padding:20px;border-radius:12px;border:3px solid {_final_color};
+                                text-align:center;min-height:130px;">
+                        <div style="color:#888;font-size:10px;letter-spacing:2px;">
+                            UNIFIED OPTIONS FLOW SENTIMENT</div>
+                        <div style="color:{_final_color};font-size:30px;font-weight:bold;margin:6px 0;
+                                    line-height:1.2;">{_final_signal}</div>
+                        <div style="color:#ccc;font-size:12px;">{_final_desc}</div>
+                        <div style="color:{_sent_color};font-size:11px;margin-top:6px;">
+                            Sentiment <b>{_sentiment_score}/100</b> — {_sent_verdict} &nbsp;|&nbsp;
+                            Direction <b>{_verdict_icon if _verdict_icon else "⚪"} {_verdict if _verdict else "NEUTRAL"}</b>
+                            ({_comp_score_pct:+.0f}%)
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+                with _uf2:
+                    _um1, _um2 = st.columns(2)
+                    with _um1:
+                        st.markdown(f"""
+                        <div style="background:#1e1e1e;padding:10px;border-radius:8px;border:1px solid #444;margin-bottom:5px;">
+                        <div style="color:#aaa;font-size:10px;">SPOT / ATM</div>
+                        <div style="font-size:18px;font-weight:bold;color:#FFD740;">{_pro_spot:,.0f}</div>
+                        <div style="font-size:10px;color:#888;">ATM: ₹{int(_pro_atm_val)}</div>
+                        </div>""", unsafe_allow_html=True)
+                        st.markdown(f"""
+                        <div style="background:#1e1e1e;padding:10px;border-radius:8px;border:2px solid {_pro_mode_color};">
+                        <div style="color:#aaa;font-size:10px;">MARKET MODE</div>
+                        <div style="font-size:14px;font-weight:bold;color:{_pro_mode_color};">{_pro_market_mode}</div>
+                        <div style="font-size:10px;color:#888;">GEX {_pro_net_gex:+.1f}L</div>
+                        </div>""", unsafe_allow_html=True)
+                    with _um2:
+                        st.markdown(f"""
+                        <div style="background:#1e1e1e;padding:10px;border-radius:8px;border:2px solid {_bs_color};margin-bottom:5px;">
+                        <div style="color:#aaa;font-size:10px;">BREAKOUT SCORE</div>
+                        <div style="font-size:18px;font-weight:bold;color:{_bs_color};">{_pro_score}/100</div>
+                        <div style="font-size:10px;color:{_bs_color};">{_bs_label}</div>
+                        </div>""", unsafe_allow_html=True)
+                        st.markdown(f"""
+                        <div style="background:#1e1e1e;padding:10px;border-radius:8px;border:1px solid {_st_clr};">
+                        <div style="color:#aaa;font-size:10px;">ATM STRADDLE</div>
+                        <div style="font-size:18px;font-weight:bold;color:{_st_clr};">₹{_pro_atm_straddle:.0f}</div>
+                        <div style="font-size:10px;color:#888;">Chg {_st_chg:+.1f}</div>
+                        </div>""", unsafe_allow_html=True)
+
+                # Row 2: 4 composite metric cards
+                _cm1, _cm2, _cm3, _cm4 = st.columns(4)
+                with _cm1:
+                    _pclr = "#00ff88" if _comp_avg_pcr > 1.2 else "#ff4444" if _comp_avg_pcr < 0.7 else "#FFD700"
+                    st.markdown(f"""
+                    <div style="background:{_pclr}12;padding:9px;border-radius:7px;border:1px solid {_pclr};
+                                text-align:center;margin-top:5px;">
+                    <div style="color:{_pclr};font-size:10px;font-weight:bold;">AVG PCR (OI)</div>
+                    <div style="color:{_pclr};font-size:18px;font-weight:bold;">{_comp_avg_pcr:.2f}</div>
+                    <div style="color:#ccc;font-size:10px;">{'Bull' if _comp_avg_pcr > 1.2 else 'Bear' if _comp_avg_pcr < 0.7 else 'Neut'}</div>
+                    </div>""", unsafe_allow_html=True)
+                with _cm2:
+                    _cclr = "#00ff88" if _comp_avg_chgoi > 1.2 else "#ff4444" if _comp_avg_chgoi < 0.7 else "#FFD700"
+                    st.markdown(f"""
+                    <div style="background:{_cclr}12;padding:9px;border-radius:7px;border:1px solid {_cclr};
+                                text-align:center;margin-top:5px;">
+                    <div style="color:{_cclr};font-size:10px;font-weight:bold;">AVG PCR (ΔOI)</div>
+                    <div style="color:{_cclr};font-size:18px;font-weight:bold;">{_comp_avg_chgoi:.2f}</div>
+                    <div style="color:#ccc;font-size:10px;">{'Bull' if _comp_avg_chgoi > 1.2 else 'Bear' if _comp_avg_chgoi < 0.7 else 'Neut'}</div>
+                    </div>""", unsafe_allow_html=True)
+                with _cm3:
+                    _gclr = "#00ff88" if _comp_total_gex > 10 else "#ff4444" if _comp_total_gex < -10 else "#FFD700"
+                    st.markdown(f"""
+                    <div style="background:{_gclr}12;padding:9px;border-radius:7px;border:1px solid {_gclr};
+                                text-align:center;margin-top:5px;">
+                    <div style="color:{_gclr};font-size:10px;font-weight:bold;">TOTAL GEX</div>
+                    <div style="color:{_gclr};font-size:18px;font-weight:bold;">{_comp_total_gex:.1f}L</div>
+                    <div style="color:#ccc;font-size:10px;">{'Pin' if _comp_total_gex > 10 else 'Accel' if _comp_total_gex < -10 else 'Neut'}</div>
+                    </div>""", unsafe_allow_html=True)
+                with _cm4:
+                    st.markdown(f"""
+                    <div style="background:{_sent_color}12;padding:9px;border-radius:7px;border:1px solid {_sent_color};
+                                text-align:center;margin-top:5px;">
+                    <div style="color:{_sent_color};font-size:10px;font-weight:bold;">SENTIMENT</div>
+                    <div style="color:{_sent_color};font-size:18px;font-weight:bold;">{_sentiment_score}/100</div>
+                    <div style="color:#ccc;font-size:10px;">{_market_bias}</div>
+                    </div>""", unsafe_allow_html=True)
+
+                # Smart signal + divergence alert banner
+                _alert_txt = _pro_alert or ""
+                _alert_clr = _pro_alert_color
+                if not _pro_alert and "DIVERGENCE" in _final_signal:
+                    _alert_txt = _final_signal
+                    _alert_clr = _final_color
+                if _alert_txt:
+                    st.markdown(f"""
+                    <div style="background:{_alert_clr}22;border:2px solid {_alert_clr};
+                         border-radius:8px;padding:10px;margin:8px 0;text-align:center;">
+                    <span style="font-size:15px;font-weight:bold;color:{_alert_clr};">{_alert_txt}</span>
+                    <span style="font-size:12px;color:#ccc;margin-left:12px;">
+                        Score: {_pro_score}/100 · Sentiment: {_sentiment_score}/100</span>
+                    </div>""", unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                if _pro_h_df is not None and len(_pro_h_df) >= 2:
+                    # ══════════════════════════════════════════════════════
+                    # MIDDLE CHARTS  (2 × 2)
+                    # ══════════════════════════════════════════════════════
+                    _mc1, _mc2 = st.columns(2)
+                    _pos_keys   = ['ATM-2', 'ATM-1', 'ATM', 'ATM+1', 'ATM+2']
+                    _pos_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
+
+                    with _mc1:
+                        # Straddle Engine Chart
+                        _fig_st = go.Figure()
+                        for _si, _sk in enumerate(_pos_keys):
+                            _col = f'straddle_{_sk}'
+                            if _col in _pro_h_df.columns:
+                                _cv = _pro_h_df[_col].iloc[-1]
+                                _fig_st.add_trace(go.Scatter(
+                                    x=_pro_h_df['time'], y=_pro_h_df[_col],
+                                    mode='lines', name=_sk,
+                                    line=dict(color=_pos_colors[_si],
+                                              width=2.5 if _sk == 'ATM' else 1.5)
+                                ))
+                                _fig_st.add_trace(go.Scatter(
+                                    x=[_pro_h_df['time'].iloc[-1]], y=[_cv],
+                                    mode='markers+text', text=[f'{_cv:.0f}'],
+                                    textposition='top right',
+                                    textfont=dict(size=8, color=_pos_colors[_si]),
+                                    marker=dict(size=6, color=_pos_colors[_si]),
+                                    showlegend=False, hoverinfo='skip'
+                                ))
+                        _fig_st.update_layout(
+                            title=f'Straddle Engine — ATM: ₹{_pro_atm_straddle:.0f}',
+                            height=280, template='plotly_dark',
+                            margin=dict(l=40, r=20, t=45, b=30),
+                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                            yaxis=dict(gridcolor='#333', title='₹ Straddle'),
+                            showlegend=True,
+                            legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
+                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                        )
+                        st.plotly_chart(_fig_st, use_container_width=True)
+
+                    with _mc2:
+                        # IV Skew Engine Chart
+                        _fig_iv2 = go.Figure()
+                        for _col_k, _col_n, _col_c, _tp in [
+                            ('avg_iv_ce', 'Call IV avg', '#00C853', 'top right'),
+                            ('avg_iv_pe', 'Put IV avg',  '#FF5252', 'bottom right'),
+                            ('iv_skew',   'IV Skew (PE−CE)', '#FFD740', 'top left'),
+                        ]:
+                            if _col_k in _pro_h_df.columns:
+                                _cv = _pro_h_df[_col_k].iloc[-1]
+                                _fig_iv2.add_trace(go.Scatter(
+                                    x=_pro_h_df['time'], y=_pro_h_df[_col_k],
+                                    mode='lines', name=_col_n,
+                                    line=dict(color=_col_c, width=2,
+                                              dash='dot' if _col_k == 'iv_skew' else 'solid')
+                                ))
+                                _fig_iv2.add_trace(go.Scatter(
+                                    x=[_pro_h_df['time'].iloc[-1]], y=[_cv],
+                                    mode='markers+text',
+                                    text=[f'{_cv:+.1f}' if _col_k == 'iv_skew' else f'{_cv:.1f}%'],
+                                    textposition=_tp, textfont=dict(size=8, color=_col_c),
+                                    marker=dict(size=7, color=_col_c),
+                                    showlegend=False, hoverinfo='skip'
+                                ))
+                        _fig_iv2.add_hline(y=0, line_color='#555', line_width=1)
+                        _fig_iv2.update_layout(
+                            title=f'IV Skew Engine — PE−CE: {_pro_market_iv_sk:+.1f}',
+                            height=280, template='plotly_dark',
+                            margin=dict(l=40, r=20, t=45, b=30),
+                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                            yaxis=dict(gridcolor='#333', title='IV %'),
+                            showlegend=True,
+                            legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
+                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                        )
+                        st.plotly_chart(_fig_iv2, use_container_width=True)
+
+                    _mc3, _mc4 = st.columns(2)
+
+                    with _mc3:
+                        # PCR Trend Chart
+                        _fig_pcr2 = go.Figure()
+                        for _pk, _pn, _pc, _pd in [
+                            ('pcr_oi',    'PCR OI',     '#00ccff', 'solid'),
+                            ('pcr_vol',   'PCR Volume', '#ffaa00', 'dash'),
+                            ('pcr_chgoi', 'PCR ΔOI',   '#ff44ff', 'dot'),
+                        ]:
+                            if _pk in _pro_h_df.columns:
+                                _cv = _pro_h_df[_pk].iloc[-1]
+                                _fig_pcr2.add_trace(go.Scatter(
+                                    x=_pro_h_df['time'], y=_pro_h_df[_pk],
+                                    mode='lines', name=_pn,
+                                    line=dict(color=_pc, width=2, dash=_pd)
+                                ))
+                                _fig_pcr2.add_trace(go.Scatter(
+                                    x=[_pro_h_df['time'].iloc[-1]], y=[_cv],
+                                    mode='markers+text', text=[f'{_cv:.2f}'],
+                                    textposition='top right',
+                                    textfont=dict(size=8, color=_pc),
+                                    marker=dict(size=7, color=_pc),
+                                    showlegend=False, hoverinfo='skip'
+                                ))
+                        _fig_pcr2.add_hline(y=1.2, line_dash='dot',
+                                            line_color='rgba(0,255,136,0.5)',
+                                            annotation_text='Bull 1.2',
+                                            annotation_position='right',
+                                            annotation_font_size=8)
+                        _fig_pcr2.add_hline(y=0.7, line_dash='dot',
+                                            line_color='rgba(255,68,68,0.5)',
+                                            annotation_text='Bear 0.7',
+                                            annotation_position='right',
+                                            annotation_font_size=8)
+                        _fig_pcr2.add_hline(y=1.0, line_color='rgba(255,255,255,0.2)', line_width=1)
+                        _fig_pcr2.update_layout(
+                            title=f'PCR Engine — OI:{_pro_pcr_oi:.2f} Vol:{_pro_pcr_vol:.2f} ΔOI:{_pro_pcr_chg:.2f}',
+                            height=280, template='plotly_dark',
+                            margin=dict(l=40, r=40, t=45, b=30),
+                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                            yaxis=dict(gridcolor='#333', title='PCR'),
+                            showlegend=True,
+                            legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
+                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                        )
+                        st.plotly_chart(_fig_pcr2, use_container_width=True)
+
+                    with _mc4:
+                        # Gamma Pressure Chart
+                        _fig_gam = go.Figure()
+                        if 'net_gex' in _pro_h_df.columns:
+                            _gv = _pro_h_df['net_gex']
+                            _g_cur = _gv.iloc[-1]
+                            _fig_gam.add_trace(go.Scatter(
+                                x=_pro_h_df['time'], y=_gv,
+                                mode='lines+markers', name='Net GEX (L)',
+                                line=dict(color='#FFD740', width=2),
+                                marker=dict(size=4,
+                                            color=['#00C853' if v >= 0 else '#FF5252' for v in _gv]),
+                                fill='tozeroy', fillcolor='rgba(255,215,0,0.08)'
+                            ))
+                            _fig_gam.add_hline(y=0, line_color='white', line_width=1.5)
+                            _fig_gam.add_trace(go.Scatter(
+                                x=[_pro_h_df['time'].iloc[-1]], y=[_g_cur],
+                                mode='markers+text', text=[f'{_g_cur:+.1f}L'],
+                                textposition='top right',
+                                textfont=dict(size=9, color='#FFD740'),
+                                marker=dict(size=9, color='#FFD740', symbol='circle'),
+                                showlegend=False, hoverinfo='skip'
+                            ))
+                        _fig_gam.update_layout(
+                            title=f'Gamma Pressure — {_pro_market_mode} (GEX: {_pro_net_gex:+.1f}L)',
+                            height=280, template='plotly_dark',
+                            margin=dict(l=40, r=20, t=45, b=30),
+                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                            yaxis=dict(gridcolor='#333', title='GEX (L)',
+                                       zeroline=True, zerolinecolor='white'),
+                            showlegend=False,
+                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                        )
+                        st.plotly_chart(_fig_gam, use_container_width=True)
+
+                    # ══════════════════════════════════════════════════════
+                    # BOTTOM CHARTS  (3 columns)
+                    # ══════════════════════════════════════════════════════
+                    _bc1, _bc2, _bc3 = st.columns(3)
+
+                    with _bc1:
+                        # Bid/Ask Pressure Chart
+                        _fig_pres2 = go.Figure()
+                        for _pk2, _pn2, _pc2, _tp2 in [
+                            ('call_pressure', 'Call Pressure', '#00C853', 'top right'),
+                            ('put_pressure',  'Put Pressure',  '#FF5252', 'bottom right'),
+                        ]:
+                            if _pk2 in _pro_h_df.columns:
+                                _cv2 = _pro_h_df[_pk2].iloc[-1]
+                                _fig_pres2.add_trace(go.Scatter(
+                                    x=_pro_h_df['time'], y=_pro_h_df[_pk2],
+                                    mode='lines', name=_pn2,
+                                    line=dict(color=_pc2, width=2)
+                                ))
+                                _fig_pres2.add_trace(go.Scatter(
+                                    x=[_pro_h_df['time'].iloc[-1]], y=[_cv2],
+                                    mode='markers+text', text=[f'{_cv2:.3f}'],
+                                    textposition=_tp2,
+                                    textfont=dict(size=8, color=_pc2),
+                                    marker=dict(size=7, color=_pc2),
+                                    showlegend=False, hoverinfo='skip'
+                                ))
+                        _fig_pres2.add_hline(y=0.5, line_color='#555', line_width=1)
+                        _fig_pres2.update_layout(
+                            title=f'Bid/Ask Pressure — C:{_pro_call_pres:.3f} P:{_pro_put_pres:.3f}',
+                            height=250, template='plotly_dark',
+                            margin=dict(l=30, r=20, t=45, b=30),
+                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                            yaxis=dict(gridcolor='#333', range=[0, 1], title='Pressure'),
+                            showlegend=True,
+                            legend=dict(orientation='h', y=-0.4, font=dict(size=9)),
+                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                        )
+                        st.plotly_chart(_fig_pres2, use_container_width=True)
+                        _p_sig = ("🚀 Call Dominating" if _pro_call_pres > _pro_put_pres + 0.1
+                                  else "🔥 Put Dominating" if _pro_put_pres > _pro_call_pres + 0.1
+                                  else "⚖️ Balanced")
+                        st.caption(_p_sig)
+
+                    with _bc2:
+                        # Net Delta Shift Chart
+                        _fig_nd = go.Figure()
+                        if 'net_delta' in _pro_h_df.columns:
+                            _nd_vals = _pro_h_df['net_delta']
+                            _nd_cur  = _nd_vals.iloc[-1]
+                            _fig_nd.add_trace(go.Scatter(
+                                x=_pro_h_df['time'], y=_nd_vals,
+                                mode='lines+markers', name='Net Delta',
+                                line=dict(color='#00BCD4', width=2),
+                                marker=dict(
+                                    size=4,
+                                    color=['#00C853' if v >= 0 else '#FF5252' for v in _nd_vals]),
+                                fill='tozeroy', fillcolor='rgba(0,188,212,0.08)'
+                            ))
+                            _fig_nd.add_hline(y=0, line_color='white', line_width=1)
+                            _fig_nd.add_trace(go.Scatter(
+                                x=[_pro_h_df['time'].iloc[-1]], y=[_nd_cur],
+                                mode='markers+text', text=[f'{_nd_cur:+.0f}'],
+                                textposition='top right',
+                                textfont=dict(size=9, color='#00BCD4'),
+                                marker=dict(size=9, color='#00BCD4', symbol='circle'),
+                                showlegend=False, hoverinfo='skip'
+                            ))
+                        _fig_nd.update_layout(
+                            title=f'Net Delta Shift — {_pro_net_delta:+,.0f}',
+                            height=250, template='plotly_dark',
+                            margin=dict(l=40, r=20, t=45, b=30),
+                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                            yaxis=dict(gridcolor='#333', title='Net Δ', zeroline=True,
+                                       zerolinecolor='white'),
+                            showlegend=False,
+                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                        )
+                        st.plotly_chart(_fig_nd, use_container_width=True)
+                        _nd_sig = ("📈 Bullish Positioning" if _pro_net_delta > 0
+                                   else "📉 Bearish Positioning")
+                        st.caption(_nd_sig)
+
+                    with _bc3:
+                        # Breakout Probability Bar Chart
+                        _fig_bs = go.Figure()
+                        if 'breakout_score' in _pro_h_df.columns:
+                            _bs_s = _pro_h_df['breakout_score'].dropna()
+                            _bs_t = _pro_h_df['time'].loc[_bs_s.index]
+                            _fig_bs.add_trace(go.Bar(
+                                x=_bs_t, y=_bs_s,
+                                marker_color=['#FF5252' if v >= 70
+                                              else '#FFD740' if v >= 40
+                                              else '#00BCD4' for v in _bs_s],
+                                name='Breakout Score'
+                            ))
+                            _fig_bs.add_hline(y=70, line_dash='dot',
+                                              line_color='rgba(255,82,82,0.7)',
+                                              annotation_text='Breakout 70',
+                                              annotation_position='right',
+                                              annotation_font_size=8)
+                            _fig_bs.add_hline(y=40, line_dash='dot',
+                                              line_color='rgba(255,215,0,0.7)',
+                                              annotation_text='Watch 40',
+                                              annotation_position='right',
+                                              annotation_font_size=8)
+                        _fig_bs.update_layout(
+                            title=f'Breakout Probability — {_pro_score}/100',
+                            height=250, template='plotly_dark',
+                            margin=dict(l=30, r=50, t=45, b=30),
+                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                            yaxis=dict(gridcolor='#333', range=[0, 105], title='Score'),
+                            showlegend=False,
+                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                        )
+                        st.plotly_chart(_fig_bs, use_container_width=True)
+                        st.caption(f"Straddle {_s1}/20 · IV {_s2}/20 · Gamma {_s3}/20 · "
+                                   f"Volume {_s4}/20 · Pressure {_s5}/20")
+
+                # ── Sentiment Over Time Chart ───────────────────────────────
+                if st.session_state.sentiment_history:
+                    _sent_h_df = pd.DataFrame(st.session_state.sentiment_history)
+                    _fig_sent = go.Figure()
+                    _sent_mkr = []
+                    for _, _shr in _sent_h_df.iterrows():
+                        _sv = _shr.get('sentiment_score', 50)
+                        _sent_mkr.append(
+                            '#00ff88' if _sv >= 70 else '#FFD700' if _sv >= 40 else '#FF5252')
+                    _fig_sent.add_trace(go.Scatter(
+                        x=_sent_h_df['time'], y=_sent_h_df['sentiment_score'],
+                        mode='lines+markers', name='Sentiment Score',
+                        line=dict(color='#00aaff', width=2.5),
+                        marker=dict(size=6, color=_sent_mkr),
+                        fill='tozeroy', fillcolor='rgba(0,170,255,0.07)'))
+                    if 'comp_score_pct' in _sent_h_df.columns:
+                        _fig_sent.add_trace(go.Scatter(
+                            x=_sent_h_df['time'],
+                            y=_sent_h_df['comp_score_pct'].apply(lambda x: (x + 100) / 2),
+                            mode='lines', name='Direction Score (scaled 0-100)',
+                            line=dict(color='#ff44ff', width=1.5, dash='dash')))
+                    if 'total_gex' in _sent_h_df.columns:
+                        _fig_sent.add_trace(go.Scatter(
+                            x=_sent_h_df['time'],
+                            y=_sent_h_df['total_gex'].apply(
+                                lambda x: max(0, min(100, (x + 100) / 2))),
+                            mode='lines', name='GEX (scaled)',
+                            line=dict(color='#FFD740', width=1.5, dash='dot')))
+                    _fig_sent.add_hline(y=70, line_dash='dot',
+                        line_color='rgba(0,255,136,0.5)', line_width=1,
+                        annotation_text='Bullish 70', annotation_position='right',
+                        annotation_font_size=8)
+                    _fig_sent.add_hline(y=30, line_dash='dot',
+                        line_color='rgba(255,68,68,0.5)', line_width=1,
+                        annotation_text='Bearish 30', annotation_position='right',
+                        annotation_font_size=8)
+                    _fig_sent.add_hrect(y0=70, y1=105,
+                        fillcolor='rgba(0,255,136,0.05)', line_width=0)
+                    _fig_sent.add_hrect(y0=0, y1=30,
+                        fillcolor='rgba(255,68,68,0.05)', line_width=0)
+                    _fig_sent.update_layout(
+                        title=f'Options Flow Sentiment — Current: {_sentiment_score}/100 ({_sent_verdict})',
+                        height=320, template='plotly_dark',
+                        xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                        yaxis=dict(title='Score (0–100)', range=[0, 105], gridcolor='#333'),
+                        legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
+                        margin=dict(l=40, r=65, t=45, b=30),
+                        paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'))
+                    st.plotly_chart(_fig_sent, use_container_width=True)
+
+                # ── Per-Strike Breakdown ─────────────────────────────────────
+                if _comp_strike_details:
+                    with st.expander("📋 Per-Strike Direction Breakdown"):
+                        st.dataframe(pd.DataFrame(_comp_strike_details),
+                                     use_container_width=True, hide_index=True)
+
+                # Controls
+                _pro_cl, _pro_cm, _pro_cr = st.columns([3, 1, 1])
+                with _pro_cl:
+                    _comp_status = "🟢 Live" if _comp_data_available else "🟡 Cached"
+                    st.caption(f"📊 Pro: {len(st.session_state.pro_trader_history)} pts · "
+                               f"Sentiment: {len(st.session_state.sentiment_history)} pts · "
+                               f"Composite: {len(st.session_state.composite_signal_history)} pts · "
+                               f"{_comp_status} · Refreshes every 30s")
+                with _pro_cm:
+                    if st.button("🗑️ Clear Pro"):
+                        st.session_state.pro_trader_history = []
+                        st.session_state.pro_smart_signal_last = None
+                        st.session_state.sentiment_history = []
+                        st.rerun()
+                with _pro_cr:
+                    if st.button("🗑️ Clear Composite"):
+                        st.session_state.composite_signal_history = []
+                        st.session_state.composite_signal_last_valid = None
+                        st.rerun()
+            else:
+                st.info("ATM strike not identified — Pro Dashboard unavailable.")
+        else:
+            st.info("Option chain data required for Pro Trader Dashboard.")
+    except Exception as _pro_e:
+        st.warning(f"Pro Dashboard error: {str(_pro_e)}")
+
+    # ===== INSTITUTIONAL TRADE MAP ENGINE =====
+    st.markdown("---")
+    st.markdown("## 🗺️ Institutional Trade Map")
+    try:
+        _itm_df   = option_data.get('df_summary') if option_data else None
+        _itm_spot = option_data.get('underlying') if option_data else None
+        _itm_lot  = 25
+
+        # Latest sentiment score from session state
+        _itm_sent_score = 50
+        _itm_market_bias = "SIDEWAYS"
+        if st.session_state.sentiment_history:
+            _itm_sent_score = st.session_state.sentiment_history[-1]['sentiment_score']
+            _itm_market_bias = ("BULLISH" if _itm_sent_score > 65 else
+                                "BEARISH" if _itm_sent_score < 35 else "SIDEWAYS")
+        _itm_final_signal = (st.session_state.sentiment_history[-1].get('verdict', '⚪ NEUTRAL')
+                             if st.session_state.sentiment_history else '⚪ NEUTRAL')
+
+        if _itm_df is not None and _itm_spot and 'Zone' in _itm_df.columns:
+            _itm_atm_idx = _itm_df[_itm_df['Zone'] == 'ATM'].index
+            if len(_itm_atm_idx) > 0:
+                _itm_atm_pos = _itm_df.index.get_loc(_itm_atm_idx[0])
+                # ATM±5 for OI walls
+                _itm_s5 = max(0, _itm_atm_pos - 5)
+                _itm_e5 = min(len(_itm_df), _itm_atm_pos + 6)
+                _itm_slice5 = _itm_df.iloc[_itm_s5:_itm_e5].copy()
+                _itm_atm_val = float(_itm_df[_itm_df['Zone'] == 'ATM']['Strike'].values[0])
+                _itm_stk_list = sorted(_itm_slice5['Strike'].unique())
+                _itm_step = int(_itm_stk_list[1] - _itm_stk_list[0]) if len(_itm_stk_list) >= 2 else 50
+                for _c in ['openInterest_CE', 'openInterest_PE', 'Gamma_CE', 'Gamma_PE',
+                           'changeinOpenInterest_CE', 'changeinOpenInterest_PE']:
+                    if _c not in _itm_slice5.columns:
+                        _itm_slice5[_c] = 0.0
+
+                # ── Put OI Wall & Call OI Wall ──────────────────────────────
+                _pe_oi_s = _itm_slice5.set_index('Strike')['openInterest_PE'].fillna(0)
+                _ce_oi_s = _itm_slice5.set_index('Strike')['openInterest_CE'].fillna(0)
+                _put_oi_wall = float(_pe_oi_s.idxmax()) if len(_pe_oi_s) > 0 else _itm_atm_val - _itm_step * 2
+                _call_oi_wall = float(_ce_oi_s.idxmax()) if len(_ce_oi_s) > 0 else _itm_atm_val + _itm_step * 2
+
+                # ── Gamma Support / Resistance / Flip ──────────────────────
+                _itm_slice5['_gex'] = (
+                    _itm_slice5['Gamma_PE'].fillna(0) * _itm_slice5['openInterest_PE'].fillna(0) *
+                    _itm_lot * _itm_spot / 100000 -
+                    _itm_slice5['Gamma_CE'].fillna(0) * _itm_slice5['openInterest_CE'].fillna(0) *
+                    _itm_lot * _itm_spot / 100000)
+                _below_atm = _itm_slice5[_itm_slice5['Strike'] < _itm_atm_val]
+                _above_atm = _itm_slice5[_itm_slice5['Strike'] > _itm_atm_val]
+                _gamma_support = (float(_below_atm.loc[_below_atm['_gex'].idxmax(), 'Strike'])
+                                  if len(_below_atm) > 0 else _itm_atm_val - _itm_step)
+                _gamma_resist  = (float(_above_atm.loc[_above_atm['_gex'].idxmin(), 'Strike'])
+                                  if len(_above_atm) > 0 else _itm_atm_val + _itm_step)
+                # Gamma flip: first sign change in GEX
+                _gamma_flip = _itm_atm_val
+                _gex_arr = _itm_slice5['_gex'].values
+                for _gi in range(len(_gex_arr) - 1):
+                    if (_gex_arr[_gi] * _gex_arr[_gi + 1]) < 0:
+                        _gamma_flip = (_itm_slice5['Strike'].iloc[_gi] +
+                                       _itm_slice5['Strike'].iloc[_gi + 1]) / 2
+                        break
+
+                # ── VOB Support & Resistance ────────────────────────────────
+                _vob_support = _itm_atm_val - _itm_step * 3
+                _vob_resist  = _itm_atm_val + _itm_step * 3
+                if vob_data and 'sr_levels' in vob_data and vob_data['sr_levels']:
+                    _vs = [l.get('mid', l.get('lower', 0)) for l in vob_data['sr_levels']
+                           if ('Support' in l.get('Type', '') or '🟢' in l.get('Type', ''))
+                           and l.get('mid', l.get('lower', 0)) > 0
+                           and l.get('mid', l.get('lower', 0)) < _itm_spot]
+                    _vr = [l.get('mid', l.get('upper', 0)) for l in vob_data['sr_levels']
+                           if ('Resistance' in l.get('Type', '') or '🔴' in l.get('Type', ''))
+                           and l.get('mid', l.get('upper', 0)) > _itm_spot]
+                    if _vs: _vob_support = max(_vs)
+                    if _vr: _vob_resist  = min(_vr)
+
+                # ── Triple POC ──────────────────────────────────────────────
+                _poc_val = _itm_spot
+                if poc_data_for_chart:
+                    _pvs = []
+                    for _pk in ['poc1', 'poc2', 'poc3']:
+                        _pd2 = poc_data_for_chart.get(_pk, {})
+                        _pv2 = _pd2.get('poc', 0) if isinstance(_pd2, dict) else 0
+                        if isinstance(_pv2, (int, float)) and _pv2 > 0:
+                            _pvs.append(float(_pv2))
+                    if _pvs: _poc_val = sum(_pvs) / len(_pvs)
+
+                # ── HTF Pivot Support & Resistance ──────────────────────────
+                _piv_support = _itm_atm_val - _itm_step * 4
+                _piv_resist  = _itm_atm_val + _itm_step * 4
+                if pivots:
+                    _pl = [p['value'] for p in pivots
+                           if p.get('type') == 'low' and p['value'] < _itm_spot]
+                    _ph = [p['value'] for p in pivots
+                           if p.get('type') == 'high' and p['value'] > _itm_spot]
+                    if _pl: _piv_support = max(_pl)
+                    if _ph: _piv_resist  = min(_ph)
+
+                # ── STEP 2: True Support ────────────────────────────────────
+                _true_support = (0.30 * _put_oi_wall + 0.25 * _gamma_support +
+                                 0.20 * _vob_support + 0.15 * _poc_val + 0.10 * _piv_support)
+                _true_support = round(_true_support / _itm_step) * _itm_step
+
+                # ── STEP 3: True Resistance ─────────────────────────────────
+                _true_resist = (0.30 * _call_oi_wall + 0.25 * _gamma_resist +
+                                0.20 * _vob_resist + 0.15 * _poc_val + 0.10 * _piv_resist)
+                _true_resist = round(_true_resist / _itm_step) * _itm_step
+
+                # ── STEP 4: Entry Zones ─────────────────────────────────────
+                _entry_support = round(
+                    (_gamma_support + _put_oi_wall + _vob_support) / 3 / _itm_step) * _itm_step
+                _entry_resist  = round(
+                    (_gamma_resist + _call_oi_wall + _vob_resist) / 3 / _itm_step) * _itm_step
+
+                # ── STEP 5: Exit Targets ────────────────────────────────────
+                _above_spot = [l for l in [_call_oi_wall, _gamma_resist, _piv_resist, _poc_val]
+                               if l > _itm_spot]
+                _below_spot = [l for l in [_put_oi_wall, _gamma_support, _piv_support, _poc_val]
+                               if l < _itm_spot]
+                _exit_resist  = (round(min(_above_spot) / _itm_step) * _itm_step
+                                 if _above_spot else _true_resist)
+                _exit_support = (round(max(_below_spot) / _itm_step) * _itm_step
+                                 if _below_spot else _true_support)
+
+                # ── STEP 6: Breakout Level ──────────────────────────────────
+                _breakout_lvl = round(
+                    (_itm_atm_val + _itm_step + _gamma_flip + _call_oi_wall) / 3 / _itm_step) * _itm_step
+
+                # ── STEP 7: Breakdown Level ─────────────────────────────────
+                _breakdown_lvl = round(
+                    (_itm_atm_val - _itm_step + _gamma_flip + _put_oi_wall) / 3 / _itm_step) * _itm_step
+
+                # ── STEP 8: Stop Loss Engine ────────────────────────────────
+                _sl_call_cands = [l for l in [_gamma_support, _put_oi_wall, _piv_support]
+                                  if l < _entry_support]
+                _sl_call = (round(max(_sl_call_cands) / _itm_step) * _itm_step
+                            if _sl_call_cands else _entry_support - _itm_step * 2)
+                _sl_put_cands = [l for l in [_gamma_resist, _call_oi_wall, _piv_resist]
+                                 if l > _entry_resist]
+                _sl_put = (round(min(_sl_put_cands) / _itm_step) * _itm_step
+                           if _sl_put_cands else _entry_resist + _itm_step * 2)
+
+                # ── STEP 9: Active Trade Setup ──────────────────────────────
+                if _itm_market_bias == "BULLISH":
+                    _itm_entry   = _entry_support
+                    _itm_target  = _exit_resist
+                    _itm_sl      = _sl_call
+                    _itm_dir_clr = "#00ff88"
+                    _itm_dir_lbl = "🚀 BULLISH"
+                elif _itm_market_bias == "BEARISH":
+                    _itm_entry   = _entry_resist
+                    _itm_target  = _exit_support
+                    _itm_sl      = _sl_put
+                    _itm_dir_clr = "#FF5252"
+                    _itm_dir_lbl = "🔥 BEARISH"
+                else:
+                    _itm_entry   = _itm_atm_val
+                    _itm_target  = _itm_atm_val
+                    _itm_sl      = _itm_atm_val
+                    _itm_dir_clr = "#FFD700"
+                    _itm_dir_lbl = "↔️ SIDEWAYS"
+
+                # ── STEP 10: Confidence Score ───────────────────────────────
+                _conf_pts = 0
+                _itm_net_gex = 0.0
+                _itm_net_delta = 0.0
+                _itm_call_pres = _itm_put_pres = 0.5
+                _itm_wpcr_oi = 1.0
+                # Pull from session state if available
+                if st.session_state.pro_trader_history:
+                    _last_pro = st.session_state.pro_trader_history[-1]
+                    _itm_net_gex   = _last_pro.get('net_gex', 0)
+                    _itm_net_delta = _last_pro.get('net_delta', 0)
+                    _itm_call_pres = _last_pro.get('call_pressure', 0.5)
+                    _itm_put_pres  = _last_pro.get('put_pressure', 0.5)
+                    _itm_wpcr_oi   = _last_pro.get('pcr_oi', 1.0)
+                # PCR aligned
+                if ((_itm_market_bias == "BULLISH" and _itm_wpcr_oi > 1.1) or
+                        (_itm_market_bias == "BEARISH" and _itm_wpcr_oi < 0.9)):
+                    _conf_pts += 1
+                # GEX trending (negative = conviction)
+                if _itm_net_gex < -5:
+                    _conf_pts += 1
+                # Delta aligned
+                if ((_itm_market_bias == "BULLISH" and _itm_net_delta > 0) or
+                        (_itm_market_bias == "BEARISH" and _itm_net_delta < 0)):
+                    _conf_pts += 1
+                # Pressure aligned
+                if ((_itm_market_bias == "BULLISH" and _itm_call_pres > _itm_put_pres) or
+                        (_itm_market_bias == "BEARISH" and _itm_put_pres > _itm_call_pres)):
+                    _conf_pts += 1
+                # Sentiment extreme
+                if _itm_sent_score > 65 or _itm_sent_score < 35:
+                    _conf_pts += 1
+                _confidence = ("HIGH" if _conf_pts >= 4 else
+                               "MEDIUM" if _conf_pts >= 2 else "LOW")
+                _conf_clr   = ("#00ff88" if _confidence == "HIGH" else
+                               "#FFD700"  if _confidence == "MEDIUM" else "#FF5252")
+
+                # ── STEP 9 Display: Trade Map Panel ────────────────────────
+                st.markdown(f"""
+                <div style="background:linear-gradient(135deg,{_itm_dir_clr}08,{_itm_dir_clr}18);
+                            padding:18px;border-radius:12px;border:2px solid {_itm_dir_clr};
+                            margin-bottom:14px;">
+                    <div style="color:#888;font-size:10px;letter-spacing:2px;">
+                        INSTITUTIONAL TRADE MAP — ATM±5 LIQUIDITY ANALYSIS</div>
+                    <div style="color:{_itm_dir_clr};font-size:28px;font-weight:bold;margin:6px 0;">
+                        {_itm_dir_lbl} &nbsp;·&nbsp; Confidence: <span style="border:1px solid {_conf_clr};
+                        color:{_conf_clr};padding:2px 10px;border-radius:5px;font-size:16px;">{_confidence}</span>
+                    </div>
+                    <div style="color:#aaa;font-size:12px;">
+                        Spot: <b style="color:#FFD740">{_itm_spot:,.0f}</b> &nbsp;|&nbsp;
+                        ATM: <b style="color:#FFD740">₹{int(_itm_atm_val)}</b> &nbsp;|&nbsp;
+                        Sentiment: <b style="color:{_conf_clr}">{_itm_sent_score}/100</b> &nbsp;|&nbsp;
+                        {_itm_final_signal}
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+                # Level grid (3 cols × 3 rows)
+                _lg1, _lg2, _lg3 = st.columns(3)
+                def _itm_card(label, value, color, note=""):
+                    return (f'<div style="background:{color}12;padding:11px;border-radius:8px;'
+                            f'border:1px solid {color};text-align:center;margin:3px 0;">'
+                            f'<div style="color:{color};font-size:10px;font-weight:bold;">{label}</div>'
+                            f'<div style="color:{color};font-size:20px;font-weight:bold;">{value:.0f}</div>'
+                            f'<div style="color:#aaa;font-size:10px;">{note}</div></div>')
+
+                with _lg1:
+                    st.markdown(_itm_card("PUT OI WALL",     _put_oi_wall,   "#00ff88", "Max PE OI"),
+                                unsafe_allow_html=True)
+                    st.markdown(_itm_card("TRUE SUPPORT",    _true_support,  "#00C853", "Weighted avg"),
+                                unsafe_allow_html=True)
+                    st.markdown(_itm_card("ENTRY SUPPORT",   _entry_support, "#00aaff", "GEX+OI+VOB"),
+                                unsafe_allow_html=True)
+                with _lg2:
+                    st.markdown(_itm_card("TARGET",          _itm_target,    _itm_dir_clr, "Exit zone"),
+                                unsafe_allow_html=True)
+                    st.markdown(_itm_card("ENTRY",           _itm_entry,     _itm_dir_clr, "Trade entry"),
+                                unsafe_allow_html=True)
+                    st.markdown(_itm_card("STOP LOSS",       _itm_sl,        "#FF5252", "Max risk"),
+                                unsafe_allow_html=True)
+                with _lg3:
+                    st.markdown(_itm_card("CALL OI WALL",    _call_oi_wall,  "#FF5252", "Max CE OI"),
+                                unsafe_allow_html=True)
+                    st.markdown(_itm_card("TRUE RESISTANCE", _true_resist,   "#FF1744", "Weighted avg"),
+                                unsafe_allow_html=True)
+                    st.markdown(_itm_card("ENTRY RESIST",    _entry_resist,  "#ff8844", "GEX+OI+VOB"),
+                                unsafe_allow_html=True)
+
+                # Breakout / Breakdown / Gamma levels
+                _bb1, _bb2, _bb3, _bb4 = st.columns(4)
+                with _bb1:
+                    st.markdown(_itm_card("BREAKOUT ABOVE", _breakout_lvl,  "#00ff88", "ATM+1+GEX+Call OI"),
+                                unsafe_allow_html=True)
+                with _bb2:
+                    st.markdown(_itm_card("BREAKDOWN BELOW", _breakdown_lvl, "#FF5252", "ATM-1+GEX+Put OI"),
+                                unsafe_allow_html=True)
+                with _bb3:
+                    st.markdown(_itm_card("GAMMA FLIP",     _gamma_flip,    "#FFD700", "GEX zero crossing"),
+                                unsafe_allow_html=True)
+                with _bb4:
+                    st.markdown(_itm_card("POC (avg)",      _poc_val,       "#00BCD4", "Triple POC avg"),
+                                unsafe_allow_html=True)
+
+                # ── STEP 12: Institutional Levels Chart ────────────────────
+                if st.session_state.sentiment_history:
+                    _itm_chart_times = [h['time'] for h in st.session_state.sentiment_history]
+                    _fig_itm = go.Figure()
+                    for _lv2, _ln, _lc, _ld in [
+                        (_true_support,  "Support",        "#00C853", "dash"),
+                        (_true_resist,   "Resistance",     "#FF1744", "dash"),
+                        (_itm_entry,     "Entry Zone",     _itm_dir_clr, "dot"),
+                        (_itm_target,    "Target",         "#00BCD4", "dot"),
+                        (_breakout_lvl,  "Breakout Level", "#00ff88", "dashdot"),
+                        (_breakdown_lvl, "Breakdown Level","#FF5252", "dashdot"),
+                        (_itm_sl,        "Stop Loss",      "#ff8800", "longdash"),
+                    ]:
+                        _fig_itm.add_hline(
+                            y=_lv2, line_dash=_ld, line_color=_lc, line_width=1.5,
+                            annotation_text=f"{_ln}: {_lv2:.0f}",
+                            annotation_position="right",
+                            annotation_font_size=9,
+                            annotation_font_color=_lc)
+                    _fig_itm.add_trace(go.Scatter(
+                        x=_itm_chart_times,
+                        y=[_itm_spot] * len(_itm_chart_times),
+                        mode='lines', name='Spot Price',
+                        line=dict(color='#FFD740', width=2)))
+                    _fig_itm.update_layout(
+                        title=f"Institutional Trade Map — Spot: {_itm_spot:,.0f}",
+                        height=350, template='plotly_dark',
+                        xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
+                        yaxis=dict(title='Price', gridcolor='#333'),
+                        legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
+                        margin=dict(l=40, r=120, t=45, b=30),
+                        paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'))
+                    st.plotly_chart(_fig_itm, use_container_width=True)
+
+                # Source breakdown
+                with st.expander("📖 Level Sources"):
+                    _src_data = [
+                        ["Put OI Wall",     f"₹{_put_oi_wall:.0f}",   "Max PE open interest strike (ATM±5)"],
+                        ["Call OI Wall",    f"₹{_call_oi_wall:.0f}",  "Max CE open interest strike (ATM±5)"],
+                        ["Gamma Support",   f"₹{_gamma_support:.0f}", "Highest positive GEX below ATM"],
+                        ["Gamma Resistance",f"₹{_gamma_resist:.0f}",  "Lowest negative GEX above ATM"],
+                        ["Gamma Flip",      f"₹{_gamma_flip:.0f}",    "GEX sign change level"],
+                        ["VOB Support",     f"₹{_vob_support:.0f}",   "Volume Order Block nearest below spot"],
+                        ["VOB Resistance",  f"₹{_vob_resist:.0f}",    "Volume Order Block nearest above spot"],
+                        ["POC (avg)",       f"₹{_poc_val:.0f}",       "Average of Short/Mid/Long POC"],
+                        ["Pivot Support",   f"₹{_piv_support:.0f}",   "Nearest HTF pivot low below spot"],
+                        ["Pivot Resistance",f"₹{_piv_resist:.0f}",    "Nearest HTF pivot high above spot"],
+                    ]
+                    st.dataframe(pd.DataFrame(_src_data,
+                        columns=['Level', 'Value', 'Source']),
+                        use_container_width=True, hide_index=True)
+            else:
+                st.info("ATM strike not identified in option chain.")
+        else:
+            st.info("Option chain data required for Institutional Trade Map.")
+    except Exception as _itm_e:
+        st.warning(f"Institutional Trade Map error: {str(_itm_e)}")
+
+    # ===== ATM ±2 STRIKE COMPARISON: PCR / ChgOI PCR / GEX =====
+    st.markdown("---")
+    st.markdown("## 📊 ATM ±2 Strike Comparison — PCR · ChgOI PCR")
+
+    # Helper function to create PCR chart (defined outside try block for reuse)
+    def create_pcr_chart(history_df, col_name, color, title_prefix):
+        """Helper to create individual PCR chart - col_name is now just strike price"""
+        if col_name and col_name in history_df.columns:
+            strike_val = col_name  # Column name is now just the strike price
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=history_df['time'],
+                y=history_df[col_name],
+                mode='lines+markers',
+                name=f'₹{strike_val}',
+                line=dict(color=color, width=2),
+                marker=dict(size=4),
+                fill='tozeroy',
+                fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.1])}'
+            ))
+
+            # Reference lines
+            fig.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
+            fig.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
+            fig.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
+
+            # Get current PCR value
+            current_pcr = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
+
+            # Dynamic Y range: data + reference thresholds always in view
+            _pcr_raw = history_df[col_name].dropna().tolist()
+            _pcr_all = _pcr_raw + [0.7, 1.2]
+            _pcr_ymin = max(0.0, min(_pcr_all) * 0.9)
+            _pcr_ymax = max(_pcr_all) * 1.1
+
+            fig.update_layout(
+                title=f"{title_prefix}<br>₹{strike_val}<br>PCR: {current_pcr:.2f}",
+                template='plotly_dark',
+                height=280,
+                showlegend=False,
+                margin=dict(l=10, r=10, t=70, b=30),
+                xaxis=dict(tickformat='%H:%M', title=''),
+                yaxis=dict(title='PCR', range=[_pcr_ymin, _pcr_ymax]),
+                plot_bgcolor='#1e1e1e',
+                paper_bgcolor='#1e1e1e'
+            )
+            return fig, current_pcr
+        return None, 0
+
+    # Helper function for GEX charts (defined here so it's available in comparison view)
+    def create_gex_chart(history_df, col_name, color, title_prefix):
+        """Create individual GEX time-series chart per strike."""
+        if col_name and col_name in history_df.columns:
+            strike_val = col_name
+            gex_values = history_df[col_name].dropna()
+            max_abs = max(abs(gex_values.max()), abs(gex_values.min()), 15) if len(gex_values) > 0 else 20
+            y_range = [-max_abs * 1.1, max_abs * 1.1]
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=history_df['time'],
+                y=history_df[col_name],
+                mode='lines+markers',
+                name=f'₹{strike_val}',
+                line=dict(color=color, width=2),
+                marker=dict(size=4),
+                fill='tozeroy',
+                fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.15])}'
+            ))
+            fig.add_hline(y=0, line_dash="solid", line_color="white", line_width=2)
+            fig.add_hline(y=10, line_dash="dot", line_color="#00ff88", line_width=1,
+                          annotation_text="+10", annotation_position="right")
+            fig.add_hline(y=-10, line_dash="dot", line_color="#ff4444", line_width=1,
+                          annotation_text="-10", annotation_position="right")
+            current_gex = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
+            fig.update_layout(
+                title=f"{title_prefix}<br>₹{strike_val}<br>GEX: {current_gex:+.1f}L",
+                template='plotly_dark', height=280, showlegend=False,
+                margin=dict(l=10, r=10, t=70, b=30),
+                xaxis=dict(tickformat='%H:%M', title=''),
+                yaxis=dict(title='GEX (L)', range=y_range, zeroline=True,
+                           zerolinecolor='white', zerolinewidth=2,
+                           tickmode='array',
+                           tickvals=[-20, -10, 0, 10, 20] if max_abs <= 25 else None),
+                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e'
+            )
+            return fig, current_gex
+        return None, 0
+
+    # Try to get new data and add to history
+    pcr_data_available = False
+    pcr_df = None
+
+    df_summary = option_data.get('df_summary') if option_data else None
+    if df_summary is not None and 'Zone' in df_summary.columns and 'PCR' in df_summary.columns:
+        try:
+            # Find ATM index
+            atm_idx = df_summary[df_summary['Zone'] == 'ATM'].index
+            if len(atm_idx) > 0:
+                atm_pos = df_summary.index.get_loc(atm_idx[0])
+
+                # Get ATM ± 2 strikes (5 strikes total)
+                start_idx = max(0, atm_pos - 2)
+                end_idx = min(len(df_summary), atm_pos + 3)
+
+                chgoi_avail = [c for c in ['changeinOpenInterest_CE', 'changeinOpenInterest_PE']
+                               if c in df_summary.columns]
+                vol_avail = [c for c in ['totalTradedVolume_CE', 'totalTradedVolume_PE']
+                             if c in df_summary.columns]
+                pcr_df = df_summary.iloc[start_idx:end_idx][
+                    ['Strike', 'Zone', 'PCR', 'PCR_Signal',
+                     'openInterest_CE', 'openInterest_PE'] + chgoi_avail + vol_avail
+                ].copy()
+
+                if not pcr_df.empty:
+                    pcr_data_available = True
+                    # Save as last valid data
+                    st.session_state.pcr_last_valid_data = pcr_df.copy()
+
+                    # Get current time
+                    ist = pytz.timezone('Asia/Kolkata')
+                    current_time = datetime.now(ist)
+
+                    # Add current PCR data to history - store by STRIKE PRICE ONLY (not zone)
+                    # This preserves history even when strikes change zone (OTM->ATM->ITM)
+                    pcr_entry = {'time': current_time}
+                    chgoi_entry = {'time': current_time}
+                    for _, row in pcr_df.iterrows():
+                        strike_label = str(int(row['Strike']))  # Store by strike only
+                        pcr_entry[strike_label] = row['PCR']
+                        # Per-strike ChgOI PCR
+                        if 'changeinOpenInterest_CE' in row and 'changeinOpenInterest_PE' in row:
+                            ce_chg = row['changeinOpenInterest_CE']
+                            pe_chg = row['changeinOpenInterest_PE']
+                            chgoi_entry[strike_label] = round(abs(pe_chg / ce_chg), 3) if ce_chg != 0 else 0.0
+
+                    # Collect raw CE/PE OI and ChgOI per strike for comparison charts
+                    ce_oi_entry = {'time': current_time}
+                    pe_oi_entry = {'time': current_time}
+                    ce_chgoi_entry = {'time': current_time}
+                    pe_chgoi_entry = {'time': current_time}
+                    # Collect raw CE/PE Volume per strike for comparison charts
+                    ce_vol_entry = {'time': current_time}
+                    pe_vol_entry = {'time': current_time}
+                    for _, row in pcr_df.iterrows():
+                        strike_label = str(int(row['Strike']))
+                        ce_oi_entry[strike_label] = row.get('openInterest_CE', 0)
+                        pe_oi_entry[strike_label] = row.get('openInterest_PE', 0)
+                        if 'changeinOpenInterest_CE' in row:
+                            ce_chgoi_entry[strike_label] = row['changeinOpenInterest_CE']
+                        if 'changeinOpenInterest_PE' in row:
+                            pe_chgoi_entry[strike_label] = row['changeinOpenInterest_PE']
+                        if 'totalTradedVolume_CE' in row:
+                            ce_vol_entry[strike_label] = row.get('totalTradedVolume_CE', 0) or 0
+                        if 'totalTradedVolume_PE' in row:
+                            pe_vol_entry[strike_label] = row.get('totalTradedVolume_PE', 0) or 0
+
+                    # Store current ATM ±2 strike positions for display
+                    current_strikes = pcr_df['Strike'].tolist()
+                    st.session_state.pcr_current_strikes = [int(s) for s in current_strikes]
+                    st.session_state.pcr_chgoi_strike_current_strikes = [int(s) for s in current_strikes]
+                    st.session_state.call_put_oi_current_strikes = [int(s) for s in current_strikes]
+
+                    # Check if we should add new entry (avoid duplicates within 30 seconds)
+                    should_add = True
+                    if st.session_state.pcr_history:
+                        last_entry = st.session_state.pcr_history[-1]
+                        time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
+                        if time_diff < 30:
+                            should_add = False
+
+                    if should_add:
+                        st.session_state.pcr_history.append(pcr_entry)
+                        if len(st.session_state.pcr_history) > 200:
+                            st.session_state.pcr_history = st.session_state.pcr_history[-200:]
+                        db.save_option_history('pcr_history', pcr_entry)
+                        # Also store per-strike ChgOI PCR if data was available
+                        if len(chgoi_entry) > 1:
+                            st.session_state.pcr_chgoi_strike_history.append(chgoi_entry)
+                            if len(st.session_state.pcr_chgoi_strike_history) > 200:
+                                st.session_state.pcr_chgoi_strike_history = st.session_state.pcr_chgoi_strike_history[-200:]
+                            db.save_option_history('pcr_chgoi_strike_history', chgoi_entry)
+                        # Store raw CE/PE OI and ChgOI per strike
+                        if len(ce_oi_entry) > 1:
+                            st.session_state.call_put_oi_ce_history.append(ce_oi_entry)
+                            if len(st.session_state.call_put_oi_ce_history) > 200:
+                                st.session_state.call_put_oi_ce_history = st.session_state.call_put_oi_ce_history[-200:]
+                            st.session_state.call_put_oi_pe_history.append(pe_oi_entry)
+                            if len(st.session_state.call_put_oi_pe_history) > 200:
+                                st.session_state.call_put_oi_pe_history = st.session_state.call_put_oi_pe_history[-200:]
+                            db.save_option_history('call_put_oi_ce_history', ce_oi_entry)
+                            db.save_option_history('call_put_oi_pe_history', pe_oi_entry)
+                        if len(ce_chgoi_entry) > 1:
+                            st.session_state.call_put_chgoi_ce_history.append(ce_chgoi_entry)
+                            if len(st.session_state.call_put_chgoi_ce_history) > 200:
+                                st.session_state.call_put_chgoi_ce_history = st.session_state.call_put_chgoi_ce_history[-200:]
+                            st.session_state.call_put_chgoi_pe_history.append(pe_chgoi_entry)
+                            if len(st.session_state.call_put_chgoi_pe_history) > 200:
+                                st.session_state.call_put_chgoi_pe_history = st.session_state.call_put_chgoi_pe_history[-200:]
+                            db.save_option_history('call_put_chgoi_ce_history', ce_chgoi_entry)
+                            db.save_option_history('call_put_chgoi_pe_history', pe_chgoi_entry)
+                        # Store raw CE/PE Volume per strike
+                        if len(ce_vol_entry) > 1:
+                            st.session_state.call_put_vol_ce_history.append(ce_vol_entry)
+                            if len(st.session_state.call_put_vol_ce_history) > 200:
+                                st.session_state.call_put_vol_ce_history = st.session_state.call_put_vol_ce_history[-200:]
+                            st.session_state.call_put_vol_pe_history.append(pe_vol_entry)
+                            if len(st.session_state.call_put_vol_pe_history) > 200:
+                                st.session_state.call_put_vol_pe_history = st.session_state.call_put_vol_pe_history[-200:]
+                            db.save_option_history('call_put_vol_ce_history', ce_vol_entry)
+                            db.save_option_history('call_put_vol_pe_history', pe_vol_entry)
+                            # Compute Change-in-Volume (delta from previous snapshot)
+                            _chgvol_ce_entry = {'time': current_time}
+                            _chgvol_pe_entry = {'time': current_time}
+                            _prev_ce_vol = st.session_state.call_put_vol_ce_history[-2] if len(st.session_state.call_put_vol_ce_history) >= 2 else None
+                            _prev_pe_vol = st.session_state.call_put_vol_pe_history[-2] if len(st.session_state.call_put_vol_pe_history) >= 2 else None
+                            for _, _vr in pcr_df.iterrows():
+                                _vsk = str(int(_vr['Strike']))
+                                _cur_ce_v = ce_vol_entry.get(_vsk, 0)
+                                _cur_pe_v = pe_vol_entry.get(_vsk, 0)
+                                _prev_ce_v = _prev_ce_vol.get(_vsk, _cur_ce_v) if _prev_ce_vol else _cur_ce_v
+                                _prev_pe_v = _prev_pe_vol.get(_vsk, _cur_pe_v) if _prev_pe_vol else _cur_pe_v
+                                _chgvol_ce_entry[_vsk] = _cur_ce_v - _prev_ce_v
+                                _chgvol_pe_entry[_vsk] = _cur_pe_v - _prev_pe_v
+                            st.session_state.call_put_chgvol_ce_history.append(_chgvol_ce_entry)
+                            if len(st.session_state.call_put_chgvol_ce_history) > 200:
+                                st.session_state.call_put_chgvol_ce_history = st.session_state.call_put_chgvol_ce_history[-200:]
+                            st.session_state.call_put_chgvol_pe_history.append(_chgvol_pe_entry)
+                            if len(st.session_state.call_put_chgvol_pe_history) > 200:
+                                st.session_state.call_put_chgvol_pe_history = st.session_state.call_put_chgvol_pe_history[-200:]
+                            db.save_option_history('call_put_chgvol_ce_history', _chgvol_ce_entry)
+                            db.save_option_history('call_put_chgvol_pe_history', _chgvol_pe_entry)
+
+        except Exception as e:
+            st.caption(f"⚠️ Current fetch issue: {str(e)[:50]}...")
+
+    # ALWAYS try to display the graph if we have history (even if current fetch failed)
+    if len(st.session_state.pcr_history) > 0:
+        try:
+            history_df = pd.DataFrame(st.session_state.pcr_history)
+
+            # Get current ATM ±2 strikes (stored by strike price only)
+            current_strikes = getattr(st.session_state, 'pcr_current_strikes', [])
+
+            # If no current strikes available, try to get from last valid data
+            if not current_strikes and st.session_state.pcr_last_valid_data is not None:
+                current_strikes = [int(s) for s in st.session_state.pcr_last_valid_data['Strike'].tolist()]
+
+            # Sort strikes (ascending: ITM-2, ITM-1, ATM, OTM+1, OTM+2)
+            current_strikes = sorted(current_strikes)
+
+            position_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
+            position_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
+
+            # ── PCR OI + ChgOI PCR per strike ──
+            chgoi_hist = st.session_state.pcr_chgoi_strike_history
+            chgoi_history_df = pd.DataFrame(chgoi_hist) if chgoi_hist else None
+
+            combined_cols = st.columns(5)
+            for i, col in enumerate(combined_cols):
+                with col:
+                    if i >= len(current_strikes):
+                        st.info(f"{position_labels[i]} N/A")
+                        continue
+
+                    strike = current_strikes[i]
+                    strike_col = str(strike)
+
+                    fig = go.Figure()
+
+                    # ── PCR OI (solid blue) ──
+                    if strike_col in history_df.columns:
+                        fig.add_trace(go.Scatter(
+                            x=history_df['time'],
+                            y=history_df[strike_col],
+                            mode='lines+markers',
+                            name='PCR OI',
+                            line=dict(color='#00ccff', width=2),
+                            marker=dict(size=3),
+                        ))
+
+                    # ── ChgOI PCR (dashed orange) ──
+                    if chgoi_history_df is not None and strike_col in chgoi_history_df.columns:
+                        fig.add_trace(go.Scatter(
+                            x=chgoi_history_df['time'],
+                            y=chgoi_history_df[strike_col],
+                            mode='lines+markers',
+                            name='PCR ChgOI',
+                            line=dict(color='#ffaa00', width=2, dash='dash'),
+                            marker=dict(size=3),
+                        ))
+
+                    # PCR reference lines
+                    fig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.533)", line_width=1,
+                                  annotation_text="Bull 1.2", annotation_position="right",
+                                  annotation_font_size=8, annotation_font_color="#00ff88")
+                    fig.add_hline(y=0.7, line_dash="dot", line_color="rgba(255,68,68,0.533)", line_width=1,
+                                  annotation_text="Bear 0.7", annotation_position="right",
+                                  annotation_font_size=8, annotation_font_color="#ff4444")
+
+                    # Dynamic Y range: include both OI PCR and ChgOI PCR values + thresholds
+                    _cmp_vals = []
+                    if strike_col in history_df.columns:
+                        _cmp_vals += history_df[strike_col].dropna().tolist()
+                    if chgoi_history_df is not None and strike_col in chgoi_history_df.columns:
+                        _cmp_vals += chgoi_history_df[strike_col].dropna().tolist()
+                    _cmp_vals += [0.7, 1.2]
+                    _cmp_ymin = max(0.0, min(_cmp_vals) * 0.9)
+                    _cmp_ymax = max(_cmp_vals) * 1.1
+
+                    # ── Current value markers (present value shown in graph) ──
+                    if strike_col in history_df.columns and len(history_df) > 0:
+                        _pcr_cur = history_df[strike_col].iloc[-1]
+                        fig.add_trace(go.Scatter(
+                            x=[history_df['time'].iloc[-1]], y=[_pcr_cur],
+                            mode='markers+text', text=[f'{_pcr_cur:.2f}'],
+                            textposition='top right', textfont=dict(size=9, color='#00ccff'),
+                            marker=dict(size=9, color='#00ccff', symbol='circle'),
+                            showlegend=False, hoverinfo='skip',
+                        ))
+                    if chgoi_history_df is not None and strike_col in chgoi_history_df.columns and len(chgoi_history_df) > 0:
+                        _chgoi_cur = chgoi_history_df[strike_col].iloc[-1]
+                        fig.add_trace(go.Scatter(
+                            x=[chgoi_history_df['time'].iloc[-1]], y=[_chgoi_cur],
+                            mode='markers+text', text=[f'{_chgoi_cur:.2f}'],
+                            textposition='bottom right', textfont=dict(size=9, color='#ffaa00'),
+                            marker=dict(size=9, color='#ffaa00', symbol='diamond'),
+                            showlegend=False, hoverinfo='skip',
+                        ))
+
+                    fig.update_layout(
+                        title=dict(text=f"{position_labels[i]}<br>₹{strike}", font=dict(size=11)),
+                        template='plotly_dark',
+                        height=300,
+                        showlegend=True,
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                                    xanchor='center', x=0.5, font=dict(size=8)),
+                        margin=dict(l=5, r=10, t=70, b=30),
+                        xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                        yaxis=dict(title='PCR', range=[_cmp_ymin, _cmp_ymax]),
+                        plot_bgcolor='#1e1e1e',
+                        paper_bgcolor='#1e1e1e',
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Signal summary below chart
+                    cur_pcr = history_df[strike_col].iloc[-1] if (
+                        strike_col in history_df.columns and len(history_df) > 0) else 1.0
+                    pcr_sig = "🟢 Bull" if cur_pcr > 1.2 else ("🔴 Bear" if cur_pcr < 0.7 else "🟡 Ntrl")
+                    st.caption(f"PCR {cur_pcr:.2f} {pcr_sig}")
+
+            # ── Send PCR chart to Telegram every 5 minutes ──
+            _now = datetime.now(pytz.timezone('Asia/Kolkata'))
+            _last_sent = st.session_state.pcr_telegram_last_sent
+            _should_send = (
+                _last_sent is None
+                or (_now - _last_sent).total_seconds() >= 300
+            )
+            if _should_send and current_strikes:
+                try:
+                    from plotly.subplots import make_subplots as _make_subplots
+                    _n = len(current_strikes)
+                    _tg_fig = _make_subplots(
+                        rows=1, cols=_n,
+                        subplot_titles=[
+                            f"{position_labels[i]}<br>₹{current_strikes[i]}"
+                            for i in range(_n)
+                        ],
+                    )
+                    for _i, _strike in enumerate(current_strikes):
+                        _sc = str(_strike)
+                        _col_idx = _i + 1
+                        if _sc in history_df.columns:
+                            _tg_fig.add_trace(go.Scatter(
+                                x=history_df['time'],
+                                y=history_df[_sc],
+                                mode='lines',
+                                name='PCR OI',
+                                line=dict(color='#00ccff', width=2),
+                                showlegend=(_i == 0),
+                            ), row=1, col=_col_idx)
+                        if chgoi_history_df is not None and _sc in chgoi_history_df.columns:
+                            _tg_fig.add_trace(go.Scatter(
+                                x=chgoi_history_df['time'],
+                                y=chgoi_history_df[_sc],
+                                mode='lines',
+                                name='ChgOI PCR',
+                                line=dict(color='#ffaa00', width=2, dash='dash'),
+                                showlegend=(_i == 0),
+                            ), row=1, col=_col_idx)
+                        _tg_fig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.5)",
+                                          line_width=1, row=1, col=_col_idx)
+                        _tg_fig.add_hline(y=0.7, line_dash="dot", line_color="rgba(255,68,68,0.5)",
+                                          line_width=1, row=1, col=_col_idx)
+                    _tg_fig.update_layout(
+                        title="ATM ±2 Strike Comparison — PCR · ChgOI PCR",
+                        template='plotly_dark',
+                        height=350,
+                        width=1400,
+                        paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='#1e1e1e',
+                        margin=dict(l=10, r=10, t=80, b=40),
+                        legend=dict(orientation='h', yanchor='bottom', y=1.06, xanchor='center', x=0.5),
+                    )
+                    _tg_fig.update_xaxes(tickformat='%H:%M', tickfont=dict(size=8))
+                    _tg_fig.update_yaxes(title_text='PCR', tickfont=dict(size=8))
+                    _img_bytes = _tg_fig.to_image(format="png", scale=2)
+                    # Build caption with current PCR values
+                    _caption_parts = [f"<b>ATM ±2 PCR · ChgOI PCR</b>  {_now.strftime('%H:%M')}  Spot: ₹{underlying_price:.0f}"]
+                    for _i, _strike in enumerate(current_strikes):
+                        _sc = str(_strike)
+                        _pcr_v = history_df[_sc].iloc[-1] if _sc in history_df.columns and len(history_df) > 0 else None
+                        _chg_v = (chgoi_history_df[_sc].iloc[-1]
+                                  if chgoi_history_df is not None and _sc in chgoi_history_df.columns and len(chgoi_history_df) > 0
+                                  else None)
+                        _lbl = position_labels[_i].split(" ", 1)[-1]  # strip emoji
+                        _sig = "🟢" if (_pcr_v and _pcr_v > 1.2) else ("🔴" if (_pcr_v and _pcr_v < 0.7) else "🟡")
+                        _pcr_str = f"{_pcr_v:.2f}" if _pcr_v is not None else "N/A"
+                        _chg_str = f"{_chg_v:.2f}" if _chg_v is not None else "N/A"
+                        _caption_parts.append(f"{_sig} ₹{_strike} ({_lbl}): OI={_pcr_str} | ChgOI={_chg_str}")
+                    send_telegram_photo_sync(_img_bytes, "\n".join(_caption_parts))
+                    st.session_state.pcr_telegram_last_sent = _now
+                except Exception as _tg_err:
+                    pass  # silently skip if chart export fails
+
+            # ── ATM ±2 Strike GEX (separate row) ──
+            st.markdown("---")
+            st.markdown("### 📊 ATM ±2 Strike GEX")
+            has_gex_hist = len(st.session_state.gex_history) > 0
+            gex_hist_df = pd.DataFrame(st.session_state.gex_history) if has_gex_hist else None
+            gex_current_strikes = sorted(getattr(st.session_state, 'gex_current_strikes', current_strikes))
+
+            cur_gex_vals = {}
+            if gex_data_pre and 'gex_df' in gex_data_pre:
+                for _, gr in gex_data_pre['gex_df'].iterrows():
+                    cur_gex_vals[int(gr['Strike'])] = gr['Net_GEX']
+
+            gex_cols = st.columns(5)
+            for i, col in enumerate(gex_cols):
+                with col:
+                    if i >= len(current_strikes):
+                        st.info(f"{position_labels[i]} N/A")
+                        continue
+                    strike = current_strikes[i]
+                    strike_col = str(strike)
+                    clr = position_colors[i]
+                    _rgb = tuple(int(clr.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
+                    _fill = f'rgba({_rgb[0]},{_rgb[1]},{_rgb[2]},0.15)'
+                    fig_gex = go.Figure()
+                    cur_gex = cur_gex_vals.get(strike, 0)
+                    if has_gex_hist and gex_hist_df is not None and strike_col in gex_hist_df.columns:
+                        gex_series = gex_hist_df[strike_col]
+                        cur_gex = gex_series.iloc[-1]
+                        gex_vals = gex_series.dropna()
+                        max_abs = max(abs(gex_vals.max()), abs(gex_vals.min()), 15) if len(gex_vals) > 0 else 20
+                        fig_gex.add_trace(go.Scatter(
+                            x=gex_hist_df['time'],
+                            y=gex_series,
+                            mode='lines+markers',
+                            name='GEX (L)',
+                            line=dict(color=clr, width=2),
+                            marker=dict(size=3),
+                            fill='tozeroy',
+                            fillcolor=_fill,
+                        ))
+                        fig_gex.update_layout(yaxis=dict(
+                            range=[-max_abs * 1.1, max_abs * 1.1],
+                            zeroline=True, zerolinecolor='white', zerolinewidth=2,
+                        ))
+                    elif strike in cur_gex_vals:
+                        fig_gex.add_trace(go.Scatter(
+                            x=[datetime.now(pytz.timezone('Asia/Kolkata'))],
+                            y=[cur_gex],
+                            mode='markers+text',
+                            name='GEX (L)',
+                            marker=dict(size=14, color=clr, symbol='diamond'),
+                            text=[f'{cur_gex:+.1f}L'],
+                            textposition='top center',
+                            textfont=dict(size=10, color='white'),
+                        ))
+                    fig_gex.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.4)", line_width=1)
+                    fig_gex.add_hline(y=10, line_dash="dot", line_color="rgba(0,255,136,0.4)", line_width=1,
+                                      annotation_text="+10", annotation_position="right",
+                                      annotation_font_size=8, annotation_font_color="#00ff88")
+                    fig_gex.add_hline(y=-10, line_dash="dot", line_color="rgba(255,68,68,0.4)", line_width=1,
+                                      annotation_text="-10", annotation_position="right",
+                                      annotation_font_size=8, annotation_font_color="#ff4444")
+                    # Current value marker (present value shown in graph)
+                    if has_gex_hist and gex_hist_df is not None and strike_col in gex_hist_df.columns and len(gex_hist_df) > 0:
+                        fig_gex.add_trace(go.Scatter(
+                            x=[gex_hist_df['time'].iloc[-1]], y=[cur_gex],
+                            mode='markers+text', text=[f'{cur_gex:+.1f}L'],
+                            textposition='top right', textfont=dict(size=9, color=clr),
+                            marker=dict(size=9, color=clr, symbol='circle'),
+                            showlegend=False, hoverinfo='skip',
+                        ))
+                    fig_gex.update_layout(
+                        title=dict(text=f"{position_labels[i]}<br>₹{strike}<br>GEX: {cur_gex:+.1f}L",
+                                   font=dict(size=11)),
+                        template='plotly_dark',
+                        height=300,
+                        showlegend=False,
+                        margin=dict(l=5, r=10, t=70, b=30),
+                        xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                        yaxis=dict(title='GEX (L)',
+                                   title_font=dict(color=clr, size=9),
+                                   tickfont=dict(size=8)),
+                        plot_bgcolor='#1e1e1e',
+                        paper_bgcolor='#1e1e1e',
+                    )
+                    st.plotly_chart(fig_gex, use_container_width=True)
+                    gex_sig = "📍 Pin" if cur_gex > 10 else ("⚡ Accel" if cur_gex < -10 else "➡️ Ntrl")
+                    st.caption(f"GEX {cur_gex:+.1f}L {gex_sig}")
+
+            # ── Status & controls ──
+            col_info1, col_info2 = st.columns([3, 1])
+            with col_info1:
+                status = "🟢 Live" if pcr_data_available else "🟡 Using cached history"
+                st.caption(f"{status} | 📈 {len(st.session_state.pcr_history)} PCR pts · "
+                           f"{len(chgoi_hist)} ChgOI pts")
+            with col_info2:
+                if st.button("🗑️ Clear History"):
+                    st.session_state.pcr_history = []
+                    st.session_state.pcr_last_valid_data = None
+                    st.session_state.pcr_chgoi_strike_history = []
+                    st.session_state.gex_history = []
+                    st.session_state.call_put_oi_ce_history = []
+                    st.session_state.call_put_oi_pe_history = []
+                    st.session_state.call_put_chgoi_ce_history = []
+                    st.session_state.call_put_chgoi_pe_history = []
+                    st.session_state.call_put_vol_ce_history = []
+                    st.session_state.call_put_vol_pe_history = []
+                    st.session_state.call_put_chgvol_ce_history = []
+                    st.session_state.call_put_chgvol_pe_history = []
+                    st.session_state.oi_positioning_history = []
+                    # Reset MDE price history
+                    _mde_inst = get_master_data()
+                    _mde_inst._price_history = []
+                    st.rerun()
+
+        except Exception as e:
+            st.warning(f"Error displaying comparison charts: {str(e)}")
+    else:
+        st.info("📊 History will build up as the app refreshes. Please wait for data collection…")
+
+    # ===== ATM ±2 STRIKE COMPARISON: CALL OI vs PUT OI / CE ΔOI vs PE ΔOI =====
+    st.markdown("---")
+    st.markdown("## 📊 ATM ±2 Strike Comparison — Call OI · Put OI")
+
+    _cp_ce_hist = st.session_state.call_put_oi_ce_history
+    _cp_pe_hist = st.session_state.call_put_oi_pe_history
+    _cp_ce_chg_hist = st.session_state.call_put_chgoi_ce_history
+    _cp_pe_chg_hist = st.session_state.call_put_chgoi_pe_history
+
+    if len(_cp_ce_hist) > 0 and len(_cp_pe_hist) > 0:
+        try:
+            _cp_ce_df = pd.DataFrame(_cp_ce_hist)
+            _cp_pe_df = pd.DataFrame(_cp_pe_hist)
+            _cp_ce_chg_df = pd.DataFrame(_cp_ce_chg_hist) if _cp_ce_chg_hist else None
+            _cp_pe_chg_df = pd.DataFrame(_cp_pe_chg_hist) if _cp_pe_chg_hist else None
+
+            _cp_strikes = sorted(getattr(st.session_state, 'call_put_oi_current_strikes', []))
+            if not _cp_strikes:
+                _cp_strikes = sorted(getattr(st.session_state, 'pcr_current_strikes', []))
+
+            _cp_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
+
+            # ── Row 1: Call OI vs Put OI per strike ──
+            _cp_oi_cols = st.columns(5)
+            for _ci, _ccol in enumerate(_cp_oi_cols):
+                with _ccol:
+                    if _ci >= len(_cp_strikes):
+                        st.info(f"{_cp_pos_labels[_ci]} N/A")
+                        continue
+
+                    _cp_strike = _cp_strikes[_ci]
+                    _cp_sc = str(_cp_strike)
+
+                    _cp_fig = go.Figure()
+
+                    # CE OI (solid red)
+                    if _cp_sc in _cp_ce_df.columns:
+                        _cp_fig.add_trace(go.Scatter(
+                            x=_cp_ce_df['time'], y=_cp_ce_df[_cp_sc],
+                            mode='lines+markers', name='Call OI',
+                            line=dict(color='#ff4444', width=2),
+                            marker=dict(size=3),
+                        ))
+                    # PE OI (dashed green)
+                    if _cp_sc in _cp_pe_df.columns:
+                        _cp_fig.add_trace(go.Scatter(
+                            x=_cp_pe_df['time'], y=_cp_pe_df[_cp_sc],
+                            mode='lines+markers', name='Put OI',
+                            line=dict(color='#00ff88', width=2, dash='dash'),
+                            marker=dict(size=3),
+                        ))
+
+                    # Dynamic Y range
+                    _cp_oi_vals = []
+                    if _cp_sc in _cp_ce_df.columns:
+                        _cp_oi_vals += _cp_ce_df[_cp_sc].dropna().tolist()
+                    if _cp_sc in _cp_pe_df.columns:
+                        _cp_oi_vals += _cp_pe_df[_cp_sc].dropna().tolist()
+                    if _cp_oi_vals:
+                        _cp_oi_ymin = max(0, min(_cp_oi_vals) * 0.9)
+                        _cp_oi_ymax = max(_cp_oi_vals) * 1.1
+                    else:
+                        _cp_oi_ymin, _cp_oi_ymax = 0, 100
+
+                    # Current value markers
+                    _cp_ce_cur = None
+                    _cp_pe_cur = None
+                    if _cp_sc in _cp_ce_df.columns and len(_cp_ce_df) > 0:
+                        _cp_ce_cur = _cp_ce_df[_cp_sc].iloc[-1]
+                        _cp_fig.add_trace(go.Scatter(
+                            x=[_cp_ce_df['time'].iloc[-1]], y=[_cp_ce_cur],
+                            mode='markers+text', text=[f'{_cp_ce_cur:,.0f}'],
+                            textposition='top right', textfont=dict(size=9, color='#ff4444'),
+                            marker=dict(size=9, color='#ff4444', symbol='circle'),
+                            showlegend=False, hoverinfo='skip',
+                        ))
+                    if _cp_sc in _cp_pe_df.columns and len(_cp_pe_df) > 0:
+                        _cp_pe_cur = _cp_pe_df[_cp_sc].iloc[-1]
+                        _cp_fig.add_trace(go.Scatter(
+                            x=[_cp_pe_df['time'].iloc[-1]], y=[_cp_pe_cur],
+                            mode='markers+text', text=[f'{_cp_pe_cur:,.0f}'],
+                            textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
+                            marker=dict(size=9, color='#00ff88', symbol='diamond'),
+                            showlegend=False, hoverinfo='skip',
+                        ))
+
+                    # Title with current values
+                    _cp_ce_str = f"CE: {_cp_ce_cur:,.0f}" if _cp_ce_cur is not None else "CE: --"
+                    _cp_pe_str = f"PE: {_cp_pe_cur:,.0f}" if _cp_pe_cur is not None else "PE: --"
+
+                    _cp_fig.update_layout(
+                        title=dict(text=f"{_cp_pos_labels[_ci]}<br>₹{_cp_strike}<br>{_cp_ce_str} | {_cp_pe_str}",
+                                   font=dict(size=11)),
+                        template='plotly_dark', height=300,
+                        showlegend=True,
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                                    xanchor='center', x=0.5, font=dict(size=8)),
+                        margin=dict(l=5, r=10, t=70, b=30),
+                        xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                        yaxis=dict(title='OI', range=[_cp_oi_ymin, _cp_oi_ymax]),
+                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    )
+                    st.plotly_chart(_cp_fig, use_container_width=True)
+
+                    # Signal: which side dominates
+                    if _cp_ce_cur is not None and _cp_pe_cur is not None and _cp_ce_cur > 0:
+                        _cp_pcr_v = _cp_pe_cur / _cp_ce_cur
+                        _cp_sig = "🟢 Bull" if _cp_pcr_v > 1.2 else ("🔴 Bear" if _cp_pcr_v < 0.7 else "🟡 Ntrl")
+                        st.caption(f"PE/CE {_cp_pcr_v:.2f} {_cp_sig}")
+                    else:
+                        st.caption("--")
+
+            # ── Row 2: CE ΔOI vs PE ΔOI per strike (Change in OI) ──
+            if _cp_ce_chg_df is not None and _cp_pe_chg_df is not None:
+                st.markdown("### 📊 ATM ±2 Strike Comparison — CE ΔOI · PE ΔOI")
+                _cp_chg_cols = st.columns(5)
+                for _ci, _ccol in enumerate(_cp_chg_cols):
+                    with _ccol:
+                        if _ci >= len(_cp_strikes):
+                            st.info(f"{_cp_pos_labels[_ci]} N/A")
+                            continue
+
+                        _cp_strike = _cp_strikes[_ci]
+                        _cp_sc = str(_cp_strike)
+
+                        _chg_fig = go.Figure()
+
+                        # CE ΔOI (solid red)
+                        if _cp_sc in _cp_ce_chg_df.columns:
+                            _chg_fig.add_trace(go.Scatter(
+                                x=_cp_ce_chg_df['time'], y=_cp_ce_chg_df[_cp_sc],
+                                mode='lines+markers', name='CE ΔOI',
+                                line=dict(color='#ff4444', width=2),
+                                marker=dict(size=3),
+                            ))
+                        # PE ΔOI (dashed green)
+                        if _cp_sc in _cp_pe_chg_df.columns:
+                            _chg_fig.add_trace(go.Scatter(
+                                x=_cp_pe_chg_df['time'], y=_cp_pe_chg_df[_cp_sc],
+                                mode='lines+markers', name='PE ΔOI',
+                                line=dict(color='#00ff88', width=2, dash='dash'),
+                                marker=dict(size=3),
+                            ))
+
+                        # Zero reference line
+                        _chg_fig.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.4)", line_width=1)
+
+                        # Dynamic Y range
+                        _chg_vals = []
+                        if _cp_sc in _cp_ce_chg_df.columns:
+                            _chg_vals += _cp_ce_chg_df[_cp_sc].dropna().tolist()
+                        if _cp_sc in _cp_pe_chg_df.columns:
+                            _chg_vals += _cp_pe_chg_df[_cp_sc].dropna().tolist()
+                        if _chg_vals:
+                            _chg_max_abs = max(abs(min(_chg_vals)), abs(max(_chg_vals)), 1)
+                            _chg_ymin = -_chg_max_abs * 1.1
+                            _chg_ymax = _chg_max_abs * 1.1
+                        else:
+                            _chg_ymin, _chg_ymax = -100, 100
+
+                        # Current value markers
+                        _chg_ce_cur = None
+                        _chg_pe_cur = None
+                        if _cp_sc in _cp_ce_chg_df.columns and len(_cp_ce_chg_df) > 0:
+                            _chg_ce_cur = _cp_ce_chg_df[_cp_sc].iloc[-1]
+                            _chg_fig.add_trace(go.Scatter(
+                                x=[_cp_ce_chg_df['time'].iloc[-1]], y=[_chg_ce_cur],
+                                mode='markers+text', text=[f'{_chg_ce_cur:+,.0f}'],
+                                textposition='top right', textfont=dict(size=9, color='#ff4444'),
+                                marker=dict(size=9, color='#ff4444', symbol='circle'),
+                                showlegend=False, hoverinfo='skip',
+                            ))
+                        if _cp_sc in _cp_pe_chg_df.columns and len(_cp_pe_chg_df) > 0:
+                            _chg_pe_cur = _cp_pe_chg_df[_cp_sc].iloc[-1]
+                            _chg_fig.add_trace(go.Scatter(
+                                x=[_cp_pe_chg_df['time'].iloc[-1]], y=[_chg_pe_cur],
+                                mode='markers+text', text=[f'{_chg_pe_cur:+,.0f}'],
+                                textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
+                                marker=dict(size=9, color='#00ff88', symbol='diamond'),
+                                showlegend=False, hoverinfo='skip',
+                            ))
+
+                        _chg_ce_s = f"CE: {_chg_ce_cur:+,.0f}" if _chg_ce_cur is not None else "CE: --"
+                        _chg_pe_s = f"PE: {_chg_pe_cur:+,.0f}" if _chg_pe_cur is not None else "PE: --"
+
+                        _chg_fig.update_layout(
+                            title=dict(text=f"{_cp_pos_labels[_ci]}<br>₹{_cp_strike}<br>{_chg_ce_s} | {_chg_pe_s}",
+                                       font=dict(size=11)),
+                            template='plotly_dark', height=300,
+                            showlegend=True,
+                            legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                                        xanchor='center', x=0.5, font=dict(size=8)),
+                            margin=dict(l=5, r=10, t=70, b=30),
+                            xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                            yaxis=dict(title='ΔOI', range=[_chg_ymin, _chg_ymax],
+                                       zeroline=True, zerolinecolor='white', zerolinewidth=1),
+                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        )
+                        st.plotly_chart(_chg_fig, use_container_width=True)
+
+                        # Signal: net change direction
+                        if _chg_ce_cur is not None and _chg_pe_cur is not None:
+                            _net = _chg_pe_cur - _chg_ce_cur
+                            _chg_sig = "🟢 Bull" if _net > 0 else ("🔴 Bear" if _net < 0 else "🟡 Ntrl")
+                            st.caption(f"Net ΔOI {_net:+,.0f} {_chg_sig}")
+                        else:
+                            st.caption("--")
+
+            # ── Telegram: send Call OI vs Put OI chart every 5 minutes ──
+            _cp_now = datetime.now(pytz.timezone('Asia/Kolkata'))
+            _cp_last_sent = st.session_state.call_put_oi_telegram_last_sent
+            _cp_should_send = (_cp_last_sent is None or (_cp_now - _cp_last_sent).total_seconds() >= 300)
+            if _cp_should_send and _cp_strikes:
+                try:
+                    from plotly.subplots import make_subplots as _cp_make_subplots
+                    _cp_n = len(_cp_strikes)
+                    # Combined OI + ΔOI in 2 rows
+                    _has_chg = _cp_ce_chg_df is not None and _cp_pe_chg_df is not None
+                    _cp_rows = 2 if _has_chg else 1
+                    _cp_subtitles = [f"{_cp_pos_labels[i]}<br>₹{_cp_strikes[i]}" for i in range(_cp_n)]
+                    if _has_chg:
+                        _cp_subtitles += [f"ΔOI ₹{_cp_strikes[i]}" for i in range(_cp_n)]
+                    _cp_tg_fig = _cp_make_subplots(
+                        rows=_cp_rows, cols=_cp_n,
+                        subplot_titles=_cp_subtitles,
+                    )
+                    for _ci, _cs in enumerate(_cp_strikes):
+                        _csc = str(_cs)
+                        _col_idx = _ci + 1
+                        if _csc in _cp_ce_df.columns:
+                            _cp_tg_fig.add_trace(go.Scatter(
+                                x=_cp_ce_df['time'], y=_cp_ce_df[_csc],
+                                mode='lines', name='Call OI',
+                                line=dict(color='#ff4444', width=2),
+                                showlegend=(_ci == 0),
+                            ), row=1, col=_col_idx)
+                        if _csc in _cp_pe_df.columns:
+                            _cp_tg_fig.add_trace(go.Scatter(
+                                x=_cp_pe_df['time'], y=_cp_pe_df[_csc],
+                                mode='lines', name='Put OI',
+                                line=dict(color='#00ff88', width=2, dash='dash'),
+                                showlegend=(_ci == 0),
+                            ), row=1, col=_col_idx)
+                        if _has_chg:
+                            if _csc in _cp_ce_chg_df.columns:
+                                _cp_tg_fig.add_trace(go.Scatter(
+                                    x=_cp_ce_chg_df['time'], y=_cp_ce_chg_df[_csc],
+                                    mode='lines', name='CE ΔOI',
+                                    line=dict(color='#ff4444', width=2),
+                                    showlegend=(_ci == 0),
+                                ), row=2, col=_col_idx)
+                            if _csc in _cp_pe_chg_df.columns:
+                                _cp_tg_fig.add_trace(go.Scatter(
+                                    x=_cp_pe_chg_df['time'], y=_cp_pe_chg_df[_csc],
+                                    mode='lines', name='PE ΔOI',
+                                    line=dict(color='#00ff88', width=2, dash='dash'),
+                                    showlegend=(_ci == 0),
+                                ), row=2, col=_col_idx)
+                    _cp_tg_fig.update_layout(
+                        title="ATM ±2 Strike Comparison — Call OI · Put OI · ΔOI",
+                        template='plotly_dark',
+                        height=350 * _cp_rows, width=1400,
+                        paper_bgcolor='#1e1e1e', plot_bgcolor='#1e1e1e',
+                        margin=dict(l=10, r=10, t=80, b=40),
+                        legend=dict(orientation='h', yanchor='bottom', y=1.06, xanchor='center', x=0.5),
+                    )
+                    _cp_tg_fig.update_xaxes(tickformat='%H:%M', tickfont=dict(size=8))
+                    _cp_tg_fig.update_yaxes(tickfont=dict(size=8))
+                    _cp_img = _cp_tg_fig.to_image(format="png", scale=2)
+                    _cp_caption = [f"<b>ATM ±2 Call OI · Put OI</b>  {_cp_now.strftime('%H:%M')}  Spot: ₹{underlying_price:.0f}"]
+                    for _ci, _cs in enumerate(_cp_strikes):
+                        _csc = str(_cs)
+                        _lbl = _cp_pos_labels[_ci].split(" ", 1)[-1]
+                        _ce_v = _cp_ce_df[_csc].iloc[-1] if _csc in _cp_ce_df.columns and len(_cp_ce_df) > 0 else None
+                        _pe_v = _cp_pe_df[_csc].iloc[-1] if _csc in _cp_pe_df.columns and len(_cp_pe_df) > 0 else None
+                        _ce_s = f"{_ce_v:,.0f}" if _ce_v is not None else "N/A"
+                        _pe_s = f"{_pe_v:,.0f}" if _pe_v is not None else "N/A"
+                        _sig = "🟢" if (_ce_v and _pe_v and _pe_v / _ce_v > 1.2) else (
+                            "🔴" if (_ce_v and _pe_v and _pe_v / _ce_v < 0.7) else "🟡")
+                        _cp_caption.append(f"{_sig} ₹{_cs} ({_lbl}): CE={_ce_s} | PE={_pe_s}")
+                    send_telegram_photo_sync(_cp_img, "\n".join(_cp_caption))
+                    st.session_state.call_put_oi_telegram_last_sent = _cp_now
+                except Exception:
+                    pass  # silently skip if chart export fails
+
+            # ── Status ──
+            _cp_status = "🟢 Live" if pcr_data_available else "🟡 Using cached history"
+            st.caption(f"{_cp_status} | 📈 {len(_cp_ce_hist)} Call/Put OI pts")
+
+        except Exception as _cp_err:
+            st.warning(f"Error displaying Call/Put OI charts: {str(_cp_err)}")
+    else:
+        st.info("📊 Call/Put OI history will build up as the app refreshes. Please wait for data collection…")
+
+    # ===== ATM ±2 Strike Comparison — Call Volume · Put Volume =====
+    st.markdown("---")
+    st.markdown("## 📊 ATM ±2 Strike Comparison — Call Volume · Put Volume")
+
+    _cv_ce_hist = st.session_state.call_put_vol_ce_history
+    _cv_pe_hist = st.session_state.call_put_vol_pe_history
+    _cv_ce_chg_hist = st.session_state.call_put_chgvol_ce_history
+    _cv_pe_chg_hist = st.session_state.call_put_chgvol_pe_history
+
+    if len(_cv_ce_hist) > 0 and len(_cv_pe_hist) > 0:
+        try:
+            _cv_ce_df = pd.DataFrame(_cv_ce_hist)
+            _cv_pe_df = pd.DataFrame(_cv_pe_hist)
+            _cv_ce_chg_df = pd.DataFrame(_cv_ce_chg_hist) if _cv_ce_chg_hist else None
+            _cv_pe_chg_df = pd.DataFrame(_cv_pe_chg_hist) if _cv_pe_chg_hist else None
+
+            _cv_strikes = sorted(getattr(st.session_state, 'call_put_oi_current_strikes', []))
+            if not _cv_strikes:
+                _cv_strikes = sorted(getattr(st.session_state, 'pcr_current_strikes', []))
+
+            _cv_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
+
+            # ── Row 1: Call Volume vs Put Volume per strike ──
+            _cv_vol_cols = st.columns(5)
+            for _vi, _vcol in enumerate(_cv_vol_cols):
+                with _vcol:
+                    if _vi >= len(_cv_strikes):
+                        st.info(f"{_cv_pos_labels[_vi]} N/A")
+                        continue
+
+                    _cv_strike = _cv_strikes[_vi]
+                    _cv_sc = str(_cv_strike)
+
+                    _cv_fig = go.Figure()
+
+                    # CE Volume (solid red)
+                    if _cv_sc in _cv_ce_df.columns:
+                        _cv_fig.add_trace(go.Scatter(
+                            x=_cv_ce_df['time'], y=_cv_ce_df[_cv_sc],
+                            mode='lines+markers', name='Call Vol',
+                            line=dict(color='#ff4444', width=2),
+                            marker=dict(size=3),
+                        ))
+                    # PE Volume (solid green)
+                    if _cv_sc in _cv_pe_df.columns:
+                        _cv_fig.add_trace(go.Scatter(
+                            x=_cv_pe_df['time'], y=_cv_pe_df[_cv_sc],
+                            mode='lines+markers', name='Put Vol',
+                            line=dict(color='#00ff88', width=2, dash='dash'),
+                            marker=dict(size=3),
+                        ))
+
+                    # Dynamic Y range
+                    _cv_vals = []
+                    if _cv_sc in _cv_ce_df.columns:
+                        _cv_vals += _cv_ce_df[_cv_sc].dropna().tolist()
+                    if _cv_sc in _cv_pe_df.columns:
+                        _cv_vals += _cv_pe_df[_cv_sc].dropna().tolist()
+                    if _cv_vals:
+                        _cv_ymin = max(0, min(_cv_vals) * 0.9)
+                        _cv_ymax = max(_cv_vals) * 1.1
+                    else:
+                        _cv_ymin, _cv_ymax = 0, 100
+
+                    # Current value markers
+                    _cv_ce_cur = None
+                    _cv_pe_cur = None
+                    if _cv_sc in _cv_ce_df.columns and len(_cv_ce_df) > 0:
+                        _cv_ce_cur = _cv_ce_df[_cv_sc].iloc[-1]
+                        _cv_fig.add_trace(go.Scatter(
+                            x=[_cv_ce_df['time'].iloc[-1]], y=[_cv_ce_cur],
+                            mode='markers+text', text=[f'{_cv_ce_cur:,.0f}'],
+                            textposition='top right', textfont=dict(size=9, color='#ff4444'),
+                            marker=dict(size=9, color='#ff4444', symbol='circle'),
+                            showlegend=False, hoverinfo='skip',
+                        ))
+                    if _cv_sc in _cv_pe_df.columns and len(_cv_pe_df) > 0:
+                        _cv_pe_cur = _cv_pe_df[_cv_sc].iloc[-1]
+                        _cv_fig.add_trace(go.Scatter(
+                            x=[_cv_pe_df['time'].iloc[-1]], y=[_cv_pe_cur],
+                            mode='markers+text', text=[f'{_cv_pe_cur:,.0f}'],
+                            textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
+                            marker=dict(size=9, color='#00ff88', symbol='diamond'),
+                            showlegend=False, hoverinfo='skip',
+                        ))
+
+                    # Title with current values
+                    _cv_ce_str = f"CE: {_cv_ce_cur:,.0f}" if _cv_ce_cur is not None else "CE: --"
+                    _cv_pe_str = f"PE: {_cv_pe_cur:,.0f}" if _cv_pe_cur is not None else "PE: --"
+
+                    _cv_fig.update_layout(
+                        title=dict(text=f"{_cv_pos_labels[_vi]}<br>₹{_cv_strike}<br>{_cv_ce_str} | {_cv_pe_str}",
+                                   font=dict(size=11)),
+                        template='plotly_dark', height=300,
+                        showlegend=True,
+                        legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                                    xanchor='center', x=0.5, font=dict(size=8)),
+                        margin=dict(l=5, r=10, t=70, b=30),
+                        xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                        yaxis=dict(title='Volume', range=[_cv_ymin, _cv_ymax]),
+                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    )
+                    st.plotly_chart(_cv_fig, use_container_width=True)
+
+                    # Signal: which side dominates
+                    if _cv_ce_cur is not None and _cv_pe_cur is not None and _cv_ce_cur > 0:
+                        _cv_ratio = _cv_pe_cur / _cv_ce_cur
+                        _cv_sig = "🟢 Bull" if _cv_ratio > 1.2 else ("🔴 Bear" if _cv_ratio < 0.7 else "🟡 Ntrl")
+                        st.caption(f"PE/CE Vol {_cv_ratio:.2f} {_cv_sig}")
+                    else:
+                        st.caption("--")
+
+            # ── Row 2: CE ΔVol vs PE ΔVol per strike (Change in Volume) ──
+            if _cv_ce_chg_df is not None and _cv_pe_chg_df is not None and len(_cv_ce_chg_df) > 0:
+                st.markdown("### 📊 ATM ±2 Strike Comparison — CE ΔVol · PE ΔVol")
+                _cv_chg_cols = st.columns(5)
+                for _vi, _vcol in enumerate(_cv_chg_cols):
+                    with _vcol:
+                        if _vi >= len(_cv_strikes):
+                            st.info(f"{_cv_pos_labels[_vi]} N/A")
+                            continue
+
+                        _cv_strike = _cv_strikes[_vi]
+                        _cv_sc = str(_cv_strike)
+
+                        _cvchg_fig = go.Figure()
+
+                        # CE ΔVol (solid red)
+                        if _cv_sc in _cv_ce_chg_df.columns:
+                            _cvchg_fig.add_trace(go.Scatter(
+                                x=_cv_ce_chg_df['time'], y=_cv_ce_chg_df[_cv_sc],
+                                mode='lines+markers', name='CE ΔVol',
+                                line=dict(color='#ff4444', width=2),
+                                marker=dict(size=3),
+                            ))
+                        # PE ΔVol (solid green)
+                        if _cv_sc in _cv_pe_chg_df.columns:
+                            _cvchg_fig.add_trace(go.Scatter(
+                                x=_cv_pe_chg_df['time'], y=_cv_pe_chg_df[_cv_sc],
+                                mode='lines+markers', name='PE ΔVol',
+                                line=dict(color='#00ff88', width=2, dash='dash'),
+                                marker=dict(size=3),
+                            ))
+
+                        # Zero reference line
+                        _cvchg_fig.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.4)", line_width=1)
+
+                        # Dynamic Y range
+                        _cvchg_vals = []
+                        if _cv_sc in _cv_ce_chg_df.columns:
+                            _cvchg_vals += _cv_ce_chg_df[_cv_sc].dropna().tolist()
+                        if _cv_sc in _cv_pe_chg_df.columns:
+                            _cvchg_vals += _cv_pe_chg_df[_cv_sc].dropna().tolist()
+                        if _cvchg_vals:
+                            _cvchg_max_abs = max(abs(min(_cvchg_vals)), abs(max(_cvchg_vals)), 1)
+                            _cvchg_ymin = -_cvchg_max_abs * 1.1
+                            _cvchg_ymax = _cvchg_max_abs * 1.1
+                        else:
+                            _cvchg_ymin, _cvchg_ymax = -100, 100
+
+                        # Current value markers
+                        _cvchg_ce_cur = None
+                        _cvchg_pe_cur = None
+                        if _cv_sc in _cv_ce_chg_df.columns and len(_cv_ce_chg_df) > 0:
+                            _cvchg_ce_cur = _cv_ce_chg_df[_cv_sc].iloc[-1]
+                            _cvchg_fig.add_trace(go.Scatter(
+                                x=[_cv_ce_chg_df['time'].iloc[-1]], y=[_cvchg_ce_cur],
+                                mode='markers+text', text=[f'{_cvchg_ce_cur:+,.0f}'],
+                                textposition='top right', textfont=dict(size=9, color='#ff4444'),
+                                marker=dict(size=9, color='#ff4444', symbol='circle'),
+                                showlegend=False, hoverinfo='skip',
+                            ))
+                        if _cv_sc in _cv_pe_chg_df.columns and len(_cv_pe_chg_df) > 0:
+                            _cvchg_pe_cur = _cv_pe_chg_df[_cv_sc].iloc[-1]
+                            _cvchg_fig.add_trace(go.Scatter(
+                                x=[_cv_pe_chg_df['time'].iloc[-1]], y=[_cvchg_pe_cur],
+                                mode='markers+text', text=[f'{_cvchg_pe_cur:+,.0f}'],
+                                textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
+                                marker=dict(size=9, color='#00ff88', symbol='diamond'),
+                                showlegend=False, hoverinfo='skip',
+                            ))
+
+                        _cvchg_ce_s = f"CE: {_cvchg_ce_cur:+,.0f}" if _cvchg_ce_cur is not None else "CE: --"
+                        _cvchg_pe_s = f"PE: {_cvchg_pe_cur:+,.0f}" if _cvchg_pe_cur is not None else "PE: --"
+
+                        _cvchg_fig.update_layout(
+                            title=dict(text=f"{_cv_pos_labels[_vi]}<br>₹{_cv_strike}<br>{_cvchg_ce_s} | {_cvchg_pe_s}",
+                                       font=dict(size=11)),
+                            template='plotly_dark', height=300,
+                            showlegend=True,
+                            legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                                        xanchor='center', x=0.5, font=dict(size=8)),
+                            margin=dict(l=5, r=10, t=70, b=30),
+                            xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                            yaxis=dict(title='ΔVol', range=[_cvchg_ymin, _cvchg_ymax],
+                                       zeroline=True, zerolinecolor='white', zerolinewidth=1),
+                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        )
+                        st.plotly_chart(_cvchg_fig, use_container_width=True)
+
+                        # Signal: net change direction
+                        if _cvchg_ce_cur is not None and _cvchg_pe_cur is not None:
+                            _cvnet = _cvchg_pe_cur - _cvchg_ce_cur
+                            _cvchg_sig = "🟢 Bull" if _cvnet > 0 else ("🔴 Bear" if _cvnet < 0 else "🟡 Ntrl")
+                            st.caption(f"Net ΔVol {_cvnet:+,.0f} {_cvchg_sig}")
+                        else:
+                            st.caption("--")
+
+            # ── Volume Status ──
+            _cv_status = "🟢 Live" if pcr_data_available else "🟡 Using cached history"
+            st.caption(f"{_cv_status} | 📈 {len(_cv_ce_hist)} Call/Put Volume pts")
+
+        except Exception as _cv_err:
+            st.warning(f"Error displaying Call/Put Volume charts: {str(_cv_err)}")
+    else:
+        st.info("📊 Call/Put Volume history will build up as the app refreshes. Please wait for data collection…")
+
+    # ===== NIFTY PRICE CHANGE % — INTRADAY TRACKER =====
+    st.markdown("---")
+    st.markdown(f"## 📈 {index_name} Price Change % — Intraday Tracker")
+    _ph = mde.val('price_history', [])
+    if _ph and len(_ph) > 0:
+        try:
+            _ph_df = pd.DataFrame(_ph)
+            _ph_fig = go.Figure()
+
+            # Price Change % line
+            _ph_fig.add_trace(go.Scatter(
+                x=_ph_df['time'], y=_ph_df['change_pct'],
+                mode='lines+markers', name='Price Chg %',
+                line=dict(color='#00e676', width=2),
+                marker=dict(size=3),
+                fill='tozeroy',
+                fillcolor='rgba(0,230,118,0.1)',
+            ))
+
+            # Zero line
+            _ph_fig.add_hline(y=0, line_dash="solid", line_color="white", line_width=1)
+
+            # Day High / Day Low markers
+            _ph_day_high = mde.val('day_high')
+            _ph_day_low = mde.val('day_low')
+            _ph_day_open = mde.val('day_open', 0)
+            _ph_vwap = mde.val('vwap', 0)
+            if _ph_day_open and _ph_day_open > 0:
+                if _ph_day_high:
+                    _ph_high_pct = ((_ph_day_high - _ph_day_open) / _ph_day_open) * 100
+                    _ph_fig.add_hline(y=_ph_high_pct, line_dash="dot", line_color="#ff6600", line_width=1,
+                                      annotation_text=f"Day High {_ph_high_pct:+.2f}%", annotation_position="right",
+                                      annotation_font_size=9, annotation_font_color="#ff6600")
+                if _ph_day_low:
+                    _ph_low_pct = ((_ph_day_low - _ph_day_open) / _ph_day_open) * 100
+                    _ph_fig.add_hline(y=_ph_low_pct, line_dash="dot", line_color="#ff4444", line_width=1,
+                                      annotation_text=f"Day Low {_ph_low_pct:+.2f}%", annotation_position="right",
+                                      annotation_font_size=9, annotation_font_color="#ff4444")
+                if _ph_vwap and _ph_vwap > 0:
+                    _ph_vwap_pct = ((_ph_vwap - _ph_day_open) / _ph_day_open) * 100
+                    _ph_fig.add_hline(y=_ph_vwap_pct, line_dash="dash", line_color="#ffeb3b", line_width=1,
+                                      annotation_text=f"VWAP {_ph_vwap_pct:+.2f}%", annotation_position="left",
+                                      annotation_font_size=9, annotation_font_color="#ffeb3b")
+
+            # Current value marker
+            _ph_cur = _ph_df['change_pct'].iloc[-1]
+            _ph_fig.add_trace(go.Scatter(
+                x=[_ph_df['time'].iloc[-1]], y=[_ph_cur],
+                mode='markers+text', text=[f'{_ph_cur:+.2f}%'],
+                textposition='top right', textfont=dict(size=12, color='#00e676'),
+                marker=dict(size=12, color='#00e676', symbol='circle'),
+                showlegend=False, hoverinfo='skip',
+            ))
+
+            _ph_vals = _ph_df['change_pct'].dropna().tolist()
+            _ph_extras = [0]
+            if _ph_day_open and _ph_day_open > 0:
+                if _ph_day_high: _ph_extras.append((_ph_day_high - _ph_day_open) / _ph_day_open * 100)
+                if _ph_day_low: _ph_extras.append((_ph_day_low - _ph_day_open) / _ph_day_open * 100)
+            _ph_all = _ph_vals + _ph_extras
+            _ph_max_abs = max(abs(min(_ph_all)), abs(max(_ph_all)), 0.1)
+
+            _ph_fig.update_layout(
+                title=dict(text=f"Price Change: {_ph_cur:+.2f}% | Open: ₹{_ph_day_open:,.0f} | "
+                           f"Spot: ₹{mde.val('spot_price', 0):,.0f}",
+                           font=dict(size=13)),
+                template='plotly_dark', height=350,
+                showlegend=False,
+                margin=dict(l=10, r=10, t=60, b=30),
+                xaxis=dict(tickformat='%H:%M', title='Time'),
+                yaxis=dict(title='Price Change %',
+                           range=[-_ph_max_abs * 1.2, _ph_max_abs * 1.2],
+                           zeroline=True, zerolinecolor='white', zerolinewidth=1),
+                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+            )
+            st.plotly_chart(_ph_fig, use_container_width=True)
+
+            # Summary metrics
+            _ph_c1, _ph_c2, _ph_c3, _ph_c4 = st.columns(4)
+            _ph_c1.metric("Price Chg %", f"{_ph_cur:+.2f}%")
+            _ph_c2.metric("Day Open", f"₹{_ph_day_open:,.0f}" if _ph_day_open else "—")
+            _ph_c3.metric("Day Range", f"{(_ph_day_high or 0) - (_ph_day_low or 0):.0f} pts")
+            _ph_c4.metric("Data Points", f"{len(_ph)}")
+        except Exception as _ph_err:
+            st.warning(f"Price Change % error: {str(_ph_err)[:80]}")
+    else:
+        st.info("📈 Price history building up. Will show after first data point.")
+
+    # ===== OI POSITIONING TRACKER (ATM ±2) =====
+    st.markdown("---")
+    st.markdown("## 📊 OI Positioning Tracker — ATM ±2")
+    try:
+        _oi_df_summary = option_data.get('df_summary') if option_data else None
+        _oi_spot = underlying_price if 'underlying_price' in dir() and underlying_price else mde.val('spot_price', 0)
+        if _oi_df_summary is not None and 'Zone' in _oi_df_summary.columns and _oi_spot:
+            _oi_atm_idx = _oi_df_summary[_oi_df_summary['Zone'] == 'ATM'].index
+            if len(_oi_atm_idx) > 0:
+                _oi_atm_pos = _oi_df_summary.index.get_loc(_oi_atm_idx[0])
+                _oi_s = max(0, _oi_atm_pos - 2)
+                _oi_e = min(len(_oi_df_summary), _oi_atm_pos + 3)
+                _oi_slice = _oi_df_summary.iloc[_oi_s:_oi_e].copy()
+
+                # Price direction
+                _oi_prev_price = st.session_state.get('_oi_tracker_prev_price', _oi_spot)
+                _oi_price_up = _oi_spot >= _oi_prev_price
+                st.session_state['_oi_tracker_prev_price'] = _oi_spot
+
+                # Collect positioning data
+                ist = pytz.timezone('Asia/Kolkata')
+                _oi_now = datetime.now(ist)
+                _oi_entry = {'time': _oi_now, 'price': _oi_spot, 'price_up': _oi_price_up}
+                _oi_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
+
+                _oi_rows = []
+                for _oi_i, (_, _oi_row) in enumerate(_oi_slice.iterrows()):
+                    strike = int(_oi_row['Strike'])
+                    ce_chg = _oi_row.get('changeinOpenInterest_CE', 0) or 0
+                    pe_chg = _oi_row.get('changeinOpenInterest_PE', 0) or 0
+                    ce_oi = _oi_row.get('openInterest_CE', 0) or 0
+                    pe_oi = _oi_row.get('openInterest_PE', 0) or 0
+
+                    ce_buildup = classify_oi_buildup(_oi_price_up, ce_chg)
+                    pe_buildup = classify_oi_buildup(_oi_price_up, pe_chg)
+
+                    zone = _oi_pos_labels[_oi_i] if _oi_i < len(_oi_pos_labels) else f"Strike"
+                    _oi_rows.append({
+                        'Strike': f"₹{strike}",
+                        'Zone': zone,
+                        'CE OI': f"{ce_oi:,.0f}",
+                        'CE ΔOI': f"{ce_chg:+,.0f}",
+                        'CE Build-up': ce_buildup,
+                        'PE OI': f"{pe_oi:,.0f}",
+                        'PE ΔOI': f"{pe_chg:+,.0f}",
+                        'PE Build-up': pe_buildup,
+                    })
+                    _oi_entry[f'ce_chg_{strike}'] = ce_chg
+                    _oi_entry[f'pe_chg_{strike}'] = pe_chg
+
+                # Add to history
+                _oi_should_add = True
+                if st.session_state.oi_positioning_history:
+                    _oi_last = st.session_state.oi_positioning_history[-1]
+                    if (_oi_now - _to_ist(_oi_last['time'])).total_seconds() < 30:
+                        _oi_should_add = False
+                if _oi_should_add:
+                    st.session_state.oi_positioning_history.append(_oi_entry)
+                    if len(st.session_state.oi_positioning_history) > 200:
+                        st.session_state.oi_positioning_history = st.session_state.oi_positioning_history[-200:]
+                    db.save_option_history('oi_positioning_history', _oi_entry)
+
+                # Display table
+                _oi_tbl = pd.DataFrame(_oi_rows)
+                st.dataframe(_oi_tbl, use_container_width=True, hide_index=True)
+
+                _oi_dir = "↑" if _oi_price_up else "↓"
+                st.caption(f"Price {_oi_dir} ₹{_oi_spot:.0f} | "
+                           f"🟢 Long Build-up  🔴 Short Build-up  🟡 Short Covering  🟠 Long Unwinding")
+            else:
+                st.info("ATM strike not found in current data.")
+        else:
+            st.info("Option data not available for OI positioning.")
+    except Exception as _oi_err:
+        st.warning(f"OI Positioning error: {str(_oi_err)[:80]}")
+
+    # ===== SMART MONEY TRAP DETECTION ENGINE =====
+    st.markdown("---")
+    st.markdown("## 🚨 Smart Money Trap Detection Engine")
+    try:
+        _traps = run_smart_money_trap_detection(mde)
+        if _traps:
+            for _trap in _traps:
+                _trap_clr = '#ff4444' if _trap['probability'] > 70 else ('#ffaa00' if _trap['probability'] > 50 else '#00aaff')
+                st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid {_trap_clr};margin-bottom:8px'>
+                <div style='font-size:16px;font-weight:bold;color:{_trap_clr}'>{_trap['type']} — {_trap['probability']}% probability</div>
+                <div style='color:#ccc;font-size:13px;margin-top:4px'>{_trap['detail']}</div>
+                <div style='color:#888;font-size:11px;margin-top:2px'>Level: ₹{_trap['level']:,.0f}</div>
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.success("No active traps detected. Market appears clean.")
+    except Exception as _trap_err:
+        st.warning(f"Trap Detection error: {str(_trap_err)[:80]}")
+
+    # ===== MARKET REGIME DETECTION ENGINE =====
+    st.markdown("---")
+    st.markdown("## 📊 Market Regime Detection Engine")
+    try:
+        _regime = detect_market_regime(mde)
+        _reg_c1, _reg_c2, _reg_c3 = st.columns([2, 1, 1])
+        with _reg_c1:
+            st.markdown(f"""<div style='background:#1e1e1e;padding:16px;border-radius:8px;border-left:5px solid {_regime['color']}'>
+            <div style='color:#aaa;font-size:11px'>CURRENT REGIME</div>
+            <div style='font-size:26px;font-weight:bold;color:{_regime['color']}'>{_regime['regime']}</div>
+            <div style='color:#ccc;font-size:13px'>Confidence: {_regime['confidence']}%</div>
+            </div>""", unsafe_allow_html=True)
+        with _reg_c2:
+            st.markdown("**Factors:**")
+            for _rd in _regime.get('details', [])[:5]:
+                st.caption(f"• {_rd}")
+        with _reg_c3:
+            _rsc = _regime.get('scores', {})
+            if _rsc:
+                _rsc_sorted = sorted(_rsc.items(), key=lambda x: x[1], reverse=True)[:3]
+                st.markdown("**Top Scores:**")
+                for _rn, _rv in _rsc_sorted:
+                    st.caption(f"{_rn}: {_rv}")
+    except Exception as _reg_err:
+        st.warning(f"Regime Detection error: {str(_reg_err)[:80]}")
+
+    # ===== PRICE TARGET PROJECTION ENGINE =====
+    st.markdown("---")
+    st.markdown("## 🎯 Price Target Projection Engine — Intraday")
+    try:
+        _tgt = project_price_targets(mde)
+        _tgt_spot = mde.val('spot_price', 0) or 0
+        _tgt_cols = st.columns(5)
+        _tgt_items = [
+            ("🧲 Magnet", _tgt.get('magnet'), '#ffeb3b'),
+            ("🟢 Upside T1", _tgt.get('upside_t1'), '#00e676'),
+            ("🟢 Upside T2", _tgt.get('upside_t2'), '#00cc66'),
+            ("🔴 Downside T1", _tgt.get('downside_t1'), '#ff4444'),
+            ("🔴 Downside T2", _tgt.get('downside_t2'), '#ff6666'),
+        ]
+        for _tc, (_tl, _tv, _tclr) in zip(_tgt_cols, _tgt_items):
+            with _tc:
+                if _tv:
+                    _tdist = ((_tv - _tgt_spot) / _tgt_spot * 100) if _tgt_spot else 0
+                    st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid {_tclr};text-align:center'>
+                    <div style='color:#aaa;font-size:10px'>{_tl}</div>
+                    <div style='font-size:22px;font-weight:bold;color:{_tclr}'>₹{_tv:,.0f}</div>
+                    <div style='color:#ccc;font-size:11px'>{_tdist:+.2f}%</div>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;text-align:center'>
+                    <div style='color:#aaa;font-size:10px'>{_tl}</div>
+                    <div style='font-size:22px;color:#555'>—</div>
+                    </div>""", unsafe_allow_html=True)
+        # Acceleration zones
+        _acc_up = _tgt.get('acceleration_up')
+        _acc_dn = _tgt.get('acceleration_down')
+        if _acc_up or _acc_dn:
+            _acc_parts = []
+            if _acc_up: _acc_parts.append(f"⚡ Acceleration UP above ₹{_acc_up:,.0f}")
+            if _acc_dn: _acc_parts.append(f"⚡ Acceleration DOWN below ₹{_acc_dn:,.0f}")
+            st.caption(" | ".join(_acc_parts))
+        for _td in _tgt.get('details', []):
+            st.caption(f"• {_td}")
+    except Exception as _tgt_err:
+        st.warning(f"Price Target error: {str(_tgt_err)[:80]}")
+
+    # ===== SUPPORT/RESISTANCE REACTION ENGINE =====
+    st.markdown("---")
+    st.markdown("## ⚡ Support / Resistance Reaction Engine")
+    try:
+        _sr_reactions = detect_sr_reactions(mde)
+        if _sr_reactions:
+            _sr_rows = []
+            for _sr in _sr_reactions:
+                _sr_emoji = "🟢" if _sr['reaction'] == 'Bounce' else "🔴"
+                _sr_rows.append({
+                    'Level': f"₹{_sr['level']:,.0f}",
+                    'Type': _sr['type'],
+                    'Source': _sr['source'],
+                    'Distance': f"{_sr['distance_pct']:+.3f}%",
+                    'Bounce %': f"{_sr['bounce_prob']}%",
+                    'Breakdown %': f"{_sr['breakdown_prob']}%",
+                    'Reaction': f"{_sr_emoji} {_sr['reaction']}",
+                })
+            st.dataframe(pd.DataFrame(_sr_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("No S/R levels within proximity (0.3%). Price is in open space.")
+    except Exception as _sr_err:
+        st.warning(f"S/R Reaction error: {str(_sr_err)[:80]}")
+
+    # ===== DEALER HEDGING PRESSURE MAP =====
+    st.markdown("---")
+    st.markdown("## 📊 Dealer Hedging Pressure Map")
+    try:
+        _dhm = compute_dealer_hedging_map(mde)
+        _dhm_c1, _dhm_c2, _dhm_c3 = st.columns(3)
+        with _dhm_c1:
+            _pin = _dhm.get('pin_zone')
+            st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid #ffeb3b;text-align:center'>
+            <div style='color:#aaa;font-size:10px'>📍 PIN ZONE (Max GEX Magnet)</div>
+            <div style='font-size:22px;font-weight:bold;color:#ffeb3b'>{"₹" + f"{_pin:,.0f}" if _pin else "—"}</div>
+            </div>""", unsafe_allow_html=True)
+        with _dhm_c2:
+            _gf = _dhm.get('gamma_flip')
+            st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid #ff44ff;text-align:center'>
+            <div style='color:#aaa;font-size:10px'>⚡ GAMMA FLIP LEVEL</div>
+            <div style='font-size:22px;font-weight:bold;color:#ff44ff'>{"₹" + f"{_gf:,.0f}" if _gf else "—"}</div>
+            </div>""", unsafe_allow_html=True)
+        with _dhm_c3:
+            _ctrl_count = len(_dhm.get('control_zone', []))
+            _accel_count = len(_dhm.get('acceleration_zone', []))
+            st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid #00aaff;text-align:center'>
+            <div style='color:#aaa;font-size:10px'>ZONE COUNT</div>
+            <div style='font-size:16px;color:#00aaff'>🟢 Control: {_ctrl_count} strikes</div>
+            <div style='font-size:16px;color:#ff6600'>🔴 Accel: {_accel_count} strikes</div>
+            </div>""", unsafe_allow_html=True)
+
+        # Show top control and acceleration zones
+        _dhm_c4, _dhm_c5 = st.columns(2)
+        with _dhm_c4:
+            _ctrl = sorted(_dhm.get('control_zone', []), key=lambda x: x['gex'], reverse=True)[:5]
+            if _ctrl:
+                st.markdown("**🟢 Dealer Control Zones (Price Pin)**")
+                for _z in _ctrl:
+                    st.caption(f"₹{_z['strike']:,} — GEX: {_z['gex']:+,.0f}")
+        with _dhm_c5:
+            _accel = sorted(_dhm.get('acceleration_zone', []), key=lambda x: x['gex'])[:5]
+            if _accel:
+                st.markdown("**🔴 Acceleration Zones (Volatile)**")
+                for _z in _accel:
+                    st.caption(f"₹{_z['strike']:,} — GEX: {_z['gex']:+,.0f}")
+    except Exception as _dhm_err:
+        st.warning(f"Dealer Hedging Map error: {str(_dhm_err)[:80]}")
+
+    # ===== SPOT OI PRESSURE ANALYSIS ENGINE =====
+    st.markdown("---")
+    st.markdown("## 🎯 Spot OI Pressure Analysis")
+    try:
+        _sop = compute_spot_oi_pressure(mde)
+        _sop_LOT = 100000
+        if _sop.get('from_history'):
+            st.caption("Using last known data from Supabase history (live data unavailable)")
+
+        # Row 1 — Market Control + OI Shift + Breakout Probability
+        _sop_c1, _sop_c2, _sop_c3 = st.columns(3)
+
+        _mc_score = _sop['market_control_score']
+        _mc_clr = '#00ff88' if _mc_score > 20 else ('#ff4444' if _mc_score < -20 else '#FFD700')
+        with _sop_c1:
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_mc_clr}'>
+            <span style='font-size:0.75em;color:#888;text-transform:uppercase'>MARKET CONTROL</span><br>
+            <span style='font-size:1.1em;font-weight:bold;color:{_mc_clr}'>{_sop['market_control']}</span><br>
+            <span style='font-size:0.8em;color:#666'>Score: {int(_mc_score):+d} | Bias: {_sop['spot_oi_bias']/_sop_LOT:+.2f}L</span>
+            </div>""", unsafe_allow_html=True)
+
+        _shift_clr_map = {'Long Build-up': '#00ff88', 'Short Build-up': '#ff4444',
+                          'Short Covering': '#FFD700', 'Long Unwinding': '#ff8800'}
+        _shift_clr = _shift_clr_map.get(_sop['oi_shift'], '#888')
+        _shift_emoji = {'Long Build-up': '🟢', 'Short Build-up': '🔴',
+                        'Short Covering': '🟡', 'Long Unwinding': '🟠'}.get(_sop['oi_shift'], '⚪')
+        with _sop_c2:
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_shift_clr}'>
+            <span style='font-size:0.75em;color:#888;text-transform:uppercase'>OI POSITION SHIFT</span><br>
+            <span style='font-size:1.1em;font-weight:bold;color:{_shift_clr}'>{_shift_emoji} {_sop['oi_shift']}</span><br>
+            <span style='font-size:0.8em;color:#666'>{_sop['oi_shift_detail']}</span>
+            </div>""", unsafe_allow_html=True)
+
+        _bo_prob = _sop['breakout_probability']
+        _bo_clr = '#ff4444' if _bo_prob >= 60 else ('#FFD700' if _bo_prob >= 30 else '#00aaff')
+        _bo_dir = _sop['breakout_direction']
+        _bo_arrow = '⬆️' if _bo_dir == 'Upside' else ('⬇️' if _bo_dir == 'Downside' else '↔️')
+        with _sop_c3:
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_bo_clr}'>
+            <span style='font-size:0.75em;color:#888;text-transform:uppercase'>BREAKOUT PROBABILITY</span><br>
+            <span style='font-size:1.1em;font-weight:bold;color:{_bo_clr}'>{_bo_prob}% {_bo_arrow} {_bo_dir}</span><br>
+            <span style='font-size:0.8em;color:#666'>{"High alert!" if _bo_prob >= 60 else "Moderate" if _bo_prob >= 30 else "Low probability"}</span>
+            </div>""", unsafe_allow_html=True)
+
+        st.markdown("")
+
+        # Row 2 — Spot Zone OI Summary
+        _sop_r2c1, _sop_r2c2 = st.columns(2)
+        with _sop_r2c1:
+            st.markdown("#### 🟢 Spot Support Strength")
+            st.progress(min(_sop['support_strength'] / 10.0, 1.0),
+                        text=f"Score: {_sop['support_strength']}/10")
+            st.caption(f"Spot PE OI: {_sop['spot_put_oi']/_sop_LOT:.2f}L | "
+                       f"PE ΔOI: {_sop['spot_put_change']/_sop_LOT:+.2f}L")
+        with _sop_r2c2:
+            st.markdown("#### 🔴 Spot Resistance Strength")
+            st.progress(min(_sop['resistance_strength'] / 10.0, 1.0),
+                        text=f"Score: {_sop['resistance_strength']}/10")
+            st.caption(f"Spot CE OI: {_sop['spot_call_oi']/_sop_LOT:.2f}L | "
+                       f"CE ΔOI: {_sop['spot_call_change']/_sop_LOT:+.2f}L")
+
+        # Row 3 — Spot OI Trend Graph (bar chart)
+        _sop_trend = _sop.get('spot_oi_trend', [])
+        if _sop_trend:
+            st.markdown("#### 📊 Spot Zone OI Distribution (ATM ± 2)")
+            _sop_trend_df = pd.DataFrame(_sop_trend)
+            _sop_trend_df['Strike'] = _sop_trend_df['Strike'].astype(str)
+
+            _sop_fig = go.Figure()
+            _sop_fig.add_trace(go.Bar(
+                x=_sop_trend_df['Strike'], y=_sop_trend_df['CE_OI'],
+                name='CE OI (L)', marker_color='#ff4444', opacity=0.7))
+            _sop_fig.add_trace(go.Bar(
+                x=_sop_trend_df['Strike'], y=_sop_trend_df['PE_OI'],
+                name='PE OI (L)', marker_color='#00ff88', opacity=0.7))
+            _sop_fig.add_trace(go.Bar(
+                x=_sop_trend_df['Strike'], y=_sop_trend_df['CE_Change'],
+                name='CE ΔOI (L)', marker_color='#ff8888', opacity=0.5))
+            _sop_fig.add_trace(go.Bar(
+                x=_sop_trend_df['Strike'], y=_sop_trend_df['PE_Change'],
+                name='PE ΔOI (L)', marker_color='#88ffaa', opacity=0.5))
+            _sop_fig.update_layout(
+                barmode='group', height=320,
+                paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                font=dict(color='#ccc'),
+                legend=dict(orientation='h', y=-0.15),
+                margin=dict(l=40, r=20, t=30, b=40),
+                xaxis_title='Strike', yaxis_title='OI (Lakhs)')
+            st.plotly_chart(_sop_fig, use_container_width=True)
+
+        # Row 4 — Institutional Activity + Smart Money Entries
+        _sop_r4c1, _sop_r4c2 = st.columns(2)
+        with _sop_r4c1:
+            st.markdown("#### 🏦 Institutional Activity")
+            _ia_score = _sop['institutional_activity_score']
+            _ia_clr = '#00ff88' if _ia_score > 2 else ('#ff4444' if _ia_score < -2 else '#FFD700')
+            st.markdown(f"**Bias:** <span style='color:{_ia_clr}'>{_sop['institutional_bias']}</span> "
+                        f"(Score: {int(_ia_score):+d})", unsafe_allow_html=True)
+            for _sig in _sop.get('institutional_signals', [])[:5]:
+                st.caption(f"• {_sig}")
+            if not _sop.get('institutional_signals'):
+                st.caption("• No significant institutional activity detected")
+
+        with _sop_r4c2:
+            st.markdown("#### 💰 Smart Money Entries")
+            _sm_entries = _sop.get('smart_money_entries', [])
+            if _sm_entries:
+                for _sm in _sm_entries[:5]:
+                    _sm_clr = '#00ff88' if _sm['signal'] == 'Bullish' else '#ff4444'
+                    _sm_emoji = '🟢' if _sm['signal'] == 'Bullish' else '🔴'
+                    st.markdown(f"<div style='background:#1a1a2e;padding:6px 10px;border-radius:4px;margin-bottom:4px;"
+                                f"border-left:3px solid {_sm_clr};font-size:0.85em'>"
+                                f"{_sm_emoji} <b>{_sm['action']}</b> ({_sm['signal']})<br>"
+                                f"<span style='color:#999'>{_sm['detail']}</span></div>",
+                                unsafe_allow_html=True)
+            else:
+                st.caption("• No smart money entries detected in spot zone")
+
+        # Row 5 — Gamma Wall + Liquidity Traps + Expiry Manipulation
+        _sop_r5c1, _sop_r5c2, _sop_r5c3 = st.columns(3)
+        with _sop_r5c1:
+            st.markdown("#### ⚡ Spot Gamma Wall")
+            _gw = _sop.get('gamma_wall')
+            if _gw:
+                _gw_clr = '#ffeb3b' if 'Pin' in _sop['gamma_wall_type'] else '#ff6600'
+                st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                border-left:3px solid {_gw_clr};text-align:center'>
+                <div style='font-size:22px;font-weight:bold;color:{_gw_clr}'>₹{_gw:,}</div>
+                <div style='font-size:0.8em;color:#aaa'>{_sop['gamma_wall_type']}</div>
+                </div>""", unsafe_allow_html=True)
+            else:
+                st.caption("No dominant gamma wall in spot zone")
+
+        with _sop_r5c2:
+            st.markdown("#### 🪤 Liquidity Traps")
+            _lt = _sop.get('liquidity_traps', [])
+            if _lt:
+                for _trap in _lt:
+                    _lt_clr = '#ff4444' if _trap['severity'] == 'High' else '#FFD700'
+                    st.markdown(f"<div style='border-left:3px solid {_lt_clr};padding:4px 8px;margin-bottom:4px'>"
+                                f"<b style='color:{_lt_clr}'>{_trap['type']}</b><br>"
+                                f"<span style='color:#999;font-size:0.8em'>{_trap['detail']}</span></div>",
+                                unsafe_allow_html=True)
+            else:
+                st.caption("No liquidity traps detected")
+
+        with _sop_r5c3:
+            st.markdown("#### 📅 Expiry Manipulation")
+            _em = _sop.get('expiry_manipulation', {})
+            if _em.get('detected'):
+                st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                border-left:3px solid #ff44ff'>
+                <div style='font-size:14px;font-weight:bold;color:#ff44ff'>⚠️ Detected</div>
+                <div style='font-size:0.8em;color:#ccc;margin-top:4px'>{_em['details']}</div>
+                </div>""", unsafe_allow_html=True)
+            else:
+                st.caption("No expiry manipulation signals")
+
+        # Row 6 — OI Cluster Shift Detection
+        _ocs = _sop.get('oi_cluster_shift', {})
+        if _ocs.get('detected'):
+            _ocs_clr = '#00ff88' if 'STRONG TREND' in _ocs.get('detail', '') else '#FFD700'
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;
+            border-left:4px solid {_ocs_clr};margin-top:8px'>
+            <span style='font-size:0.85em;color:#aaa'>🔄 OI CLUSTER SHIFT — {_ocs['direction']}</span><br>
+            <span style='font-size:0.95em;color:{_ocs_clr}'>{_ocs['detail']}</span>
+            </div>""", unsafe_allow_html=True)
+
+        # Breakout signals detail
+        _bo_sigs = _sop.get('breakout_signals', [])
+        if _bo_sigs:
+            with st.expander("📈 Breakout Signal Details"):
+                for _bs in _bo_sigs:
+                    st.caption(f"• {_bs}")
+
+    except Exception as _sop_err:
+        st.warning(f"Spot OI Pressure error: {str(_sop_err)[:80]}")
+
+    # ===== OI / DEPTH HISTORICAL TIMELINE =====
+    st.markdown("---")
+    st.markdown("## 📅 OI Timeline — Building vs Breaking (5m → 3h)")
+    try:
+        _tl = compute_oi_depth_timeline(mde)
+        _tl_wins = _tl.get('windows', [])
+        _tl_available = [w for w in _tl_wins if w.get('available')]
+
+        if _tl_available:
+            # Trend Summary
+            _tl_dir = _tl.get('trend_direction', 'Neutral')
+            _tl_clr = '#00ff88' if _tl_dir == 'Bullish' else ('#ff4444' if _tl_dir == 'Bearish' else '#FFD700')
+            _tl_emoji = '🟢' if _tl_dir == 'Bullish' else ('🔴' if _tl_dir == 'Bearish' else '⚪')
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_tl_clr};margin-bottom:12px'>
+            <span style='font-size:0.75em;color:#888;text-transform:uppercase'>TREND ACROSS TIMEFRAMES</span><br>
+            <span style='font-size:1.2em;font-weight:bold;color:{_tl_clr}'>{_tl_emoji} {_tl['trend_summary']}</span>
+            </div>""", unsafe_allow_html=True)
+
+            # Timeline table
+            _tl_rows = []
+            LOT = 100000
+            for w in _tl_wins:
+                if w.get('available'):
+                    _w_clr_map = {'Bullish': '🟢', 'Bearish': '🔴', 'Neutral': '⚪'}
+                    _tl_rows.append({
+                        'Window': w['window'],
+                        'CE OI Δ': f"{w['ce_oi_change']/LOT:+.2f}L",
+                        'CE %': f"{w['ce_oi_pct']:+.1f}%",
+                        'PE OI Δ': f"{w['pe_oi_change']/LOT:+.2f}L",
+                        'PE %': f"{w['pe_oi_pct']:+.1f}%",
+                        'Signal': f"{_w_clr_map.get(w.get('type', ''), '⚪')} {w['signal']}",
+                    })
+                else:
+                    _tl_rows.append({
+                        'Window': w['window'],
+                        'CE OI Δ': '—', 'CE %': '—',
+                        'PE OI Δ': '—', 'PE %': '—',
+                        'Signal': '⏳ No data yet',
+                    })
+
+            st.dataframe(pd.DataFrame(_tl_rows), use_container_width=True, hide_index=True)
+            st.caption("Compares current ATM ± 2 OI with historical snapshots. "
+                       "Data accumulates over the session — more windows become available over time.")
+        else:
+            st.info("📊 Timeline data accumulates over the session. "
+                    "5m, 15m, 30m, 1h, 2h, 3h comparisons will appear as data builds up.")
+
+    except Exception as _tl_err:
+        st.warning(f"OI Timeline error: {str(_tl_err)[:80]}")
+
+    # ===== MARKET DEPTH SPOT PRESSURE ANALYSIS =====
+    st.markdown("---")
+    st.markdown("## 📊 Market Depth Spot Pressure — Call vs Put")
+    try:
+        _mdp = compute_market_depth_spot_pressure(mde)
+        _mdp_has_data = (_mdp['call_liquidity_total'] + _mdp['put_liquidity_total']) > 0
+        if _mdp.get('from_history'):
+            st.caption("Using last known depth data from Supabase history (live data unavailable)")
+
+        if _mdp_has_data:
+            # Row 1 — Liquidity Control + Depth Bias + Liquidity Shift
+            _mdp_c1, _mdp_c2, _mdp_c3 = st.columns(3)
+
+            _lc = _mdp['liquidity_control']
+            _lc_clr = '#00ff88' if 'Bullish' in _lc else ('#ff4444' if 'Bearish' in _lc else '#FFD700')
+            with _mdp_c1:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_lc_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>LIQUIDITY CONTROL</span><br>
+                <span style='font-size:1.1em;font-weight:bold;color:{_lc_clr}'>{_lc}</span><br>
+                <span style='font-size:0.8em;color:#666'>Pressure Score: {int(_mdp['depth_pressure_score']):+d}</span>
+                </div>""", unsafe_allow_html=True)
+
+            _db_lbl = _mdp['depth_bias_label']
+            _db_clr = '#00ff88' if 'Bullish' in _db_lbl else ('#ff4444' if 'Bearish' in _db_lbl else '#FFD700')
+            with _mdp_c2:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_db_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>DEPTH BIAS (PUT − CALL)</span><br>
+                <span style='font-size:1.1em;font-weight:bold;color:{_db_clr}'>{_db_lbl}</span><br>
+                <span style='font-size:0.8em;color:#666'>CE: {_mdp['call_liquidity_total']:,.0f} | PE: {_mdp['put_liquidity_total']:,.0f}</span>
+                </div>""", unsafe_allow_html=True)
+
+            _ls = _mdp['liquidity_shift']
+            _ls_clr = '#00ff88' if 'Bullish' in _ls else ('#ff4444' if 'Bearish' in _ls else '#ff8800')
+            _ls_emoji = '✅' if 'Confirmation' in _ls else '⚠️'
+            with _mdp_c3:
+                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_ls_clr}'>
+                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>LIQUIDITY SHIFT</span><br>
+                <span style='font-size:1.1em;font-weight:bold;color:{_ls_clr}'>{_ls_emoji} {_ls}</span><br>
+                <span style='font-size:0.8em;color:#666'>{_mdp['liquidity_shift_detail']}</span>
+                </div>""", unsafe_allow_html=True)
+
+            st.markdown("")
+
+            # Row 2 — Support / Resistance Strength
+            _mdp_r2c1, _mdp_r2c2 = st.columns(2)
+            with _mdp_r2c1:
+                st.markdown("#### 🟢 Depth Support Strength")
+                st.progress(min(_mdp['support_strength'] / 10.0, 1.0),
+                            text=f"Score: {_mdp['support_strength']}/10")
+                st.caption(f"PE Bid: {_mdp['spot_put_bid']:,.0f} | PE Ask: {_mdp['spot_put_ask']:,.0f} | "
+                           f"CE Bid: {_mdp['spot_call_bid']:,.0f}")
+            with _mdp_r2c2:
+                st.markdown("#### 🔴 Depth Resistance Strength")
+                st.progress(min(_mdp['resistance_strength'] / 10.0, 1.0),
+                            text=f"Score: {_mdp['resistance_strength']}/10")
+                st.caption(f"CE Ask: {_mdp['spot_call_ask']:,.0f} | CE Bid: {_mdp['spot_call_bid']:,.0f} | "
+                           f"PE Ask: {_mdp['spot_put_ask']:,.0f}")
+
+            # Row 3 — Market Depth Heatmap (Bid/Ask bar chart)
+            _mdp_depth = _mdp.get('spot_depth_data', [])
+            if _mdp_depth:
+                st.markdown("#### 🗺️ Market Depth Heatmap (ATM ± 2)")
+                _mdp_df = pd.DataFrame(_mdp_depth)
+                _mdp_df['Strike'] = _mdp_df['Strike'].astype(str)
+
+                _mdp_fig = go.Figure()
+                _mdp_fig.add_trace(go.Bar(
+                    x=_mdp_df['Strike'], y=_mdp_df['CE_Bid'],
+                    name='CE Bid', marker_color='#ff8888', opacity=0.6))
+                _mdp_fig.add_trace(go.Bar(
+                    x=_mdp_df['Strike'], y=_mdp_df['CE_Ask'],
+                    name='CE Ask', marker_color='#ff4444', opacity=0.8))
+                _mdp_fig.add_trace(go.Bar(
+                    x=_mdp_df['Strike'], y=_mdp_df['PE_Bid'],
+                    name='PE Bid', marker_color='#88ffaa', opacity=0.6))
+                _mdp_fig.add_trace(go.Bar(
+                    x=_mdp_df['Strike'], y=_mdp_df['PE_Ask'],
+                    name='PE Ask', marker_color='#00ff88', opacity=0.8))
+                _mdp_fig.update_layout(
+                    barmode='group', height=320,
+                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                    font=dict(color='#ccc'),
+                    legend=dict(orientation='h', y=-0.15),
+                    margin=dict(l=40, r=20, t=30, b=40),
+                    xaxis_title='Strike', yaxis_title='Quantity')
+                st.plotly_chart(_mdp_fig, use_container_width=True)
+
+            # Row 4 — Institutional Walls + Institutional Control
+            _mdp_r4c1, _mdp_r4c2, _mdp_r4c3 = st.columns(3)
+            with _mdp_r4c1:
+                st.markdown("#### 🧱 Support Wall")
+                _sw = _mdp.get('support_wall')
+                if _sw:
+                    _sw_clr = '#00ff88' if _sw['strength'] == 'Strong' else '#00cc66'
+                    st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                    border-left:3px solid {_sw_clr};text-align:center'>
+                    <div style='font-size:20px;font-weight:bold;color:{_sw_clr}'>₹{_sw['strike']:,}</div>
+                    <div style='font-size:0.8em;color:#aaa'>PE Bid: {_sw['qty']:,.0f} ({_sw['strength']})</div>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.caption("No significant bid wall detected")
+
+            with _mdp_r4c2:
+                st.markdown("#### 🧱 Resistance Wall")
+                _rw = _mdp.get('resistance_wall')
+                if _rw:
+                    _rw_clr = '#ff4444' if _rw['strength'] == 'Strong' else '#ff6666'
+                    st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                    border-left:3px solid {_rw_clr};text-align:center'>
+                    <div style='font-size:20px;font-weight:bold;color:{_rw_clr}'>₹{_rw['strike']:,}</div>
+                    <div style='font-size:0.8em;color:#aaa'>CE Ask: {_rw['qty']:,.0f} ({_rw['strength']})</div>
+                    </div>""", unsafe_allow_html=True)
+                else:
+                    st.caption("No significant ask wall detected")
+
+            with _mdp_r4c3:
+                st.markdown("#### 🏛️ Institutional Control")
+                _ic = _mdp['institutional_control']
+                _ic_clr = '#00ff88' if 'Bullish' in _ic else ('#ff4444' if 'Bearish' in _ic else '#888')
+                st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
+                border-left:3px solid {_ic_clr};text-align:center'>
+                <div style='font-size:14px;font-weight:bold;color:{_ic_clr}'>{_ic}</div>
+                <div style='font-size:0.8em;color:#aaa;margin-top:4px'>Wall Score: {_mdp['wall_score']}</div>
+                </div>""", unsafe_allow_html=True)
+
+            # Row 5 — Spoofing Alerts
+            _spoof = _mdp.get('spoofing_alerts', [])
+            if _spoof:
+                st.markdown("#### ⚠️ Spoofing / Fake Liquidity Alerts")
+                for _sa in _spoof:
+                    _sa_clr = '#ff4444' if _sa['severity'] == 'High' else '#FFD700'
+                    st.markdown(f"""<div style='background:#1a1a2e;padding:8px 12px;border-radius:4px;
+                    border-left:3px solid {_sa_clr};margin-bottom:4px'>
+                    <span style='color:{_sa_clr};font-weight:bold'>⚠️ {_sa['side']}</span> — {_sa['detail']}
+                    </div>""", unsafe_allow_html=True)
+
+            # Row 6 — OI + Depth Confluence (most powerful signals)
+            _conf = _mdp.get('oi_depth_confluence', [])
+            if _conf:
+                st.markdown("#### 🔗 OI + Depth Confluence (High-Confidence Signals)")
+                for _cf in _conf:
+                    _cf_clr = '#00ff88' if _cf['type'] == 'Bullish' else ('#ff4444' if _cf['type'] == 'Bearish' else '#FFD700')
+                    _cf_emoji = '🟢' if _cf['type'] == 'Bullish' else ('🔴' if _cf['type'] == 'Bearish' else '🟡')
+                    st.markdown(f"""<div style='background:#111827;padding:12px;border-radius:8px;
+                    border-left:4px solid {_cf_clr};margin-bottom:6px'>
+                    <div style='font-size:15px;font-weight:bold;color:{_cf_clr}'>{_cf_emoji} {_cf['signal']}</div>
+                    <div style='font-size:0.85em;color:#ccc;margin-top:4px'>{_cf['detail']}</div>
+                    </div>""", unsafe_allow_html=True)
+
+            # Liquidity signals detail
+            _liq_sigs = _mdp.get('liquidity_signals', [])
+            if _liq_sigs:
+                with st.expander("📋 Liquidity Signal Details"):
+                    for _ls_item in _liq_sigs:
+                        st.caption(f"• {_ls_item}")
+        else:
+            st.info("Bid/Ask depth data not available in current option chain.")
+
+    except Exception as _mdp_err:
+        st.warning(f"Market Depth Spot Pressure error: {str(_mdp_err)[:80]}")
+
+    # ===== TRIPLE CONFLUENCE: OI + DEPTH + MONEY FLOW =====
+    st.markdown("---")
+    st.markdown("## 🔗 Triple Confluence — OI · Depth · Money Flow")
+    try:
+        # Gather results from previous engines (use empty defaults if they failed)
+        _tc_sop = _sop if '_sop' in dir() else compute_spot_oi_pressure(mde)
+        _tc_mdp = _mdp if '_mdp' in dir() else compute_market_depth_spot_pressure(mde)
+        _tc_df_today = _df_today if '_df_today' in dir() else None
+
+        _tc = compute_triple_confluence(mde, _tc_sop, _tc_mdp, _tc_df_today)
+
+        # Row 1 — Main Verdict with confidence
+        _tc_conf = _tc['confidence']
+        _tc_vclr = _tc['verdict_color']
+        _tc_align = _tc['alignment']
+        _align_bar = '🟢' * _tc_align + '⚪' * (3 - _tc_align)
+
+        st.markdown(f"""<div style='background:#111827;padding:18px;border-radius:10px;
+        border-left:5px solid {_tc_vclr};margin-bottom:12px'>
+        <div style='font-size:0.8em;color:#888;text-transform:uppercase'>TRIPLE CONFLUENCE VERDICT</div>
+        <div style='font-size:1.4em;font-weight:bold;color:{_tc_vclr};margin:6px 0'>{_tc['verdict']}</div>
+        <div style='font-size:0.9em;color:#ccc'>Confidence: {_tc_conf}% | Alignment: {_align_bar} ({_tc_align}/3 layers agree)</div>
+        </div>""", unsafe_allow_html=True)
+
+        # Row 2 — Three layer cards
+        _tc_l1, _tc_l2, _tc_l3 = st.columns(3)
+        for _tc_col, _sig in zip([_tc_l1, _tc_l2, _tc_l3], _tc.get('signals', [])):
+            _b = _sig.get('bias', 'N/A')
+            _b_clr = '#00ff88' if _b == 'Bullish' else ('#ff4444' if _b == 'Bearish' else '#FFD700')
+            _b_emoji = '🟢' if _b == 'Bullish' else ('🔴' if _b == 'Bearish' else '⚪')
+            with _tc_col:
+                st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;
+                border-left:4px solid {_b_clr}'>
+                <div style='font-size:0.75em;color:#888;text-transform:uppercase'>{_sig['layer']}</div>
+                <div style='font-size:1.05em;font-weight:bold;color:{_b_clr}'>{_b_emoji} {_b}</div>
+                <div style='font-size:0.8em;color:#999;margin-top:4px'>{_sig['detail']}</div>
+                </div>""", unsafe_allow_html=True)
+
+        # Row 3 — Per-strike triple analysis table
+        _tc_strikes = _tc.get('strike_analysis', [])
+        if _tc_strikes:
+            st.markdown("#### 📋 Per-Strike Triple Analysis (ATM ± 2)")
+            _tc_rows = []
+            LOT = 100000
+            for _s in _tc_strikes:
+                _v = _s['Verdict']
+                _v_emoji = '🟢' if 'Support' in _v else ('🔴' if 'Resistance' in _v else '⚪')
+                _v_bold = '**' if 'STRONG' in _v else ''
+                _oi_e = '🟢' if _s['OI'] == 'Bullish' else ('🔴' if _s['OI'] == 'Bearish' else '⚪')
+                _d_e = '🟢' if _s['Depth'] == 'Bullish' else ('🔴' if _s['Depth'] == 'Bearish' else '⚪')
+                _vol_e = '🟢' if _s['Volume'] == 'Bullish' else ('🔴' if _s['Volume'] == 'Bearish' else '⚪')
+                _tc_rows.append({
+                    'Strike': f"₹{_s['Strike']:,}",
+                    'CE OI': f"{_s['CE_OI']/LOT:.2f}L",
+                    'PE OI': f"{_s['PE_OI']/LOT:.2f}L",
+                    'OI': f"{_oi_e} {_s['OI']}",
+                    'Depth': f"{_d_e} {_s['Depth']}",
+                    'Volume': f"{_vol_e} {_s['Volume']}",
+                    'Verdict': f"{_v_emoji} {_v}",
+                })
+            st.dataframe(pd.DataFrame(_tc_rows), use_container_width=True, hide_index=True)
+
+            st.caption("OI = Put OI vs Call OI | Depth = Put Ask (writers) vs Call Ask | "
+                       "Volume = Put Volume vs Call Volume | "
+                       "All 3 align = STRONG signal")
+
+        # OI+Depth confluence from depth engine (if available)
+        _tc_oi_depth = _tc_mdp.get('oi_depth_confluence', []) if '_tc_mdp' in dir() else []
+        if _tc_oi_depth:
+            st.markdown("#### 🔗 OI + Depth Confluence Signals")
+            for _cf in _tc_oi_depth:
+                _cf_clr = '#00ff88' if _cf['type'] == 'Bullish' else ('#ff4444' if _cf['type'] == 'Bearish' else '#FFD700')
+                _cf_emoji = '🟢' if _cf['type'] == 'Bullish' else ('🔴' if _cf['type'] == 'Bearish' else '🟡')
+                st.markdown(f"""<div style='background:#111827;padding:10px;border-radius:6px;
+                border-left:3px solid {_cf_clr};margin-bottom:4px'>
+                <span style='color:{_cf_clr};font-weight:bold'>{_cf_emoji} {_cf['signal']}</span>
+                <span style='color:#999;font-size:0.85em'> — {_cf['detail']}</span>
+                </div>""", unsafe_allow_html=True)
+
+    except Exception as _tc_err:
+        st.warning(f"Triple Confluence error: {str(_tc_err)[:80]}")
+
+    # ===== STRIKE ZONE CLASSIFICATION ENGINE =====
+    st.markdown("---")
+    st.markdown("## 🗺️ Dynamic Support & Resistance Zones")
+    try:
+        _zone = compute_strike_zone_classification(mde)
+
+        # ── Append to history + save to Supabase ─────────────────
+        _zone_now = datetime.now(pytz.timezone('Asia/Kolkata'))
+        _zone_should_add = True
+        if st.session_state.zone_history:
+            _last_zone = st.session_state.zone_history[-1]
+            if (_zone_now - _to_ist(_last_zone['time'])).total_seconds() < 30:
+                _zone_should_add = False
+
+        # Build saveable entry (strip non-serializable strike_details)
+        _zone_save = {k: v for k, v in _zone.items() if k != 'strike_details'}
+        if _zone_should_add and _zone['spot_price'] > 0:
+            st.session_state.zone_history.append(_zone_save)
+            if len(st.session_state.zone_history) > 200:
+                st.session_state.zone_history = st.session_state.zone_history[-200:]
+            db.save_option_history('zone_history', _zone_save)
+
+        if _zone.get('from_history'):
+            st.caption("Using last known data from Supabase history (live data unavailable)")
+
+        # ── Status Cards Row ─────────────────────────────────────
+        _zc1, _zc2, _zc3, _zc4 = st.columns(4)
+
+        _sup_clr_map = {'GREEN': '#00ff88', 'YELLOW': '#FFD700', 'RED': '#ff4444'}
+        _res_clr_map = {'RED': '#ff4444', 'YELLOW': '#FFD700', 'GREEN': '#00ff88'}
+        _sup_clr = _sup_clr_map.get(_zone['support_color'], '#888')
+        _res_clr = _res_clr_map.get(_zone['resistance_color'], '#888')
+        _bias_clr = {'BULLISH': '#00ff88', 'BEARISH': '#ff4444', 'RANGE': '#FFD700', 'TRAP': '#ff8800'}
+        _bias_emoji = {'BULLISH': '🟢', 'BEARISH': '🔴', 'RANGE': '🟡', 'TRAP': '⚠️'}
+
+        with _zc1:
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_sup_clr}'>
+            <span style='font-size:0.75em;color:#888;text-transform:uppercase'>SUPPORT ZONE</span><br>
+            <span style='font-size:1.3em;font-weight:bold;color:{_sup_clr}'>₹{_zone['support_zone']:,}</span><br>
+            <span style='font-size:0.85em;color:{_sup_clr}'>{_zone['support_status']}</span>
+            <span style='font-size:0.8em;color:#666'> | Score: {_zone['support_score']}/100</span>
+            </div>""", unsafe_allow_html=True)
+
+        with _zc2:
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_res_clr}'>
+            <span style='font-size:0.75em;color:#888;text-transform:uppercase'>RESISTANCE ZONE</span><br>
+            <span style='font-size:1.3em;font-weight:bold;color:{_res_clr}'>₹{_zone['resistance_zone']:,}</span><br>
+            <span style='font-size:0.85em;color:{_res_clr}'>{_zone['resistance_status']}</span>
+            <span style='font-size:0.8em;color:#666'> | Score: {_zone['resistance_score']}/100</span>
+            </div>""", unsafe_allow_html=True)
+
+        _mb = _zone['market_bias']
+        _mb_c = _bias_clr.get(_mb, '#888')
+        _mb_e = _bias_emoji.get(_mb, '⚪')
+        with _zc3:
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_mb_c}'>
+            <span style='font-size:0.75em;color:#888;text-transform:uppercase'>MARKET BIAS</span><br>
+            <span style='font-size:1.3em;font-weight:bold;color:{_mb_c}'>{_mb_e} {_mb}</span><br>
+            <span style='font-size:0.8em;color:#666'>Zone Shift: {_zone['zone_shift']} | Breakout: {_zone['breakout_probability']}</span>
+            </div>""", unsafe_allow_html=True)
+
+        _sig = _zone['signal']
+        _sig_clr = '#00ff88' if _sig == 'BREAKOUT' else ('#ff4444' if _sig == 'BREAKDOWN' else '#888')
+        _sig_emoji = '🚀' if _sig == 'BREAKOUT' else ('💥' if _sig == 'BREAKDOWN' else '⏳')
+        with _zc4:
+            st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_sig_clr}'>
+            <span style='font-size:0.75em;color:#888;text-transform:uppercase'>SIGNAL</span><br>
+            <span style='font-size:1.3em;font-weight:bold;color:{_sig_clr}'>{_sig_emoji} {_sig}</span><br>
+            <span style='font-size:0.8em;color:#666'>Confidence: {_zone['confidence_score']}%</span>
+            </div>""", unsafe_allow_html=True)
+
+        # ── Per-Strike Classification Table ──────────────────────
+        if _zone.get('strike_details'):
+            st.markdown("#### 🔍 Per-Strike Zone Classification")
+            _sd_rows = []
+            for _sd in _zone['strike_details']:
+                _sc = _sd['scenario']
+                _zt = _sd['zone_type']
+                _emoji = {'support': '🟢', 'resistance': '🔴', 'neutral': '⚪'}.get(_zt, '⚪')
+                _sd_rows.append({
+                    'Strike': f"₹{_sd['strike']:,}",
+                    'Zone': f"{_emoji} {_zt.upper()}",
+                    'Scenario': _sc,
+                    'Strength': f"{_sd['strength']}/100",
+                    'CE OI': f"{_sd['ce_oi']/100000:.2f}L",
+                    'PE OI': f"{_sd['pe_oi']/100000:.2f}L",
+                    'CE ΔOI': f"{_sd['ce_chg']/100000:+.2f}L",
+                    'PE ΔOI': f"{_sd['pe_chg']/100000:+.2f}L",
+                    'CE Bid|Ask': f"{_sd['ce_bid']:.0f}|{_sd['ce_ask']:.0f}",
+                    'PE Bid|Ask': f"{_sd['pe_bid']:.0f}|{_sd['pe_ask']:.0f}",
+                    'Vol Δ CE': f"{_sd['vol_delta_ce']:+,.0f}",
+                    'Vol Δ PE': f"{_sd['vol_delta_pe']:+,.0f}",
+                })
+            if _sd_rows:
+                _sd_df = pd.DataFrame(_sd_rows)
+                st.dataframe(_sd_df, use_container_width=True, hide_index=True)
+
+        # ── Time-Series Chart: Spot + Support Zone + Resistance Zone ─
+        st.markdown("#### 📈 Zone Tracker — Spot vs Support vs Resistance")
+        if len(st.session_state.zone_history) >= 2:
+
+            _zh = st.session_state.zone_history
+            _zh_df = pd.DataFrame(_zh)
+
+            _fig_zone = go.Figure()
+
+            # Spot price line
+            _fig_zone.add_trace(go.Scatter(
+                x=_zh_df['time'], y=_zh_df['spot_price'],
+                name='Spot Price', mode='lines',
+                line=dict(color='#00BFFF', width=2.5),
+            ))
+
+            # Support zone — color by status
+            _sup_colors = []
+            for _, _r in _zh_df.iterrows():
+                _sc = _r.get('support_color', 'YELLOW')
+                _sup_colors.append(_sup_clr_map.get(_sc, '#FFD700'))
+
+            _fig_zone.add_trace(go.Scatter(
+                x=_zh_df['time'], y=_zh_df['support_zone'],
+                name='Support Zone', mode='lines+markers',
+                line=dict(color='#00ff88', width=2, dash='dot'),
+                marker=dict(
+                    size=8, color=_sup_colors,
+                    line=dict(width=1, color='white')
+                ),
+            ))
+
+            # Resistance zone — color by status
+            _res_colors = []
+            for _, _r in _zh_df.iterrows():
+                _rc = _r.get('resistance_color', 'YELLOW')
+                _res_colors.append(_res_clr_map.get(_rc, '#FFD700'))
+
+            _fig_zone.add_trace(go.Scatter(
+                x=_zh_df['time'], y=_zh_df['resistance_zone'],
+                name='Resistance Zone', mode='lines+markers',
+                line=dict(color='#ff4444', width=2, dash='dot'),
+                marker=dict(
+                    size=8, color=_res_colors,
+                    line=dict(width=1, color='white')
+                ),
+            ))
+
+            # Fill between support and resistance
+            _fig_zone.add_trace(go.Scatter(
+                x=list(_zh_df['time']) + list(_zh_df['time'][::-1]),
+                y=list(_zh_df['resistance_zone']) + list(_zh_df['support_zone'][::-1]),
+                fill='toself', fillcolor='rgba(255,215,0,0.08)',
+                line=dict(width=0), showlegend=False, name='Range',
+            ))
+
+            # Mark BREAKOUT/BREAKDOWN signals
+            _sig_df = _zh_df[_zh_df['signal'].isin(['BREAKOUT', 'BREAKDOWN'])]
+            if not _sig_df.empty:
+                _fig_zone.add_trace(go.Scatter(
+                    x=_sig_df['time'], y=_sig_df['spot_price'],
+                    name='Signal', mode='markers',
+                    marker=dict(
+                        size=14, symbol='star',
+                        color=['#00ff88' if s == 'BREAKOUT' else '#ff4444' for s in _sig_df['signal']],
+                        line=dict(width=2, color='white')
+                    ),
+                ))
+
+            _fig_zone.update_layout(
+                template='plotly_dark',
+                height=450,
+                margin=dict(l=10, r=10, t=30, b=10),
+                legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
+                xaxis=dict(title='Time', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                yaxis=dict(title='Price', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                hovermode='x unified',
+            )
+
+            st.plotly_chart(_fig_zone, use_container_width=True, key="zone_tracker_chart")
+
+            # ── Support & Resistance Score Chart ─────────────────
+            st.markdown("#### 📊 Zone Strength Over Time")
+            _fig_score = go.Figure()
+            _fig_score.add_trace(go.Scatter(
+                x=_zh_df['time'], y=_zh_df['support_score'],
+                name='Support Strength', mode='lines',
+                line=dict(color='#00ff88', width=2),
+                fill='tozeroy', fillcolor='rgba(0,255,136,0.1)',
+            ))
+            _fig_score.add_trace(go.Scatter(
+                x=_zh_df['time'], y=_zh_df['resistance_score'],
+                name='Resistance Strength', mode='lines',
+                line=dict(color='#ff4444', width=2),
+                fill='tozeroy', fillcolor='rgba(255,68,68,0.1)',
+            ))
+            _fig_score.update_layout(
+                template='plotly_dark', height=300,
+                margin=dict(l=10, r=10, t=30, b=10),
+                legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
+                xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                yaxis=dict(title='Score (0-100)', range=[0, 100],
+                           showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                hovermode='x unified',
+            )
+            st.plotly_chart(_fig_score, use_container_width=True, key="zone_score_chart")
+
+            # ── Confidence + Market Bias timeline ────────────────
+            st.markdown("#### 🎯 Confidence & Bias Timeline")
+            _bias_map = {'BULLISH': 1, 'BEARISH': -1, 'RANGE': 0, 'TRAP': 0.5}
+            _zh_df['_bias_val'] = _zh_df['market_bias'].map(_bias_map).fillna(0)
+
+            _fig_conf = go.Figure()
+            _fig_conf.add_trace(go.Scatter(
+                x=_zh_df['time'], y=_zh_df['confidence_score'],
+                name='Confidence %', mode='lines',
+                line=dict(color='#FFD700', width=2),
+            ))
+            _fig_conf.add_trace(go.Bar(
+                x=_zh_df['time'], y=_zh_df['_bias_val'] * 50,
+                name='Bias (Bull +50 / Bear -50)',
+                marker_color=['#00ff88' if v > 0 else '#ff4444' if v < 0 else '#FFD700'
+                              for v in _zh_df['_bias_val']],
+                opacity=0.4,
+            ))
+            _fig_conf.update_layout(
+                template='plotly_dark', height=280,
+                margin=dict(l=10, r=10, t=30, b=10),
+                legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
+                xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                yaxis=dict(title='Score', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
+                hovermode='x unified',
+                barmode='overlay',
+            )
+            st.plotly_chart(_fig_conf, use_container_width=True, key="zone_confidence_chart")
+        else:
+            st.info("Zone history accumulating... charts appear after 2+ snapshots (every 30s).")
+
+    except Exception as _zone_err:
+        st.warning(f"Strike Zone Classification error: {str(_zone_err)[:100]}")
+
+    # ===== VOLUME PCR + STRADDLE + COMBINED SIGNAL (ATM ± 2) =====
+    st.markdown("---")
+    st.markdown("## 📊 Volume PCR · Straddle · Combined Signal (ATM ± 2)")
+
+    # ── Collect Volume PCR + Straddle data ──
+    _vp_df_src = option_data.get('df_summary') if option_data else None
+    _vp_data_ok = False
+    if (_vp_df_src is not None and 'Zone' in _vp_df_src.columns
+            and 'totalTradedVolume_CE' in _vp_df_src.columns
+            and 'totalTradedVolume_PE' in _vp_df_src.columns
+            and 'lastPrice_CE' in _vp_df_src.columns
+            and 'lastPrice_PE' in _vp_df_src.columns):
+        try:
+            _vp_atm = _vp_df_src[_vp_df_src['Zone'] == 'ATM'].index
+            if len(_vp_atm) > 0:
+                _vp_atm_pos = _vp_df_src.index.get_loc(_vp_atm[0])
+                _vp_start = max(0, _vp_atm_pos - 2)
+                _vp_end   = min(len(_vp_df_src), _vp_atm_pos + 3)
+                _vp_slice = _vp_df_src.iloc[_vp_start:_vp_end].copy()
+
+                _ist_vp = pytz.timezone('Asia/Kolkata')
+                _vp_now = datetime.now(_ist_vp)
+
+                # Per-strike Volume PCR entry
+                _vp_entry = {'time': _vp_now}
+                for _, _vrow in _vp_slice.iterrows():
+                    _sk = str(int(_vrow['Strike']))
+                    _ce_vol = _vrow.get('totalTradedVolume_CE', 0) or 0
+                    _pe_vol = _vrow.get('totalTradedVolume_PE', 0) or 0
+                    _vp_entry[_sk] = round(_pe_vol / _ce_vol, 3) if _ce_vol > 0 else 0.0
+                st.session_state.vol_pcr_current_strikes = sorted([int(_r['Strike']) for _, _r in _vp_slice.iterrows()])
+
+                # Straddle entry for all ATM±2 strikes (CE LTP + PE LTP per strike)
+                _st_entry = {'time': _vp_now}
+                for _, _srow in _vp_slice.iterrows():
+                    _sk_int = int(_srow['Strike'])
+                    _ce_ltp = float(_srow.get('lastPrice_CE', 0) or 0)
+                    _pe_ltp = float(_srow.get('lastPrice_PE', 0) or 0)
+                    _st_entry[f'straddle_{_sk_int}'] = round(_ce_ltp + _pe_ltp, 2)
+                    _st_entry[f'ce_{_sk_int}']       = round(_ce_ltp, 2)
+                    _st_entry[f'pe_{_sk_int}']       = round(_pe_ltp, 2)
+                # Keep ATM straddle as 'straddle' for Combined Signal
+                _atm_row = _vp_slice[_vp_slice['Zone'] == 'ATM']
+                if len(_atm_row) > 0:
+                    _atm_sk = int(_atm_row.iloc[0]['Strike'])
+                    _st_entry['straddle']   = _st_entry.get(f'straddle_{_atm_sk}', 0)
+                    _st_entry['atm_strike'] = _atm_sk
+
+                # Avoid duplicates within 30 seconds
+                _vp_add = True
+                if st.session_state.vol_pcr_history:
+                    if (_vp_now - _to_ist(st.session_state.vol_pcr_history[-1]['time'])).total_seconds() < 30:
+                        _vp_add = False
+                if _vp_add:
+                    st.session_state.vol_pcr_history.append(_vp_entry)
+                    if len(st.session_state.vol_pcr_history) > 200:
+                        st.session_state.vol_pcr_history = st.session_state.vol_pcr_history[-200:]
+                    db.save_option_history('vol_pcr_history', _vp_entry)
+                    if len(_st_entry) > 1:
+                        st.session_state.straddle_history.append(_st_entry)
+                        if len(st.session_state.straddle_history) > 200:
+                            st.session_state.straddle_history = st.session_state.straddle_history[-200:]
+                        db.save_option_history('straddle_history', _st_entry)
+                _vp_data_ok = True
+        except Exception as _vp_exc:
+            st.caption(f"⚠️ Vol PCR fetch: {str(_vp_exc)[:60]}")
+
+    # ── Panel 1: Volume PCR per strike ──
+    st.markdown("### 📈 Volume PCR per Strike (ATM ± 2)")
+    _vp_hist = st.session_state.vol_pcr_history
+    _vp_strikes = sorted(getattr(st.session_state, 'vol_pcr_current_strikes', []))
+    _pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
+    _pos_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
+
+    if _vp_hist:
+        _vp_hist_df = pd.DataFrame(_vp_hist)
+        _vp_cols = st.columns(5)
+        for _vi, _vcol in enumerate(_vp_cols):
+            with _vcol:
+                if _vi >= len(_vp_strikes):
+                    st.info(f"{_pos_labels[_vi]} N/A")
+                    continue
+                _vstrike = _vp_strikes[_vi]
+                _vscol = str(_vstrike)
+                _vclr = _pos_colors[_vi]
+                _vrgb = tuple(int(_vclr.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
+                _vfill = f'rgba({_vrgb[0]},{_vrgb[1]},{_vrgb[2]},0.12)'
+                if _vscol not in _vp_hist_df.columns:
+                    st.info(f"₹{_vstrike} — building…")
+                    continue
+                _vcur = _vp_hist_df[_vscol].iloc[-1]
+                _vfig = go.Figure()
+                _vfig.add_trace(go.Scatter(
+                    x=_vp_hist_df['time'], y=_vp_hist_df[_vscol],
+                    mode='lines+markers', name='Vol PCR',
+                    line=dict(color=_vclr, width=2),
+                    marker=dict(size=3),
+                    fill='tozeroy', fillcolor=_vfill,
+                    hovertemplate='Vol PCR: %{y:.2f}<br>%{x|%H:%M}<extra></extra>',
+                ))
+                _vfig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.5)", line_width=1,
+                                annotation_text="Bull 1.2", annotation_position="right",
+                                annotation_font_size=8, annotation_font_color="#00ff88")
+                _vfig.add_hline(y=0.7, line_dash="dot", line_color="rgba(255,68,68,0.5)", line_width=1,
+                                annotation_text="Bear 0.7", annotation_position="right",
+                                annotation_font_size=8, annotation_font_color="#ff4444")
+                _vfig.add_hline(y=1.0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
+                # Dynamic Y range: data + thresholds always visible
+                _vp_raw = _vp_hist_df[_vscol].dropna().tolist()
+                _vp_all = _vp_raw + [0.7, 1.2]
+                _vp_ymin = max(0.0, min(_vp_all) * 0.9)
+                _vp_ymax = max(_vp_all) * 1.1
+                _vfig.update_layout(
+                    title=dict(text=f"{_pos_labels[_vi]}<br>₹{_vstrike}<br>Vol PCR: {_vcur:.2f}", font=dict(size=11)),
+                    template='plotly_dark', height=280, showlegend=False,
+                    margin=dict(l=5, r=10, t=70, b=30),
+                    xaxis=dict(tickformat='%H:%M', title=''),
+                    yaxis=dict(title='Vol PCR', range=[_vp_ymin, _vp_ymax]),
+                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                )
+                st.plotly_chart(_vfig, use_container_width=True)
+                _vsig = "🟢 Bull" if _vcur > 1.2 else ("🔴 Bear" if _vcur < 0.7 else "🟡 Ntrl")
+                st.caption(f"Vol PCR {_vcur:.2f} {_vsig}")
+    else:
+        st.info("📊 Volume PCR history building… wait for a few refreshes.")
+
+    # ── Panel 2: Straddle per strike (ATM±2) ──
+    st.markdown("---")
+    st.markdown("### 🎯 Straddle (CE LTP + PE LTP) — Movement Intensity (ATM ± 2)")
+    _st_hist = st.session_state.straddle_history
+    _st_strikes = sorted(getattr(st.session_state, 'vol_pcr_current_strikes', []))
+    _st_color_map = {'rising': '#ff9944', 'falling': '#44aaff', 'flat': '#888888'}
+    if _st_hist and _st_strikes:
+        _st_df = pd.DataFrame(_st_hist)
+        _st_cols = st.columns(5)
+        for _si, _scol in enumerate(_st_cols):
+            with _scol:
+                if _si >= len(_st_strikes):
+                    st.info(f"{_pos_labels[_si]} N/A")
+                    continue
+                _sstrike = _st_strikes[_si]
+                _skey = f'straddle_{_sstrike}'
+                _cekey = f'ce_{_sstrike}'
+                _pekey = f'pe_{_sstrike}'
+                if _skey not in _st_df.columns:
+                    st.info(f"₹{_sstrike} — building…")
+                    continue
+                _st_vals = _st_df[_skey].dropna().tolist()
+                _st_cur  = _st_vals[-1] if _st_vals else 0
+                if len(_st_vals) >= 3:
+                    _st_delta = _st_vals[-1] - _st_vals[-3]
+                    _st_dir = "rising" if _st_delta > 0.5 else ("falling" if _st_delta < -0.5 else "flat")
+                else:
+                    _st_delta, _st_dir = 0, "flat"
+                _st_clr = _st_color_map[_st_dir]
+                _st_rgb = tuple(int(_st_clr.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
+                _st_icon = "📈" if _st_dir == "rising" else ("📉" if _st_dir == "falling" else "➡️")
+
+                _sfig = go.Figure()
+                _sfig.add_trace(go.Scatter(
+                    x=_st_df['time'], y=_st_df[_skey],
+                    mode='lines+markers', name='Straddle',
+                    line=dict(color=_st_clr, width=2), marker=dict(size=3),
+                    fill='tozeroy', fillcolor=f'rgba({_st_rgb[0]},{_st_rgb[1]},{_st_rgb[2]},0.15)',
+                    hovertemplate='Straddle: ₹%{y:.2f}<br>%{x|%H:%M}<extra></extra>',
+                ))
+                if _cekey in _st_df.columns:
+                    _sfig.add_trace(go.Scatter(
+                        x=_st_df['time'], y=_st_df[_cekey],
+                        mode='lines', name='CE',
+                        line=dict(color='#ff4444', width=1, dash='dot'),
+                        hovertemplate='CE: ₹%{y:.2f}<br>%{x|%H:%M}<extra></extra>',
+                    ))
+                if _pekey in _st_df.columns:
+                    _sfig.add_trace(go.Scatter(
+                        x=_st_df['time'], y=_st_df[_pekey],
+                        mode='lines', name='PE',
+                        line=dict(color='#00cc66', width=1, dash='dot'),
+                        hovertemplate='PE: ₹%{y:.2f}<br>%{x|%H:%M}<extra></extra>',
+                    ))
+                # Dynamic Y range: all 3 traces (Straddle, CE, PE) combined
+                _sy_vals = _st_df[_skey].dropna().tolist()
+                if _cekey in _st_df.columns:
+                    _sy_vals += _st_df[_cekey].dropna().tolist()
+                if _pekey in _st_df.columns:
+                    _sy_vals += _st_df[_pekey].dropna().tolist()
+                _sy_min = max(0.0, min(_sy_vals) * 0.9) if _sy_vals else 0
+                _sy_max = max(_sy_vals) * 1.1 if _sy_vals else 10
+                _sfig.update_layout(
+                    title=dict(text=f"{_pos_labels[_si]}<br>₹{_sstrike}<br>{_st_icon} ₹{_st_cur:.1f} (Δ{_st_delta:+.1f})",
+                               font=dict(size=11)),
+                    template='plotly_dark', height=300,
+                    showlegend=True,
+                    legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                                xanchor='center', x=0.5, font=dict(size=8)),
+                    margin=dict(l=5, r=10, t=75, b=30),
+                    xaxis=dict(tickformat='%H:%M', title=''),
+                    yaxis=dict(title='Premium (₹)', range=[_sy_min, _sy_max]),
+                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                )
+                st.plotly_chart(_sfig, use_container_width=True)
+                _move_lbl = "💥 Explosive" if _st_dir == "rising" else ("🐌 Grinding" if _st_dir == "falling" else "⬛ Range")
+                st.caption(f"₹{_st_cur:.1f} → {_move_lbl}")
+    else:
+        st.info("📊 Straddle history building… wait for a few refreshes.")
+
+    # ── Panel 3: Combined Trend / Strength / Move Type Signal ──
+    st.markdown("---")
+    st.markdown("### 🧠 Combined Signal — Trend · Strength · Move Type · Confidence")
+    try:
+        _cs_oi_hist   = st.session_state.pcr_history
+        _cs_vol_hist  = st.session_state.vol_pcr_history
+        _cs_gex_hist  = st.session_state.gex_history
+        _cs_st_hist   = st.session_state.straddle_history
+        _cs_strikes   = sorted(getattr(st.session_state, 'vol_pcr_current_strikes', []))
+
+        _cs_ready = (_cs_oi_hist and _cs_vol_hist and len(_cs_strikes) > 0)
+        if _cs_ready:
+            _cs_oi_df  = pd.DataFrame(_cs_oi_hist)
+            _cs_vol_df = pd.DataFrame(_cs_vol_hist)
+
+            # ── Avg OI PCR + Vol PCR across ATM±2 ──
+            _cs_oi_vals  = [_cs_oi_df[str(s)].iloc[-1]  for s in _cs_strikes if str(s) in _cs_oi_df.columns]
+            _cs_vol_vals = [_cs_vol_df[str(s)].iloc[-1] for s in _cs_strikes if str(s) in _cs_vol_df.columns]
+            _avg_oi_pcr  = sum(_cs_oi_vals)  / len(_cs_oi_vals)  if _cs_oi_vals  else 1.0
+            _avg_vol_pcr = sum(_cs_vol_vals) / len(_cs_vol_vals) if _cs_vol_vals else 1.0
+            _oi_sig  = "bull" if _avg_oi_pcr  > 1.2 else ("bear" if _avg_oi_pcr  < 0.7 else "neut")
+            _vol_sig = "bull" if _avg_vol_pcr > 1.2 else ("bear" if _avg_vol_pcr < 0.7 else "neut")
+
+            # ── Trap Detector ──
+            if _oi_sig == "bull" and _vol_sig == "bear":
+                _trap = "🚨 BULL TRAP"
+                _trap_clr = "#ff6600"
+                _trap_sub = "OI bull but Vol bear — smart money exiting"
+            elif _oi_sig == "bear" and _vol_sig == "bull":
+                _trap = "🚨 BEAR TRAP"
+                _trap_clr = "#ffcc00"
+                _trap_sub = "OI bear but Vol bull — absorption / reversal watch"
+            else:
+                _trap = "✅ Clean Signal"
+                _trap_clr = "#44cc88"
+                _trap_sub = "OI PCR & Vol PCR aligned"
+
+            # ── Trend ──
+            if _oi_sig == "bull" and _vol_sig == "bull":
+                _trend = "🟢 Strong Bull"
+                _trend_clr = "#00ff88"
+            elif _oi_sig == "bear" and _vol_sig == "bear":
+                _trend = "🔴 Strong Bear"
+                _trend_clr = "#ff4444"
+            elif _oi_sig == "bull":
+                _trend = "🟢 Bull (positioning)"
+                _trend_clr = "#00cc88"
+            elif _oi_sig == "bear":
+                _trend = "🔴 Bear (positioning)"
+                _trend_clr = "#dd4444"
+            else:
+                _trend = "⚪ Neutral"
+                _trend_clr = "#888888"
+
+            # ── Strength from GEX ──
+            _cs_gex_df = pd.DataFrame(_cs_gex_hist) if _cs_gex_hist else None
+            _cs_gex_cols = [str(s) for s in _cs_strikes if _cs_gex_df is not None and str(s) in _cs_gex_df.columns]
+            _total_gex = sum(_cs_gex_df[c].iloc[-1] for c in _cs_gex_cols) if _cs_gex_cols and _cs_gex_df is not None else 0
+            if _total_gex < -10:
+                _strength = "⚡ Strong (Neg GEX)"
+                _strength_clr = "#ff9900"
+                _gex_mode = "trending"
+            elif _total_gex > 10:
+                _strength = "📍 Capped (Pos GEX)"
+                _strength_clr = "#aaaaaa"
+                _gex_mode = "pinning"
+            else:
+                _strength = "➡️ Normal"
+                _strength_clr = "#cccccc"
+                _gex_mode = "neutral"
+
+            # ── Move Type: avg straddle delta across ALL 5 strikes ──
+            _cs_st_df = pd.DataFrame(_cs_st_hist) if _cs_st_hist else None
+            _st_deltas = []
+            _strike_dirs = {}    # per-strike direction for pattern detection
+            _strike_cur  = {}    # per-strike current straddle value
+            if _cs_st_df is not None:
+                for _s in _cs_strikes:
+                    _sk = f'straddle_{_s}'
+                    if _sk in _cs_st_df.columns:
+                        _sv = _cs_st_df[_sk].dropna().tolist()
+                        _strike_cur[_s] = _sv[-1] if _sv else 0
+                        if len(_sv) >= 3:
+                            _d = _sv[-1] - _sv[-3]
+                            _st_deltas.append(_d)
+                            _strike_dirs[_s] = "rising" if _d > 0.5 else ("falling" if _d < -0.5 else "flat")
+                        else:
+                            _strike_dirs[_s] = "flat"
+
+            _avg_st_delta = sum(_st_deltas) / len(_st_deltas) if _st_deltas else 0
+            _cs_st_dir = "rising" if _avg_st_delta > 0.5 else ("falling" if _avg_st_delta < -0.5 else "flat")
+            _move_map = {'rising': "💥 Explosive", 'falling': "🐌 Grinding", 'flat': "⬛ Range"}
+            _move_type_s = _move_map[_cs_st_dir]
+            _move_clr = '#ff9944' if _cs_st_dir == 'rising' else ('#44aaff' if _cs_st_dir == 'falling' else '#888888')
+
+            # ── Straddle Pattern (case 1-4) ──
+            _n_rising  = sum(1 for d in _strike_dirs.values() if d == "rising")
+            _n_falling = sum(1 for d in _strike_dirs.values() if d == "falling")
+            _itm_s = _cs_strikes[:2]
+            _otm_s = _cs_strikes[3:]
+            _atm_s = _cs_strikes[2] if len(_cs_strikes) > 2 else None
+            _itm_rising = all(_strike_dirs.get(s, "flat") == "rising" for s in _itm_s)
+            _otm_flat   = all(_strike_dirs.get(s, "flat") in ("flat", "falling") for s in _otm_s)
+            _atm_rising = _strike_dirs.get(_atm_s, "flat") == "rising" if _atm_s else False
+            _atm_only   = _atm_rising and all(_strike_dirs.get(s, "flat") != "rising" for s in _cs_strikes if s != _atm_s)
+
+            if _n_rising >= 4:
+                _pattern = "🔥 All Rising"
+                _pattern_desc = "BIG MOVE COMING"
+                _pattern_clr = "#ff4444"
+            elif _atm_only:
+                _pattern = "⚠️ ATM Only Rising"
+                _pattern_desc = "Fake / noise — wait"
+                _pattern_clr = "#ff9900"
+            elif _itm_rising and _otm_flat:
+                _pattern = "📐 ITM ↑ / OTM Flat"
+                _pattern_desc = "Directional move starting"
+                _pattern_clr = "#00ccff"
+            elif _n_falling >= 4:
+                _pattern = "💤 All Falling"
+                _pattern_desc = "Sideways / premium decay"
+                _pattern_clr = "#44aaff"
+            else:
+                _pattern = "🔀 Mixed"
+                _pattern_desc = f"{_n_rising}↑ {_n_falling}↓"
+                _pattern_clr = "#cccccc"
+
+            # ── Straddle Spread: OTM avg − ITM avg ──
+            _itm_cur = [_strike_cur.get(s, 0) for s in _itm_s if s in _strike_cur]
+            _otm_cur = [_strike_cur.get(s, 0) for s in _otm_s if s in _strike_cur]
+            _itm_avg = sum(_itm_cur) / len(_itm_cur) if _itm_cur else 0
+            _otm_avg = sum(_otm_cur) / len(_otm_cur) if _otm_cur else 0
+            _spread  = _otm_avg - _itm_avg
+            if _spread > 5:
+                _spread_sig = "⬆️ Upside Expansion"
+                _spread_clr = "#00ff88"
+            elif _spread < -5:
+                _spread_sig = "⬇️ Downside Pressure"
+                _spread_clr = "#ff4444"
+            else:
+                _spread_sig = "↔️ Balanced"
+                _spread_clr = "#888888"
+
+            # ── Direction Confidence Score ──
+            _conf = 0
+            # PCR alignment (max 3)
+            if _oi_sig == _vol_sig and _oi_sig != "neut":
+                _conf += 3
+            elif _oi_sig != "neut" and _vol_sig != "neut":
+                _conf += 1
+            # GEX alignment with trend (max 2)
+            if (("bull" in _oi_sig or "bull" in _vol_sig) and _gex_mode == "trending") or \
+               (("bear" in _oi_sig or "bear" in _vol_sig) and _gex_mode == "trending"):
+                _conf += 2
+            elif _gex_mode == "pinning":
+                _conf += 0
+            else:
+                _conf += 1
+            # Straddle confirmation (max 2)
+            if (_cs_st_dir == "rising" and "bull" in _oi_sig) or (_cs_st_dir == "falling" and "bear" in _oi_sig):
+                _conf += 2
+            elif _cs_st_dir == "flat":
+                _conf += 0
+            # Spread confirmation (max 1)
+            if (_spread > 5 and "bull" in _oi_sig) or (_spread < -5 and "bear" in _oi_sig):
+                _conf += 1
+            # No trap bonus (max 1)
+            if _trap.startswith("✅"):
+                _conf += 1
+            _conf_pct = min(int((_conf / 9) * 100), 100)
+            _conf_clr = "#00ff88" if _conf_pct >= 65 else ("#ff9900" if _conf_pct >= 35 else "#ff4444")
+
+            # ── Verdict ──
+            if "Trap" in _trap:
+                _interp = "⚠️ CAUTION / TRAP"
+                _interp_clr = "#ff6600"
+            elif "Bull" in _trend and "Explosive" in _move_type_s and _gex_mode == "trending":
+                _interp = "🚀 BREAKOUT UP"
+                _interp_clr = "#00ff88"
+            elif "Bear" in _trend and "Explosive" in _move_type_s and _gex_mode == "trending":
+                _interp = "💥 BREAKDOWN"
+                _interp_clr = "#ff4444"
+            elif "Bull" in _trend and "Grinding" in _move_type_s:
+                _interp = "📈 SLOW GRIND UP"
+                _interp_clr = "#88ff88"
+            elif "Bear" in _trend and "Grinding" in _move_type_s:
+                _interp = "📉 SLOW GRIND DOWN"
+                _interp_clr = "#ff8888"
+            elif _gex_mode == "pinning" or _cs_st_dir == "flat":
+                _interp = "⬛ RANGE BOUND"
+                _interp_clr = "#888888"
+            else:
+                _interp = "➡️ WAIT / UNCLEAR"
+                _interp_clr = "#aaaaaa"
+
+            # ── Row 1: 5 signal cards ──
+            _sig_c1, _sig_c2, _sig_c3, _sig_c4, _sig_c5 = st.columns(5)
+            def _card(clr, label, value, sub):
+                return f"""<div style="background:#1e1e1e;border:1.5px solid {clr};border-radius:8px;padding:14px;text-align:center;min-height:110px">
+                    <div style="color:#888;font-size:10px;margin-bottom:4px;letter-spacing:1px">{label}</div>
+                    <div style="color:{clr};font-size:15px;font-weight:bold;line-height:1.3">{value}</div>
+                    <div style="color:#999;font-size:10px;margin-top:6px">{sub}</div>
+                </div>"""
+            with _sig_c1:
+                st.markdown(_card(_trap_clr, "🚨 TRAP DETECTOR", _trap, _trap_sub), unsafe_allow_html=True)
+            with _sig_c2:
+                st.markdown(_card(_trend_clr, "📊 TREND", _trend, f"OI {_avg_oi_pcr:.2f} · Vol {_avg_vol_pcr:.2f}"), unsafe_allow_html=True)
+            with _sig_c3:
+                st.markdown(_card(_strength_clr, "⚙️ STRENGTH", _strength, f"GEX {_total_gex:+.1f}L"), unsafe_allow_html=True)
+            with _sig_c4:
+                st.markdown(_card(_move_clr, "🎯 MOVE TYPE", _move_type_s, f"5-strike avg Δ {_avg_st_delta:+.1f}"), unsafe_allow_html=True)
+            with _sig_c5:
+                st.markdown(_card(_interp_clr, "🏆 VERDICT", _interp, "OI+Vol+GEX+Straddle"), unsafe_allow_html=True)
+
+            # ── Row 2: Straddle Pattern | Spread | Confidence ──
+            st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
+            _row2_c1, _row2_c2, _row2_c3 = st.columns(3)
+            with _row2_c1:
+                st.markdown(_card(_pattern_clr, "🧩 STRADDLE PATTERN", _pattern, _pattern_desc), unsafe_allow_html=True)
+            with _row2_c2:
+                st.markdown(_card(_spread_clr, "📐 STRADDLE SPREAD", f"₹{_spread:+.1f}",
+                                  f"{_spread_sig} | OTM {_otm_avg:.1f} vs ITM {_itm_avg:.1f}"), unsafe_allow_html=True)
+            with _row2_c3:
+                _bar_filled = int(_conf_pct / 10)
+                _bar = "█" * _bar_filled + "░" * (10 - _bar_filled)
+                st.markdown(_card(_conf_clr, "🎯 CONFIDENCE", f"{_conf_pct}%", f"{_bar}"), unsafe_allow_html=True)
+
+        else:
+            st.info("📊 Combined signal will appear once history builds for Volume PCR. Wait a few refreshes.")
+    except Exception as _cs_exc:
+        st.warning(f"Combined signal error: {str(_cs_exc)[:80]}")
+
+    # ── Clear buttons ──
+    _vp_c1, _vp_c2 = st.columns([3, 1])
+    with _vp_c1:
+        _vp_status = "🟢 Live" if _vp_data_ok else "🟡 Cached"
+        st.caption(f"{_vp_status} | Vol PCR: {len(_vp_hist)} pts · Straddle: {len(_st_hist)} pts")
+    with _vp_c2:
+        if st.button("🗑️ Clear Vol/Straddle History"):
+            st.session_state.vol_pcr_history = []
+            st.session_state.straddle_history = []
+            st.rerun()
+
+    # ===== GEX (GAMMA EXPOSURE) ANALYSIS SECTION =====
+    st.markdown("---")
+    st.markdown("## 📊 Gamma Exposure (GEX) Analysis - Dealer Hedging Flow")
+
+    gex_data = gex_data_pre  # already computed above; avoids duplicate API/calculation
+    try:
+        underlying_price = option_data.get('underlying')
+
+        if gex_data:
+            # nesting preserved from original structure
+            if True:
+                gex_df = gex_data['gex_df']
+
+                # ===== GEX Summary Cards =====
+                gex_col1, gex_col2, gex_col3, gex_col4 = st.columns(4)
+
+                with gex_col1:
+                    gex_color = gex_data['gex_color']
+                    st.markdown(f"""
+                    <div style="background-color: {gex_color}20; padding: 15px; border-radius: 10px; border: 2px solid {gex_color};">
+                        <h4 style="color: {gex_color}; margin: 0;">Net GEX</h4>
+                        <h2 style="color: {gex_color}; margin: 5px 0;">{gex_data['total_gex']:+.2f}L</h2>
+                        <p style="color: white; margin: 0; font-size: 12px;">{gex_data['gex_signal']}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with gex_col2:
+                    if gex_data['gamma_flip_level']:
+                        flip_color = "#00ff88" if underlying_price > gex_data['gamma_flip_level'] else "#ff4444"
+                        st.markdown(f"""
+                        <div style="background-color: {flip_color}20; padding: 15px; border-radius: 10px; border: 2px solid {flip_color};">
+                            <h4 style="color: {flip_color}; margin: 0;">Gamma Flip</h4>
+                            <h2 style="color: {flip_color}; margin: 5px 0;">₹{gex_data['gamma_flip_level']:.0f}</h2>
+                            <p style="color: white; margin: 0; font-size: 12px;">{gex_data['spot_vs_flip']}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown("""
+                        <div style="background-color: #33333380; padding: 15px; border-radius: 10px; border: 2px solid #666;">
+                            <h4 style="color: #999; margin: 0;">Gamma Flip</h4>
+                            <h2 style="color: #999; margin: 5px 0;">N/A</h2>
+                            <p style="color: #666; margin: 0; font-size: 12px;">No flip detected</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                with gex_col3:
+                    if gex_data['gex_magnet']:
+                        st.markdown(f"""
+                        <div style="background-color: #00ff8820; padding: 15px; border-radius: 10px; border: 2px solid #00ff88;">
+                            <h4 style="color: #00ff88; margin: 0;">GEX Magnet</h4>
+                            <h2 style="color: #00ff88; margin: 5px 0;">₹{gex_data['gex_magnet']:.0f}</h2>
+                            <p style="color: white; margin: 0; font-size: 12px;">Price attracted here</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown("""
+                        <div style="background-color: #33333380; padding: 15px; border-radius: 10px; border: 2px solid #666;">
+                            <h4 style="color: #999; margin: 0;">GEX Magnet</h4>
+                            <h2 style="color: #999; margin: 5px 0;">N/A</h2>
+                            <p style="color: #666; margin: 0; font-size: 12px;">No magnet</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                with gex_col4:
+                    if gex_data['gex_repeller']:
+                        st.markdown(f"""
+                        <div style="background-color: #ff444420; padding: 15px; border-radius: 10px; border: 2px solid #ff4444;">
+                            <h4 style="color: #ff4444; margin: 0;">GEX Repeller</h4>
+                            <h2 style="color: #ff4444; margin: 5px 0;">₹{gex_data['gex_repeller']:.0f}</h2>
+                            <p style="color: white; margin: 0; font-size: 12px;">Price accelerates here</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown("""
+                        <div style="background-color: #33333380; padding: 15px; border-radius: 10px; border: 2px solid #666;">
+                            <h4 style="color: #999; margin: 0;">GEX Repeller</h4>
+                            <h2 style="color: #999; margin: 5px 0;">N/A</h2>
+                            <p style="color: #666; margin: 0; font-size: 12px;">No repeller</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                # ===== GEX Interpretation Box =====
+                st.markdown(f"""
+                <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 4px solid {gex_data['gex_color']}; margin: 10px 0;">
+                    <b style="color: {gex_data['gex_color']};">Market Regime:</b> {gex_data['gex_interpretation']}
+                </div>
+                """, unsafe_allow_html=True)
+
+                # ===== PCR × GEX Confluence Badge =====
+                st.markdown("### 🎯 PCR × GEX Confluence")
+
+                # Get ATM PCR for confluence
+                atm_data = df_summary[df_summary['Zone'] == 'ATM']
+                if not atm_data.empty:
+                    atm_pcr = atm_data.iloc[0].get('PCR', 1.0)
+                    confluence_badge, confluence_signal, confluence_strength = calculate_pcr_gex_confluence(atm_pcr, gex_data)
+
+                    conf_col1, conf_col2 = st.columns([1, 3])
+                    with conf_col1:
+                        # Color based on signal
+                        if "BULL" in confluence_badge:
+                            badge_color = "#00ff88"
+                        elif "BEAR" in confluence_badge:
+                            badge_color = "#ff4444"
+                        else:
+                            badge_color = "#FFD700"
+
+                        st.markdown(f"""
+                        <div style="background-color: {badge_color}30; padding: 20px; border-radius: 15px; border: 3px solid {badge_color}; text-align: center;">
+                            <h2 style="color: {badge_color}; margin: 0; font-size: 24px;">{confluence_badge}</h2>
+                            <p style="color: white; margin: 5px 0; font-size: 14px;">{confluence_signal}</p>
+                            <p style="color: #888; margin: 0; font-size: 12px;">Strength: {'★' * confluence_strength}{'☆' * (3 - confluence_strength)}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    with conf_col2:
+                        st.markdown("""
+                        **Confluence Matrix:**
+                        - 🟢🔥 **STRONG BULL**: Bullish PCR + Negative GEX = Violent upside potential
+                        - 🔴🔥 **STRONG BEAR**: Bearish PCR + Positive GEX = Strong rejection/pin down
+                        - 🟢📍 **BULL RANGE**: Bullish PCR + Positive GEX = Support with chop
+                        - 🔴⚡ **BEAR TREND**: Bearish PCR + Negative GEX = Downside acceleration
+                        """)
+
+                # ===== Net GEX Histogram =====
+                st.markdown("### 📊 Net GEX by Strike (Dealer Hedging Pressure)")
+
+                fig_gex = go.Figure()
+
+                # Add bars for Net GEX
+                colors = ['#00ff88' if x >= 0 else '#ff4444' for x in gex_df['Net_GEX']]
+
+                fig_gex.add_trace(go.Bar(
+                    x=gex_df['Strike'],
+                    y=gex_df['Net_GEX'],
+                    marker_color=colors,
+                    name='Net GEX',
+                    text=[f"{x:.1f}L" for x in gex_df['Net_GEX']],
+                    textposition='outside',
+                    textfont=dict(size=10)
+                ))
+
+                # Add zero line
+                fig_gex.add_hline(y=0, line_dash="dash", line_color="white", line_width=2)
+
+                # Add gamma flip line if exists
+                if gex_data['gamma_flip_level']:
+                    fig_gex.add_vline(
+                        x=gex_data['gamma_flip_level'],
+                        line_dash="dot",
+                        line_color="#FFD700",
+                        line_width=2,
+                        annotation_text=f"Gamma Flip: ₹{gex_data['gamma_flip_level']:.0f}",
+                        annotation_position="top"
+                    )
+
+                # Add spot price line
+                fig_gex.add_vline(
+                    x=underlying_price,
+                    line_dash="solid",
+                    line_color="#00aaff",
+                    line_width=3,
+                    annotation_text=f"Spot: ₹{underlying_price:.0f}",
+                    annotation_position="bottom"
+                )
+
+                fig_gex.update_layout(
+                    title=f"Net GEX by Strike | Total: {gex_data['total_gex']:+.2f}L",
+                    template='plotly_dark',
+                    height=400,
+                    showlegend=False,
+                    xaxis_title="Strike Price",
+                    yaxis_title="Net GEX (Lakhs)",
+                    plot_bgcolor='#1e1e1e',
+                    paper_bgcolor='#1e1e1e',
+                    margin=dict(l=50, r=50, t=60, b=50)
+                )
+
+                st.plotly_chart(fig_gex, use_container_width=True)
+
+                # ===== GEX Breakdown Table =====
+                with st.expander("📋 GEX Breakdown by Strike"):
+                    gex_display = gex_df.copy()
+                    gex_display['Strike'] = gex_display['Strike'].apply(lambda x: f"₹{x:.0f}")
+
+                    # Style the dataframe
+                    def color_gex(val):
+                        try:
+                            v = float(val)
+                            if v > 10:
+                                return 'background-color: #00ff8840; color: white'
+                            elif v > 0:
+                                return 'background-color: #00ff8820; color: white'
+                            elif v < -10:
+                                return 'background-color: #ff444440; color: white'
+                            elif v < 0:
+                                return 'background-color: #ff444420; color: white'
+                            else:
+                                return ''
+                        except:
+                            return ''
+
+                    styled_gex = gex_display.style.map(color_gex, subset=['Call_GEX', 'Put_GEX', 'Net_GEX'])
+                    st.dataframe(styled_gex, use_container_width=True, hide_index=True)
+
+                    st.markdown("""
+                    **GEX Interpretation:**
+                    - **Positive Net GEX (Green)**: Dealers LONG gamma → Price tends to PIN/REVERT
+                    - **Negative Net GEX (Red)**: Dealers SHORT gamma → Price tends to ACCELERATE
+                    - **GEX Magnet**: Strike with highest positive GEX (price attracted)
+                    - **GEX Repeller**: Strike with most negative GEX (price accelerates away)
+                    - **Gamma Flip**: Level where dealers switch from long to short gamma
+                    """)
+
+                # ===== GEX PER-STRIKE TABLE (time-series charts shown in comparison view above) =====
+                try:
+                    # Show current GEX data table
+                    st.markdown("### Current GEX Values")
+                    gex_display = gex_df[['Strike', 'Zone', 'Call_GEX', 'Put_GEX', 'Net_GEX']].copy()
+                    gex_display['Strike'] = gex_display['Strike'].apply(lambda x: f"₹{x:.0f}")
+
+                    # Color coding for table
+                    def style_gex_val(val):
+                        try:
+                            v = float(val)
+                            if v > 10:
+                                return 'background-color: #00ff8840; color: white'
+                            elif v > 0:
+                                return 'background-color: #00ff8820; color: white'
+                            elif v < -10:
+                                return 'background-color: #ff444440; color: white'
+                            elif v < 0:
+                                return 'background-color: #ff444420; color: white'
+                            return ''
+                        except:
+                            return ''
+
+                    styled_gex_table = gex_display.style.map(style_gex_val, subset=['Call_GEX', 'Put_GEX', 'Net_GEX'])
+                    st.dataframe(styled_gex_table, use_container_width=True, hide_index=True)
+
+                    st.caption("GEX > 10 = Pin Zone | GEX < -10 = Acceleration Zone | "
+                               "Time-series charts shown in comparison view above")
+
+                except Exception as e:
+                    st.warning(f"Error displaying GEX charts: {str(e)}")
+
+            else:
+                st.warning("Unable to calculate GEX. Check option chain data.")
+
+    except Exception as e:
+        st.warning(f"GEX analysis unavailable: {str(e)}")
+
+    # ===== PCR OF TOTAL CHANGE IN OI - TIME SERIES GRAPH =====
+    st.markdown("---")
+    st.markdown("## 📊 PCR of Total Change in OI - Time Series")
+
+    try:
+        df_summary_pcr = option_data.get('df_summary') if option_data else None
+        if df_summary_pcr is not None and 'changeinOpenInterest_CE' in df_summary_pcr.columns and 'changeinOpenInterest_PE' in df_summary_pcr.columns:
+            total_ce_chgoi = df_summary_pcr['changeinOpenInterest_CE'].sum()
+            total_pe_chgoi = df_summary_pcr['changeinOpenInterest_PE'].sum()
+
+            # PCR = Total PE ChgOI / Total CE ChgOI
+            if total_ce_chgoi != 0:
+                pcr_chgoi = abs(total_pe_chgoi / total_ce_chgoi)
+            else:
+                pcr_chgoi = 0
+
+            pcr_chgoi = round(pcr_chgoi, 3)
+
+            # Cache in session state
+            ist = pytz.timezone('Asia/Kolkata')
+            current_time = datetime.now(ist)
+
+            st.session_state.pcr_chgoi_last_valid = {
+                'pcr': pcr_chgoi,
+                'ce_chgoi': total_ce_chgoi,
+                'pe_chgoi': total_pe_chgoi,
+                'time': current_time
+            }
+
+            # Add to history (avoid duplicates within 30 seconds)
+            should_add = True
+            if st.session_state.pcr_chgoi_history:
+                last_entry = st.session_state.pcr_chgoi_history[-1]
+                time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
+                if time_diff < 30:
+                    should_add = False
+
+            if should_add:
+                _chgoi_hist_entry = {
+                    'time': current_time,
+                    'pcr': pcr_chgoi,
+                    'ce_chgoi': total_ce_chgoi,
+                    'pe_chgoi': total_pe_chgoi
+                }
+                st.session_state.pcr_chgoi_history.append(_chgoi_hist_entry)
+                if len(st.session_state.pcr_chgoi_history) > 200:
+                    st.session_state.pcr_chgoi_history = st.session_state.pcr_chgoi_history[-200:]
+                db.save_option_history('pcr_chgoi_history', _chgoi_hist_entry)
+
+        # Display graph from cached history
+        if len(st.session_state.pcr_chgoi_history) > 0:
+            pcr_chgoi_df = pd.DataFrame(st.session_state.pcr_chgoi_history)
+
+            # Summary cards
+            latest = st.session_state.pcr_chgoi_last_valid or {}
+            curr_pcr = latest.get('pcr', 0)
+            curr_ce = latest.get('ce_chgoi', 0)
+            curr_pe = latest.get('pe_chgoi', 0)
+
+            pcr_card1, pcr_card2, pcr_card3 = st.columns(3)
+            with pcr_card1:
+                pcr_color = "#00ff88" if curr_pcr > 1.2 else "#ff4444" if curr_pcr < 0.7 else "#FFD700"
+                pcr_label = "Bullish" if curr_pcr > 1.2 else "Bearish" if curr_pcr < 0.7 else "Neutral"
+                st.markdown(f"""
+                <div style="background-color: {pcr_color}20; padding: 15px; border-radius: 10px; border: 2px solid {pcr_color};">
+                    <h4 style="color: {pcr_color}; margin: 0;">PCR (ΔOI)</h4>
+                    <h2 style="color: {pcr_color}; margin: 5px 0;">{curr_pcr:.3f}</h2>
+                    <p style="color: white; margin: 0; font-size: 12px;">{pcr_label}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            with pcr_card2:
+                ce_color = "#ff4444" if curr_ce > 0 else "#00ff88"
+                st.markdown(f"""
+                <div style="background-color: {ce_color}20; padding: 15px; border-radius: 10px; border: 2px solid {ce_color};">
+                    <h4 style="color: {ce_color}; margin: 0;">Total CE ΔOI</h4>
+                    <h2 style="color: {ce_color}; margin: 5px 0;">{curr_ce/100000:+.2f}L</h2>
+                    <p style="color: white; margin: 0; font-size: 12px;">{'Call Writing ↑' if curr_ce > 0 else 'Call Unwinding ↓'}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            with pcr_card3:
+                pe_color = "#00ff88" if curr_pe > 0 else "#ff4444"
+                st.markdown(f"""
+                <div style="background-color: {pe_color}20; padding: 15px; border-radius: 10px; border: 2px solid {pe_color};">
+                    <h4 style="color: {pe_color}; margin: 0;">Total PE ΔOI</h4>
+                    <h2 style="color: {pe_color}; margin: 5px 0;">{curr_pe/100000:+.2f}L</h2>
+                    <p style="color: white; margin: 0; font-size: 12px;">{'Put Writing ↑' if curr_pe > 0 else 'Put Unwinding ↓'}</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            # PCR of ChgOI Time-Series Chart
+            fig_pcr_chgoi = go.Figure()
+
+            # Color the line based on PCR zones
+            fig_pcr_chgoi.add_trace(go.Scatter(
+                x=pcr_chgoi_df['time'],
+                y=pcr_chgoi_df['pcr'],
+                mode='lines+markers',
+                name='PCR (ΔOI)',
+                line=dict(color='#00aaff', width=3),
+                marker=dict(size=6, color=[
+                    '#00ff88' if v > 1.2 else '#ff4444' if v < 0.7 else '#FFD700'
+                    for v in pcr_chgoi_df['pcr']
+                ]),
+                fill='tozeroy',
+                fillcolor='rgba(0, 170, 255, 0.1)'
+            ))
+
+            # Reference zones
+            fig_pcr_chgoi.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1,
+                                    annotation_text="1.0 (Neutral)", annotation_position="right")
+            fig_pcr_chgoi.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1,
+                                    annotation_text="1.2 (Bullish)", annotation_position="right")
+            fig_pcr_chgoi.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1,
+                                    annotation_text="0.7 (Bearish)", annotation_position="right")
+
+            # Dynamic Y range: data + reference thresholds always in view
+            _ov_raw = pcr_chgoi_df['pcr'].dropna().tolist()
+            _ov_all = _ov_raw + [0.7, 1.0, 1.2]
+            _ov_ymin = max(0.0, min(_ov_all) * 0.9)
+            _ov_ymax = max(_ov_all) * 1.1
+
+            # Add green/red shading zones
+            fig_pcr_chgoi.add_hrect(y0=1.2, y1=_ov_ymax, fillcolor="rgba(0,255,136,0.06)", line_width=0)
+            fig_pcr_chgoi.add_hrect(y0=_ov_ymin, y1=0.7, fillcolor="rgba(255,68,68,0.06)", line_width=0)
+
+            fig_pcr_chgoi.update_layout(
+                title=f"PCR of Total Change in OI | Current: {curr_pcr:.3f} ({pcr_label})",
+                template='plotly_dark',
+                height=400,
+                showlegend=False,
+                xaxis=dict(tickformat='%H:%M', title='Time'),
+                yaxis=dict(title='PCR (Total PE ΔOI / Total CE ΔOI)', range=[_ov_ymin, _ov_ymax]),
+                plot_bgcolor='#1e1e1e',
+                paper_bgcolor='#1e1e1e',
+                margin=dict(l=50, r=50, t=60, b=50)
+            )
+
+            st.plotly_chart(fig_pcr_chgoi, use_container_width=True)
+
+            # Status bar
+            pcr_info1, pcr_info2 = st.columns([3, 1])
+            with pcr_info1:
+                st.caption(f"🟢 Live | 📈 {len(st.session_state.pcr_chgoi_history)} data points | PCR > 1.2 = Bullish | PCR < 0.7 = Bearish")
+            with pcr_info2:
+                if st.button("🗑️ Clear PCR ΔOI History"):
+                    st.session_state.pcr_chgoi_history = []
+                    st.session_state.pcr_chgoi_last_valid = None
+                    st.rerun()
+        else:
+            st.info("📊 PCR (ΔOI) history will build up as the app refreshes. Please wait for data collection...")
+
+    except Exception as e:
+        st.warning(f"PCR of ΔOI analysis unavailable: {str(e)}")
+
+    # ===== PCR OF CHANGE IN OI - TIME SERIES PER ATM ± 2 STRIKES =====
+    st.markdown("---")
+    st.markdown("## 📊 PCR of Change in OI - Time Series (ATM ± 2)")
+
+    # Helper function to create per-strike ChgOI PCR chart
+    def create_pcr_chgoi_strike_chart(history_df, col_name, color, title_prefix):
+        """Helper to create individual PCR of Change in OI chart per strike"""
+        if col_name and col_name in history_df.columns:
+            strike_val = col_name
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=history_df['time'],
+                y=history_df[col_name],
+                mode='lines+markers',
+                name=f'₹{strike_val}',
+                line=dict(color=color, width=2),
+                marker=dict(size=4),
+                fill='tozeroy',
+                fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.1])}'
+            ))
+
+            # Reference lines
+            fig.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
+            fig.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
+            fig.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
+
+            # Get current value
+            current_val = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
+
+            # Dynamic Y range: data + reference thresholds always in view
+            _chgoi_raw = history_df[col_name].dropna().tolist()
+            _chgoi_all = _chgoi_raw + [0.7, 1.2]
+            _chgoi_ymin = max(0.0, min(_chgoi_all) * 0.9)
+            _chgoi_ymax = max(_chgoi_all) * 1.1
+
+            fig.update_layout(
+                title=f"{title_prefix}<br>₹{strike_val}<br>PCR(ΔOI): {current_val:.2f}",
+                template='plotly_dark',
+                height=280,
+                showlegend=False,
+                margin=dict(l=10, r=10, t=70, b=30),
+                xaxis=dict(tickformat='%H:%M', title=''),
+                yaxis=dict(title='PCR (ΔOI)', range=[_chgoi_ymin, _chgoi_ymax]),
+                plot_bgcolor='#1e1e1e',
+                paper_bgcolor='#1e1e1e'
+            )
+            return fig, current_val
+        return None, 0
+
+    # Try to get new data and add to history
+    pcr_chgoi_strike_available = False
+    pcr_chgoi_strike_df = None
+
+    df_summary_chgoi = option_data.get('df_summary') if option_data else None
+    if df_summary_chgoi is not None and 'Zone' in df_summary_chgoi.columns and 'changeinOpenInterest_CE' in df_summary_chgoi.columns and 'changeinOpenInterest_PE' in df_summary_chgoi.columns:
+        try:
+            # Find ATM index
+            atm_idx_chgoi = df_summary_chgoi[df_summary_chgoi['Zone'] == 'ATM'].index
+            if len(atm_idx_chgoi) > 0:
+                atm_pos_chgoi = df_summary_chgoi.index.get_loc(atm_idx_chgoi[0])
+
+                # Get ATM ± 2 strikes (5 strikes total)
+                start_idx_chgoi = max(0, atm_pos_chgoi - 2)
+                end_idx_chgoi = min(len(df_summary_chgoi), atm_pos_chgoi + 3)
+
+                pcr_chgoi_strike_df = df_summary_chgoi.iloc[start_idx_chgoi:end_idx_chgoi][['Strike', 'Zone',
+                                                               'changeinOpenInterest_CE', 'changeinOpenInterest_PE']].copy()
+
+                # Calculate PCR of Change in OI per strike
+                pcr_chgoi_strike_df['PCR_ChgOI'] = pcr_chgoi_strike_df.apply(
+                    lambda row: abs(row['changeinOpenInterest_PE'] / row['changeinOpenInterest_CE'])
+                    if row['changeinOpenInterest_CE'] != 0 else 0, axis=1
+                )
+                pcr_chgoi_strike_df['PCR_ChgOI'] = pcr_chgoi_strike_df['PCR_ChgOI'].round(3)
+                pcr_chgoi_strike_df['PCR_ChgOI_Signal'] = np.where(
+                    pcr_chgoi_strike_df['PCR_ChgOI'] > 1.2, "Bullish",
+                    np.where(pcr_chgoi_strike_df['PCR_ChgOI'] < 0.7, "Bearish", "Neutral")
+                )
+
+                if not pcr_chgoi_strike_df.empty:
+                    pcr_chgoi_strike_available = True
+                    st.session_state.pcr_chgoi_strike_last_valid = pcr_chgoi_strike_df.copy()
+
+                    ist = pytz.timezone('Asia/Kolkata')
+                    current_time = datetime.now(ist)
+
+                    # Build history entry keyed by strike price
+                    chgoi_entry = {'time': current_time}
+                    for _, row in pcr_chgoi_strike_df.iterrows():
+                        strike_label = str(int(row['Strike']))
+                        chgoi_entry[strike_label] = row['PCR_ChgOI']
+
+                    # Store current strikes
+                    current_chgoi_strikes = pcr_chgoi_strike_df['Strike'].tolist()
+                    st.session_state.pcr_chgoi_strike_current_strikes = [int(s) for s in current_chgoi_strikes]
+
+                    # Deduplicate within 30 seconds
+                    should_add = True
+                    if st.session_state.pcr_chgoi_strike_history:
+                        last_entry = st.session_state.pcr_chgoi_strike_history[-1]
+                        time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
+                        if time_diff < 30:
+                            should_add = False
+
+                    if should_add:
+                        st.session_state.pcr_chgoi_strike_history.append(chgoi_entry)
+                        if len(st.session_state.pcr_chgoi_strike_history) > 200:
+                            st.session_state.pcr_chgoi_strike_history = st.session_state.pcr_chgoi_strike_history[-200:]
+                        db.save_option_history('pcr_chgoi_strike_history', chgoi_entry)
+
+        except Exception as e:
+            st.caption(f"⚠️ Current fetch issue: {str(e)[:50]}...")
+
+    # ALWAYS try to display graph if we have history
+    if len(st.session_state.pcr_chgoi_strike_history) > 0:
+        try:
+            chgoi_history_df = pd.DataFrame(st.session_state.pcr_chgoi_strike_history)
+
+            current_chgoi_strikes = getattr(st.session_state, 'pcr_chgoi_strike_current_strikes', [])
+
+            if not current_chgoi_strikes and st.session_state.pcr_chgoi_strike_last_valid is not None:
+                current_chgoi_strikes = [int(s) for s in st.session_state.pcr_chgoi_strike_last_valid['Strike'].tolist()]
+
+            current_chgoi_strikes = sorted(current_chgoi_strikes)
+
+            # 5 columns for side-by-side display
+            chgoi_col1, chgoi_col2, chgoi_col3, chgoi_col4, chgoi_col5 = st.columns(5)
+
+            def display_pcr_chgoi_with_signal(container, fig, pcr_val):
+                if fig:
+                    container.plotly_chart(fig, use_container_width=True)
+                    if pcr_val > 1.2:
+                        container.success("Bullish")
+                    elif pcr_val < 0.7:
+                        container.error("Bearish")
+                    else:
+                        container.warning("Neutral")
+
+            # Get zone info
+            chgoi_zone_info = {}
+            chgoi_zone_df = pcr_chgoi_strike_df if pcr_chgoi_strike_df is not None else st.session_state.pcr_chgoi_strike_last_valid
+            if chgoi_zone_df is not None:
+                for _, row in chgoi_zone_df.iterrows():
+                    chgoi_zone_info[int(row['Strike'])] = row['Zone']
+
+            position_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
+            position_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
+            chgoi_columns = [chgoi_col1, chgoi_col2, chgoi_col3, chgoi_col4, chgoi_col5]
+
+            for i, col in enumerate(chgoi_columns):
+                with col:
+                    if i < len(current_chgoi_strikes):
+                        strike = current_chgoi_strikes[i]
+                        strike_col = str(strike)
+                        zone = chgoi_zone_info.get(strike, position_labels[i].split()[-1])
+
+                        if strike_col in chgoi_history_df.columns:
+                            fig, pcr_val = create_pcr_chgoi_strike_chart(chgoi_history_df, strike_col, position_colors[i], f'{position_labels[i]}')
+                            display_pcr_chgoi_with_signal(st, fig, pcr_val)
+                        else:
+                            st.info(f"₹{strike} - Building history...")
+                    else:
+                        st.info(f"{position_labels[i]} N/A")
+
+            # Show current data table
+            st.markdown("### Current PCR of Change in OI Values")
+            display_chgoi_df = pcr_chgoi_strike_df if pcr_chgoi_strike_df is not None else st.session_state.pcr_chgoi_strike_last_valid
+            if display_chgoi_df is not None:
+                chgoi_display = display_chgoi_df[['Strike', 'Zone', 'PCR_ChgOI', 'PCR_ChgOI_Signal']].copy()
+                chgoi_display['CE ΔOI (L)'] = (display_chgoi_df['changeinOpenInterest_CE'] / 100000).round(2)
+                chgoi_display['PE ΔOI (L)'] = (display_chgoi_df['changeinOpenInterest_PE'] / 100000).round(2)
+                chgoi_display.rename(columns={'PCR_ChgOI': 'PCR (ΔOI)', 'PCR_ChgOI_Signal': 'Signal'}, inplace=True)
+                st.dataframe(chgoi_display, use_container_width=True, hide_index=True)
+
+            # Status bar and clear button
+            chgoi_info1, chgoi_info2 = st.columns([3, 1])
+            with chgoi_info1:
+                status = "🟢 Live" if pcr_chgoi_strike_available else "🟡 Using cached history"
+                st.caption(f"{status} | 📈 {len(st.session_state.pcr_chgoi_strike_history)} data points | History preserved on refresh failures")
+            with chgoi_info2:
+                if st.button("🗑️ Clear ΔOI Strike History"):
+                    st.session_state.pcr_chgoi_strike_history = []
+                    st.session_state.pcr_chgoi_strike_last_valid = None
+                    st.rerun()
+
+        except Exception as e:
+            st.warning(f"Error displaying PCR ΔOI strike charts: {str(e)}")
+    else:
+        st.info("📊 PCR of ΔOI per strike history will build up as the app refreshes. Please wait for data collection...")
+
+    # ===== COMPOSITE DIRECTION SIGNAL — now merged into Unified Sentiment Engine above =====
+    # Computation runs inside Unified Options Flow Sentiment Engine; session state is shared.
+    # Displaying the verdict & per-strike charts here for historical time-series view.
+    st.markdown("---")
+    st.markdown("## 🧭 Composite Direction Signal — Time Series (ATM ± 2)")
+
+    try:
+        # Computation runs inside Unified Options Flow Sentiment Engine (above).
+        # This section shows the composite time-series history from session state.
+        last_valid = st.session_state.composite_signal_last_valid
+        if last_valid:
+            _cv2_verdict = last_valid['verdict']
+            _cv2_icon    = last_valid['verdict_icon']
+            _cv2_color   = last_valid['verdict_color']
+            _cv2_desc    = last_valid['verdict_desc']
+            _cv2_score   = last_valid['score_pct']
+            _cv2_gex     = last_valid['total_net_gex']
+            _cv2_pcr     = last_valid['avg_pcr']
+            _cv2_chgoi   = last_valid['avg_chgoi']
+            _cv2_max     = 14.0
+            _cv2_gtrend  = _cv2_gex < -10
+            _cv2_gpin    = _cv2_gex > 10
+            strike_details = last_valid.get('strike_details', [])
+
+            # Verdict card
+            st.markdown(f"""
+            <div style="background:linear-gradient(135deg,{_cv2_color}15,{_cv2_color}30);
+                        padding:20px;border-radius:12px;border:3px solid {_cv2_color};
+                        text-align:center;margin-bottom:14px;">
+                <h1 style="color:{_cv2_color};margin:0;font-size:42px;">{_cv2_icon} {_cv2_verdict}</h1>
+                <p style="color:#ccc;margin:8px 0 0 0;font-size:15px;">{_cv2_desc}</p>
+                <p style="color:{_cv2_color};margin:5px 0 0 0;font-size:13px;">
+                    Score: {_cv2_score:+.0f}% | GEX: {_cv2_gex:.1f}L
+                    ({'Trending' if _cv2_gtrend else 'Pinning' if _cv2_gpin else 'Neutral'})
+                </p>
+            </div>""", unsafe_allow_html=True)
+
+            # 3 metric cards
+            _cm1x, _cm2x, _cm3x = st.columns(3)
+            with _cm1x:
+                _pc2 = "#00ff88" if _cv2_pcr > 1.2 else "#ff4444" if _cv2_pcr < 0.7 else "#FFD700"
+                st.markdown(f'''<div style="background:{_pc2}20;padding:12px;border-radius:8px;
+                    border:2px solid {_pc2};text-align:center;">
+                    <h4 style="color:{_pc2};margin:0;">Avg PCR (OI)</h4>
+                    <h2 style="color:{_pc2};margin:5px 0;">{_cv2_pcr:.2f}</h2>
+                    <p style="color:white;margin:0;font-size:12px;">
+                        {'Bullish' if _cv2_pcr > 1.2 else 'Bearish' if _cv2_pcr < 0.7 else 'Neutral'}
+                    </p></div>''', unsafe_allow_html=True)
+            with _cm2x:
+                _cc2 = "#00ff88" if _cv2_chgoi > 1.2 else "#ff4444" if _cv2_chgoi < 0.7 else "#FFD700"
+                st.markdown(f'''<div style="background:{_cc2}20;padding:12px;border-radius:8px;
+                    border:2px solid {_cc2};text-align:center;">
+                    <h4 style="color:{_cc2};margin:0;">Avg PCR (ΔOI)</h4>
+                    <h2 style="color:{_cc2};margin:5px 0;">{_cv2_chgoi:.2f}</h2>
+                    <p style="color:white;margin:0;font-size:12px;">
+                        {'Bullish' if _cv2_chgoi > 1.2 else 'Bearish' if _cv2_chgoi < 0.7 else 'Neutral'}
+                    </p></div>''', unsafe_allow_html=True)
+            with _cm3x:
+                _gc2 = "#00ff88" if _cv2_gex > 10 else "#ff4444" if _cv2_gex < -10 else "#FFD700"
+                st.markdown(f'''<div style="background:{_gc2}20;padding:12px;border-radius:8px;
+                    border:2px solid {_gc2};text-align:center;">
+                    <h4 style="color:{_gc2};margin:0;">Total GEX (ATM±2)</h4>
+                    <h2 style="color:{_gc2};margin:5px 0;">{_cv2_gex:.1f}L</h2>
+                    <p style="color:white;margin:0;font-size:12px;">
+                        {'Pin/Chop' if _cv2_gex > 10 else 'Trend/Accel' if _cv2_gex < -10 else 'Neutral'}
+                    </p></div>''', unsafe_allow_html=True)
+
+        # Time-series charts from shared session state
+        if len(st.session_state.composite_signal_history) > 0:
+            comp_hist_df = pd.DataFrame(st.session_state.composite_signal_history)
+
+            # Chart 1: Composite Score over time
+            fig_score = go.Figure()
+            _mkr_colors2 = []
+            for _, _hrow2 in comp_hist_df.iterrows():
+                _vn2 = _hrow2.get('verdict_numeric', 0)
+                _mkr_colors2.append(
+                    '#00ff88' if _vn2 >= 2 else '#90EE90' if _vn2 == 1 else
+                    '#ff4444' if _vn2 <= -2 else '#FFB6C1' if _vn2 == -1 else '#FFD700')
+            fig_score.add_trace(go.Scatter(
+                x=comp_hist_df['time'], y=comp_hist_df['score_pct'],
+                mode='lines+markers', name='Score %',
+                line=dict(color='#00aaff', width=3),
+                marker=dict(size=8, color=_mkr_colors2),
+                fill='tozeroy', fillcolor='rgba(0,170,255,0.08)'))
+            fig_score.add_hline(y=0, line_dash='dash', line_color='white', line_width=1.5,
+                annotation_text='Neutral (0%)', annotation_position='right')
+            fig_score.add_hline(y=15, line_dash='dot', line_color='#00ff88', line_width=1,
+                annotation_text='Bullish Zone', annotation_position='right')
+            fig_score.add_hline(y=-15, line_dash='dot', line_color='#ff4444', line_width=1,
+                annotation_text='Bearish Zone', annotation_position='right')
+            _ymax2 = max(abs(comp_hist_df['score_pct'].max()), abs(comp_hist_df['score_pct'].min()), 30) * 1.2
+            fig_score.add_hrect(y0=15, y1=_ymax2, fillcolor='rgba(0,255,136,0.06)', line_width=0)
+            fig_score.add_hrect(y0=-_ymax2, y1=-15, fillcolor='rgba(255,68,68,0.06)', line_width=0)
+            _cv2_s_now = last_valid['score_pct'] if last_valid else 0
+            _cv2_v_now = last_valid['verdict']    if last_valid else 'NEUTRAL'
+            fig_score.update_layout(
+                title=f"Composite Direction Score | Current: {_cv2_s_now:+.0f}% ({_cv2_v_now})",
+                template='plotly_dark', height=380, showlegend=False,
+                xaxis=dict(tickformat='%H:%M', title='Time'),
+                yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
+                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                margin=dict(l=50, r=50, t=60, b=50))
+            st.plotly_chart(fig_score, use_container_width=True)
+
+            # Charts: PCR components + GEX (2 col)
+            ind_col1, ind_col2 = st.columns(2)
+            with ind_col1:
+                fig_pcr_ts = go.Figure()
+                fig_pcr_ts.add_trace(go.Scatter(
+                    x=comp_hist_df['time'], y=comp_hist_df['avg_pcr'],
+                    mode='lines+markers', name='Avg PCR (OI)',
+                    line=dict(color='#00aaff', width=2), marker=dict(size=4)))
+                fig_pcr_ts.add_trace(go.Scatter(
+                    x=comp_hist_df['time'], y=comp_hist_df['avg_chgoi'],
+                    mode='lines+markers', name='Avg PCR (ΔOI)',
+                    line=dict(color='#ff44ff', width=2), marker=dict(size=4)))
+                fig_pcr_ts.add_hline(y=1.2, line_dash='dot', line_color='#00ff88', line_width=1)
+                fig_pcr_ts.add_hline(y=1.0, line_dash='dash', line_color='white', line_width=1)
+                fig_pcr_ts.add_hline(y=0.7, line_dash='dot', line_color='#ff4444', line_width=1)
+                _all_pcr = (comp_hist_df['avg_pcr'].dropna().tolist() +
+                            comp_hist_df['avg_chgoi'].dropna().tolist() + [0.7, 1.0, 1.2])
+                fig_pcr_ts.update_layout(
+                    title='Avg PCR (OI) vs Avg PCR (ΔOI)',
+                    template='plotly_dark', height=300, showlegend=True,
+                    legend=dict(orientation="h", y=-0.3, font=dict(size=9)),
+                    xaxis=dict(tickformat='%H:%M'),
+                    yaxis=dict(title='PCR',
+                               range=[max(0, min(_all_pcr)*0.9), max(_all_pcr)*1.1]),
+                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    margin=dict(l=40, r=10, t=50, b=30))
+                st.plotly_chart(fig_pcr_ts, use_container_width=True)
+            with ind_col2:
+                fig_gex_ts = go.Figure()
+                _gex_c2 = ['#00ff88' if g > 10 else '#ff4444' if g < -10 else '#FFD700'
+                           for g in comp_hist_df['total_gex']]
+                fig_gex_ts.add_trace(go.Scatter(
+                    x=comp_hist_df['time'], y=comp_hist_df['total_gex'],
+                    mode='lines+markers', name='Total GEX',
+                    line=dict(color='#FFD700', width=2),
+                    marker=dict(size=5, color=_gex_c2),
+                    fill='tozeroy', fillcolor='rgba(255,215,0,0.08)'))
+                fig_gex_ts.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
+                fig_gex_ts.add_hline(y=10, line_dash='dot', line_color='#00ff88', line_width=1,
+                    annotation_text='Pin Zone', annotation_position='right')
+                fig_gex_ts.add_hline(y=-10, line_dash='dot', line_color='#ff4444', line_width=1,
+                    annotation_text='Accel Zone', annotation_position='right')
+                fig_gex_ts.update_layout(
+                    title='Total GEX (ATM±2) Over Time',
+                    template='plotly_dark', height=300, showlegend=False,
+                    xaxis=dict(tickformat='%H:%M'),
+                    yaxis=dict(title='GEX (Lakhs)', zeroline=True, zerolinecolor='white'),
+                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    margin=dict(l=40, r=50, t=50, b=30))
+                st.plotly_chart(fig_gex_ts, use_container_width=True)
+
+            # Per-strike score time series
+            score_cols = [c for c in comp_hist_df.columns if c.startswith('score_')]
+            if score_cols:
+                fig_strike_ts = go.Figure()
+                _cs_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
+                _plbls = ['ITM-2', 'ITM-1', 'ATM', 'OTM+1', 'OTM+2']
+                for _idx_s, _sc2 in enumerate(sorted(score_cols)):
+                    _sn = _sc2.replace('score_', '')
+                    _slbl3 = _plbls[_idx_s] if _idx_s < len(_plbls) else _sn
+                    fig_strike_ts.add_trace(go.Scatter(
+                        x=comp_hist_df['time'], y=comp_hist_df[_sc2],
+                        mode='lines+markers',
+                        name=f'{_slbl3} (₹{_sn})',
+                        line=dict(color=_cs_colors[_idx_s % len(_cs_colors)], width=2),
+                        marker=dict(size=3)))
+                fig_strike_ts.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
+                fig_strike_ts.update_layout(
+                    title='Per-Strike Weighted Score Over Time',
+                    template='plotly_dark', height=320, showlegend=True,
+                    legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
+                    xaxis=dict(tickformat='%H:%M'),
+                    yaxis=dict(title='Weighted Score', zeroline=True, zerolinecolor='white'),
+                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    margin=dict(l=50, r=20, t=50, b=40))
+                st.plotly_chart(fig_strike_ts, use_container_width=True)
+
+            # Per-strike breakdown table
+            if last_valid and last_valid.get('strike_details'):
+                st.markdown("### Per-Strike Breakdown")
+                st.dataframe(pd.DataFrame(last_valid['strike_details']),
+                             use_container_width=True, hide_index=True)
+
+            # Status / clear
+            comp_info1, comp_info2 = st.columns([3, 1])
+            with comp_info1:
+                st.caption(f"📈 {len(st.session_state.composite_signal_history)} pts · "
+                           f"Computed inside Unified Sentiment Engine · Updates every ~30s")
+            with comp_info2:
+                if st.button("🗑️ Clear Composite History", key="clr_comp_ts"):
+                    st.session_state.composite_signal_history = []
+                    st.session_state.composite_signal_last_valid = None
+                    st.rerun()
+
+        elif not st.session_state.composite_signal_last_valid:
+            st.info("📊 Composite signal history will build up as the app refreshes.")
+
+    except Exception as e:
+        st.warning(f"Composite direction signal unavailable: {str(e)}")
+
+    # ===== TOTAL GEX TIME-SERIES GRAPH =====
+    st.markdown("---")
+    st.markdown("## 📊 Total GEX (Gamma Exposure) - Time Series")
+
+    try:
+        df_summary_gex = option_data.get('df_summary') if option_data else None
+        underlying_price_gex = option_data.get('underlying') if option_data else None
+
+        if df_summary_gex is not None and underlying_price_gex:
+            gex_calc = calculate_dealer_gex(df_summary_gex, underlying_price_gex)
+            if gex_calc:
+                total_gex_val = gex_calc['total_gex']
+                gex_signal_val = gex_calc['gex_signal']
+                gex_color_val = gex_calc['gex_color']
+                gex_interp_val = gex_calc['gex_interpretation']
+                flip_level = gex_calc.get('gamma_flip_level')
+
+                # Cache in session state
+                ist = pytz.timezone('Asia/Kolkata')
+                current_time = datetime.now(ist)
+
+                st.session_state.total_gex_last_valid = {
+                    'total_gex': total_gex_val,
+                    'signal': gex_signal_val,
+                    'color': gex_color_val,
+                    'interpretation': gex_interp_val,
+                    'flip_level': flip_level,
+                    'time': current_time
+                }
+
+                # Add to history
+                should_add = True
+                if st.session_state.total_gex_history:
+                    last_entry = st.session_state.total_gex_history[-1]
+                    time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
+                    if time_diff < 30:
+                        should_add = False
+
+                if should_add:
+                    _gex_hist_entry = {
+                        'time': current_time,
+                        'total_gex': total_gex_val,
+                        'signal': gex_signal_val,
+                        'flip_level': flip_level
+                    }
+                    st.session_state.total_gex_history.append(_gex_hist_entry)
+                    if len(st.session_state.total_gex_history) > 200:
+                        st.session_state.total_gex_history = st.session_state.total_gex_history[-200:]
+                    db.save_option_history('total_gex_history', _gex_hist_entry)
+
+        # Display graph from cached history
+        if len(st.session_state.total_gex_history) > 0:
+            gex_ts_df = pd.DataFrame(st.session_state.total_gex_history)
+
+            latest_gex = st.session_state.total_gex_last_valid or {}
+            curr_gex = latest_gex.get('total_gex', 0)
+            curr_signal = latest_gex.get('signal', 'N/A')
+            curr_gex_color = latest_gex.get('color', '#FFD700')
+            curr_interp = latest_gex.get('interpretation', 'N/A')
+
+            # Total GEX Time-Series Chart
+            fig_total_gex = go.Figure()
+
+            # Color markers based on positive/negative
+            marker_colors = ['#00ff88' if v >= 0 else '#ff4444' for v in gex_ts_df['total_gex']]
+
+            fig_total_gex.add_trace(go.Scatter(
+                x=gex_ts_df['time'],
+                y=gex_ts_df['total_gex'],
+                mode='lines+markers',
+                name='Total GEX',
+                line=dict(color=curr_gex_color, width=3),
+                marker=dict(size=6, color=marker_colors),
+                fill='tozeroy',
+                fillcolor='rgba(0,255,136,0.08)' if curr_gex >= 0 else 'rgba(255,68,68,0.08)'
+            ))
+
+            # Zero reference line (critical flip boundary)
+            fig_total_gex.add_hline(y=0, line_dash="solid", line_color="white", line_width=2,
+                                    annotation_text="0 (Gamma Flip)", annotation_position="right")
+
+            # Threshold lines
+            fig_total_gex.add_hline(y=50, line_dash="dot", line_color="#00ff88", line_width=1,
+                                    annotation_text="+50 (Strong Pin)", annotation_position="right")
+            fig_total_gex.add_hline(y=-50, line_dash="dot", line_color="#ff4444", line_width=1,
+                                    annotation_text="-50 (Strong Trend)", annotation_position="right")
+
+            # Shading zones
+            y_max_gex = max(abs(gex_ts_df['total_gex'].max()), abs(gex_ts_df['total_gex'].min()), 60) * 1.2
+            fig_total_gex.add_hrect(y0=50, y1=y_max_gex, fillcolor="rgba(0,255,136,0.06)", line_width=0)
+            fig_total_gex.add_hrect(y0=-y_max_gex, y1=-50, fillcolor="rgba(255,68,68,0.06)", line_width=0)
+
+            fig_total_gex.update_layout(
+                title=f"Total Net GEX | Current: {curr_gex:+.2f}L ({curr_signal})",
+                template='plotly_dark',
+                height=400,
+                showlegend=False,
+                xaxis=dict(tickformat='%H:%M', title='Time'),
+                yaxis=dict(
+                    title='Total Net GEX (Lakhs)',
+                    zeroline=True,
+                    zerolinecolor='white',
+                    zerolinewidth=2
+                ),
+                plot_bgcolor='#1e1e1e',
+                paper_bgcolor='#1e1e1e',
+                margin=dict(l=50, r=50, t=60, b=50)
+            )
+
+            st.plotly_chart(fig_total_gex, use_container_width=True)
+
+            # Interpretation box
+            st.markdown(f"""
+            <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 4px solid {curr_gex_color}; margin: 10px 0;">
+                <b style="color: {curr_gex_color};">Current Regime:</b> {curr_interp}
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Status bar
+            gex_ts_info1, gex_ts_info2 = st.columns([3, 1])
+            with gex_ts_info1:
+                st.caption(f"🟢 Live | 📈 {len(st.session_state.total_gex_history)} data points | +GEX = Pin/Chop | -GEX = Trend/Breakout")
+            with gex_ts_info2:
+                if st.button("🗑️ Clear Total GEX History"):
+                    st.session_state.total_gex_history = []
+                    st.session_state.total_gex_last_valid = None
+                    st.rerun()
+        else:
+            st.info("📊 Total GEX history will build up as the app refreshes. Please wait for data collection...")
+
+    except Exception as e:
+        st.warning(f"Total GEX time-series unavailable: {str(e)}")
+
+    # ===== GAMMA SEQUENCE ANALYSIS =====
+    st.markdown("---")
+    st.markdown("## 📊 Gamma Sequence Analysis")
+
+    try:
+        df_summary_gs = option_data.get('df_summary') if option_data else None
+        underlying_price_gs = option_data.get('underlying') if option_data else None
+
+        if df_summary_gs is not None and underlying_price_gs:
+            gamma_seq = calculate_gamma_sequence(df_summary_gs, underlying_price_gs)
+
+            if gamma_seq:
+                gs_df = gamma_seq['gamma_seq_df']
+
+                # Summary cards
+                gs_col1, gs_col2, gs_col3 = st.columns(3)
+                with gs_col1:
+                    pcolor = gamma_seq['profile_color']
+                    st.markdown(f"""
+                    <div style="background-color: {pcolor}20; padding: 15px; border-radius: 10px; border: 2px solid {pcolor};">
+                        <h4 style="color: {pcolor}; margin: 0;">Gamma Profile</h4>
+                        <h2 style="color: {pcolor}; margin: 5px 0; font-size: 16px;">{gamma_seq['gamma_profile']}</h2>
+                        <p style="color: white; margin: 0; font-size: 12px;">Above: {gamma_seq['above_pct']}% | Below: {gamma_seq['below_pct']}%</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with gs_col2:
+                    st.markdown(f"""
+                    <div style="background-color: #FFD70020; padding: 15px; border-radius: 10px; border: 2px solid #FFD700;">
+                        <h4 style="color: #FFD700; margin: 0;">Peak Gamma</h4>
+                        <h2 style="color: #FFD700; margin: 5px 0;">₹{gamma_seq['peak_gamma_strike']:.0f}</h2>
+                        <p style="color: white; margin: 0; font-size: 12px;">Highest total gamma exposure</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with gs_col3:
+                    st.markdown(f"""
+                    <div style="background-color: #00aaff20; padding: 15px; border-radius: 10px; border: 2px solid #00aaff;">
+                        <h4 style="color: #00aaff; margin: 0;">Total Gamma</h4>
+                        <h2 style="color: #00aaff; margin: 5px 0;">{gamma_seq['total_gamma']:.2f}L</h2>
+                        <p style="color: white; margin: 0; font-size: 12px;">Sum of all strike gamma</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Gamma Sequence Chart - Stacked bar (CE vs PE gamma per strike)
+                fig_gs = make_subplots(
+                    rows=2, cols=1,
+                    shared_xaxes=True,
+                    vertical_spacing=0.08,
+                    subplot_titles=('CE vs PE Gamma Exposure by Strike', 'Cumulative Net Gamma Sequence'),
+                    row_heights=[0.5, 0.5]
+                )
+
+                # Top: CE vs PE gamma bars
+                fig_gs.add_trace(go.Bar(
+                    x=gs_df['Strike'],
+                    y=gs_df['CE_Gamma_Exp'],
+                    name='CE Gamma',
+                    marker_color='#ff4444',
+                    text=[f"{v:.1f}" for v in gs_df['CE_Gamma_Exp']],
+                    textposition='outside',
+                    textfont=dict(size=9)
+                ), row=1, col=1)
+
+                fig_gs.add_trace(go.Bar(
+                    x=gs_df['Strike'],
+                    y=gs_df['PE_Gamma_Exp'],
+                    name='PE Gamma',
+                    marker_color='#00ff88',
+                    text=[f"{v:.1f}" for v in gs_df['PE_Gamma_Exp']],
+                    textposition='outside',
+                    textfont=dict(size=9)
+                ), row=1, col=1)
+
+                # Bottom: Cumulative net gamma line
+                fig_gs.add_trace(go.Scatter(
+                    x=gs_df['Strike'],
+                    y=gs_df['Cumul_Net_Gamma'],
+                    mode='lines+markers',
+                    name='Cumul Net Gamma',
+                    line=dict(color='#00aaff', width=3),
+                    marker=dict(size=8, color=[
+                        '#00ff88' if v >= 0 else '#ff4444' for v in gs_df['Cumul_Net_Gamma']
+                    ]),
+                    fill='tozeroy',
+                    fillcolor='rgba(0, 170, 255, 0.1)'
+                ), row=2, col=1)
+
+                fig_gs.add_hline(y=0, line_dash="dash", line_color="white", line_width=1, row=2, col=1)
+
+                # Spot price vertical line on both subplots
+                fig_gs.add_vline(
+                    x=underlying_price_gs,
+                    line_dash="solid",
+                    line_color="#FFD700",
+                    line_width=2,
+                    annotation_text=f"Spot: ₹{underlying_price_gs:.0f}",
+                    annotation_position="top",
+                    row=1, col=1
+                )
+                fig_gs.add_vline(
+                    x=underlying_price_gs,
+                    line_dash="solid",
+                    line_color="#FFD700",
+                    line_width=2,
+                    row=2, col=1
+                )
+
+                fig_gs.update_layout(
+                    template='plotly_dark',
+                    height=600,
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    plot_bgcolor='#1e1e1e',
+                    paper_bgcolor='#1e1e1e',
+                    margin=dict(l=50, r=50, t=80, b=50),
+                    barmode='group'
+                )
+
+                fig_gs.update_yaxes(title_text="Gamma Exp (L)", row=1, col=1)
+                fig_gs.update_yaxes(title_text="Cumul Net Gamma (L)", row=2, col=1)
+                fig_gs.update_xaxes(title_text="Strike Price", row=2, col=1)
+
+                st.plotly_chart(fig_gs, use_container_width=True)
+
+                # Gamma sequence table
+                with st.expander("📋 Gamma Sequence Data"):
+                    gs_display = gs_df[['Strike', 'Zone', 'CE_Gamma_Exp', 'PE_Gamma_Exp', 'Net_Gamma',
+                                        'Cumul_Net_Gamma', 'Gamma_Accel']].copy()
+                    gs_display['Strike'] = gs_display['Strike'].apply(lambda x: f"₹{x:.0f}")
+                    st.dataframe(gs_display, use_container_width=True, hide_index=True)
+
+                    st.markdown("""
+                    **Gamma Sequence Interpretation:**
+                    - **CE Gamma (Red)**: Call gamma exposure per strike - higher = stronger resistance
+                    - **PE Gamma (Green)**: Put gamma exposure per strike - higher = stronger support
+                    - **Cumul Net Gamma**: Running sum of net gamma from lowest strike upward
+                    - **Gamma Accel**: Rate of change in cumulative gamma - spikes show gamma walls
+                    - **Peak Gamma**: Strike with highest total gamma - strongest hedging activity
+                    """)
+            else:
+                st.warning("Unable to calculate gamma sequence. Check option chain data.")
+        else:
+            st.info("Gamma sequence requires option chain data.")
+
+    except Exception as e:
+        st.warning(f"Gamma sequence unavailable: {str(e)}")
+
+    # ===== IV SKEW & OPTIONS PRESSURE SIGNALS =====
+    st.markdown("---")
+    st.markdown("## 📡 IV Skew & Options Pressure Signals (ATM ± 2)")
+
+    try:
+        _ivp_df = option_data.get('df_summary') if option_data else None
+        _ivp_underlying = option_data.get('underlying') if option_data else None
+
+        # Ensure optional bid/ask columns exist (may be absent if Dhan didn't return them)
+        if _ivp_df is not None:
+            for _col in ['impliedVolatility_CE', 'impliedVolatility_PE',
+                         'bidQty_CE', 'bidQty_PE', 'askQty_CE', 'askQty_PE']:
+                if _col not in _ivp_df.columns:
+                    _ivp_df[_col] = 0.0
+
+        if (_ivp_df is not None and _ivp_underlying and 'Zone' in _ivp_df.columns):
+
+            # --- ATM ± 2 slice ---
+            _ivp_atm_idx = _ivp_df[_ivp_df['Zone'] == 'ATM'].index
+            if len(_ivp_atm_idx) > 0:
+                _ivp_atm_pos = _ivp_df.index.get_loc(_ivp_atm_idx[0])
+                _ivp_start = max(0, _ivp_atm_pos - 2)
+                _ivp_end = min(len(_ivp_df), _ivp_atm_pos + 3)
+                _ivp_slice = _ivp_df.iloc[_ivp_start:_ivp_end].copy()
+
+                # --- Strike label function for IV section ---
+                _ivp_strikes_sorted = sorted(_ivp_slice['Strike'].unique())
+                _ivp_step = int(_ivp_strikes_sorted[1] - _ivp_strikes_sorted[0]) if len(_ivp_strikes_sorted) >= 2 else 50
+                _ivp_atm_val = float(_ivp_df[_ivp_df['Zone'] == 'ATM']['Strike'].values[0])
+                def _ivp_label(s):
+                    diff = int(round((s - _ivp_atm_val) / _ivp_step))
+                    if diff == 0:  return "ATM"
+                    if diff > 0:   return f"ATM+{diff}"
+                    return f"ATM{diff}"
+
+                # --- Per-strike IV (CE and PE) ---
+                _ivp_per_iv_ce = {}
+                _ivp_per_iv_pe = {}
+                for _, _ivr in _ivp_slice.iterrows():
+                    _ivs = _ivr['Strike']
+                    _ivlbl = _ivp_label(_ivs)
+                    _ivp_per_iv_ce[_ivlbl] = float(_ivr.get('impliedVolatility_CE', 0) or 0)
+                    _ivp_per_iv_pe[_ivlbl] = float(_ivr.get('impliedVolatility_PE', 0) or 0)
+
+                # --- IV SKEW ---
+                _iv_ce_vals = _ivp_slice['impliedVolatility_CE'].fillna(0).tolist()
+                _iv_pe_vals = _ivp_slice['impliedVolatility_PE'].fillna(0).tolist()
+                _avg_iv_ce = sum(_iv_ce_vals) / len(_iv_ce_vals) if _iv_ce_vals else 0
+                _avg_iv_pe = sum(_iv_pe_vals) / len(_iv_pe_vals) if _iv_pe_vals else 0
+                _iv_skew = _avg_iv_pe / (_avg_iv_ce + 1e-6)
+
+                if _iv_skew < 0.90:
+                    _iv_signal = "🟢 Bullish Expectation"
+                    _iv_signal_color = "#00C853"
+                elif _iv_skew > 1.10:
+                    _iv_signal = "🔴 Bearish Expectation"
+                    _iv_signal_color = "#FF5252"
+                else:
+                    _iv_signal = "🟡 Neutral"
+                    _iv_signal_color = "#FFD740"
+
+                # IV Skew momentum (vs last saved)
+                _prev_iv_skew = st.session_state.iv_skew_history[-1]['iv_skew'] if st.session_state.iv_skew_history else _iv_skew
+                _iv_skew_change = _iv_skew - _prev_iv_skew
+                if _iv_skew_change < -0.02:
+                    _iv_momentum = "⬆️ Bullish Building"
+                elif _iv_skew_change > 0.02:
+                    _iv_momentum = "⬇️ Bearish Building"
+                else:
+                    _iv_momentum = "➡️ Stable"
+
+                # --- CALL & PUT PRESSURE ---
+                _call_pres = {}
+                _put_pres = {}
+                _ivp_per_net_pres = {}  # per-strike net pressure
+                for _, _row in _ivp_slice.iterrows():
+                    _s = _row['Strike']
+                    _slbl = _ivp_label(_s)
+                    _bc = float(_row.get('bidQty_CE', 0) or 0)
+                    _ac = float(_row.get('askQty_CE', 0) or 0)
+                    _bp = float(_row.get('bidQty_PE', 0) or 0)
+                    _ap = float(_row.get('askQty_PE', 0) or 0)
+                    _cp = (_bc - _ac) / (_bc + _ac + 1e-6)
+                    _pp = (_bp - _ap) / (_bp + _ap + 1e-6)
+                    _call_pres[_s] = _cp
+                    _put_pres[_s]  = _pp
+                    _ivp_per_net_pres[_slbl] = round(_cp - _pp, 4)
+
+                _avg_call_pres = sum(_call_pres.values()) / len(_call_pres) if _call_pres else 0
+                _avg_put_pres  = sum(_put_pres.values())  / len(_put_pres)  if _put_pres  else 0
+                _net_pressure  = _avg_call_pres - _avg_put_pres
+
+                if _net_pressure > 0.15:
+                    _net_signal = "🟢 Bullish Pressure"
+                    _net_color = "#00C853"
+                elif _net_pressure < -0.15:
+                    _net_signal = "🔴 Bearish Pressure"
+                    _net_color = "#FF5252"
+                else:
+                    _net_signal = "🟡 Neutral"
+                    _net_color = "#FFD740"
+
+                if _avg_call_pres > 0.2 and _avg_put_pres < -0.1:
+                    _pressure_signal = "🚀 Strong Bullish"
+                elif _avg_put_pres > 0.2 and _avg_call_pres < -0.1:
+                    _pressure_signal = "🔥 Strong Bearish"
+                elif _avg_call_pres > 0.2 and _avg_put_pres > 0.2:
+                    _pressure_signal = "⚠️ High Volatility"
+                else:
+                    _pressure_signal = "⏳ Sideways"
+
+                # --- COMBINED FINAL SIGNAL ---
+                if _iv_skew < 0.90 and _net_pressure > 0.15:
+                    _final_signal = "🚀 STRONG BUY (Confirmed Breakout)"
+                    _final_color = "#00C853"
+                elif _iv_skew > 1.10 and _net_pressure < -0.15:
+                    _final_signal = "🔥 STRONG SELL (Confirmed Breakdown)"
+                    _final_color = "#FF5252"
+                elif _iv_skew < 0.90 and _net_pressure < 0:
+                    _final_signal = "⚠️ Bull Trap"
+                    _final_color = "#FF9800"
+                elif _iv_skew > 1.10 and _net_pressure > 0:
+                    _final_signal = "⚠️ Bear Trap"
+                    _final_color = "#FF9800"
+                else:
+                    _final_signal = "⏳ No Clear Edge"
+                    _final_color = "#888888"
+
+                # --- PRESSURE SPIKE (Entry Timing) ---
+                _prev_net_pres = st.session_state.pressure_history[-1]['net_pressure'] if st.session_state.pressure_history else _net_pressure
+                _pressure_change = _net_pressure - _prev_net_pres
+                _spike_alert = "⚡ Sudden Aggression — Entry Signal!" if abs(_pressure_change) > 0.15 else ""
+
+                # --- Save to history ---
+                _ivp_now = datetime.now(pytz.timezone('Asia/Kolkata'))
+
+                _should_append_iv = (
+                    not st.session_state.iv_skew_history or
+                    (_ivp_now - _to_ist(st.session_state.iv_skew_history[-1]['time'])).total_seconds() >= 30
+                )
+                if _should_append_iv:
+                    _iv_entry = {
+                        'time': _ivp_now,
+                        'iv_skew': round(_iv_skew, 4),
+                        'avg_iv_ce': round(_avg_iv_ce, 2),
+                        'avg_iv_pe': round(_avg_iv_pe, 2),
+                        **{f"iv_ce_{k}": round(v, 2) for k, v in _ivp_per_iv_ce.items()},
+                        **{f"iv_pe_{k}": round(v, 2) for k, v in _ivp_per_iv_pe.items()},
+                        **{f"pres_{k}": v for k, v in _ivp_per_net_pres.items()},
+                    }
+                    st.session_state.iv_skew_history.append(_iv_entry)
+                    if len(st.session_state.iv_skew_history) > 200:
+                        st.session_state.iv_skew_history = st.session_state.iv_skew_history[-200:]
+                    db.save_option_history('iv_skew_history', _iv_entry)
+
+                    _pres_entry = {
+                        'time': _ivp_now,
+                        'call_pressure': round(_avg_call_pres, 4),
+                        'put_pressure': round(_avg_put_pres, 4),
+                        'net_pressure': round(_net_pressure, 4),
+                    }
+                    st.session_state.pressure_history.append(_pres_entry)
+                    if len(st.session_state.pressure_history) > 200:
+                        st.session_state.pressure_history = st.session_state.pressure_history[-200:]
+                    db.save_option_history('pressure_history', _pres_entry)
+
+
+                # ======== UI OUTPUT ========
+                _ivp_c1, _ivp_c2, _ivp_c3 = st.columns(3)
+                with _ivp_c1:
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_iv_signal_color};">
+                    <div style="color:#aaa;font-size:12px;">IV SKEW (PE/CE avg)</div>
+                    <div style="font-size:22px;font-weight:bold;color:{_iv_signal_color};">{_iv_skew:.3f}</div>
+                    <div style="font-size:13px;margin-top:4px;">{_iv_signal}</div>
+                    <div style="font-size:12px;color:#aaa;margin-top:2px;">Momentum: {_iv_momentum}</div>
+                    <div style="font-size:11px;color:#888;margin-top:4px;">
+                        CE avg IV: {_avg_iv_ce:.1f}% &nbsp;|&nbsp; PE avg IV: {_avg_iv_pe:.1f}%
+                    </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _ivp_c2:
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_net_color};">
+                    <div style="color:#aaa;font-size:12px;">PRESSURE (ATM ± 2)</div>
+                    <div style="font-size:13px;margin-top:4px;">
+                        Call: <b style="color:#00C853;">{_avg_call_pres:+.3f}</b> &nbsp;
+                        Put: <b style="color:#FF5252;">{_avg_put_pres:+.3f}</b>
+                    </div>
+                    <div style="font-size:18px;font-weight:bold;color:{_net_color};margin-top:6px;">
+                        Net: {_net_pressure:+.3f}
+                    </div>
+                    <div style="font-size:13px;margin-top:4px;">{_net_signal}</div>
+                    <div style="font-size:12px;color:#aaa;margin-top:2px;">{_pressure_signal}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _ivp_c3:
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:2px solid {_final_color};">
+                    <div style="color:#aaa;font-size:12px;">COMBINED SIGNAL</div>
+                    <div style="font-size:16px;font-weight:bold;color:{_final_color};margin-top:6px;">{_final_signal}</div>
+                    {"<div style='font-size:13px;color:#FFD740;margin-top:6px;'>" + _spike_alert + "</div>" if _spike_alert else ""}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ---- IV Time-Series Chart ----
+                if len(st.session_state.iv_skew_history) >= 2:
+                    _iv_hist_df = pd.DataFrame(st.session_state.iv_skew_history)
+                    _fig_iv = go.Figure()
+                    _fig_iv.add_trace(go.Scatter(
+                        x=_iv_hist_df['time'], y=_iv_hist_df['iv_skew'],
+                        mode='lines+markers', name='IV Skew (PE/CE)',
+                        line=dict(color='#FFD740', width=2),
+                        marker=dict(size=4)
+                    ))
+                    _fig_iv.add_hline(y=0.90, line_dash='dash', line_color='#00C853',
+                                      annotation_text='Bullish (0.90)', annotation_position='bottom right')
+                    _fig_iv.add_hline(y=1.10, line_dash='dash', line_color='#FF5252',
+                                      annotation_text='Bearish (1.10)', annotation_position='top right')
+                    # Current value marker (present value shown in graph)
+                    _iv_cur = _iv_hist_df['iv_skew'].iloc[-1]
+                    _fig_iv.add_trace(go.Scatter(
+                        x=[_iv_hist_df['time'].iloc[-1]], y=[_iv_cur],
+                        mode='markers+text', text=[f'{_iv_cur:.3f}'],
+                        textposition='top right', textfont=dict(size=10, color='#FFD740'),
+                        marker=dict(size=10, color='#FFD740', symbol='circle'),
+                        showlegend=False, hoverinfo='skip',
+                    ))
+                    _fig_iv.update_layout(
+                        title=f'IV Skew Over Time (ATM ± 2) — Now: {_iv_cur:.3f}',
+                        height=250, margin=dict(l=40, r=20, t=40, b=30),
+                        paper_bgcolor='#111', plot_bgcolor='#111',
+                        font=dict(color='#ccc'),
+                        xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333'),
+                        showlegend=True, legend=dict(orientation='h', y=-0.3)
+                    )
+                    st.plotly_chart(_fig_iv, use_container_width=True)
+
+                # ---- Pressure Time-Series Chart ----
+                if len(st.session_state.pressure_history) >= 2:
+                    _pr_hist_df = pd.DataFrame(st.session_state.pressure_history)
+                    _fig_pr = go.Figure()
+                    _fig_pr.add_trace(go.Scatter(
+                        x=_pr_hist_df['time'], y=_pr_hist_df['call_pressure'],
+                        mode='lines', name='Call Pressure',
+                        line=dict(color='#00C853', width=2)
+                    ))
+                    _fig_pr.add_trace(go.Scatter(
+                        x=_pr_hist_df['time'], y=_pr_hist_df['put_pressure'],
+                        mode='lines', name='Put Pressure',
+                        line=dict(color='#FF5252', width=2)
+                    ))
+                    _fig_pr.add_trace(go.Scatter(
+                        x=_pr_hist_df['time'], y=_pr_hist_df['net_pressure'],
+                        mode='lines+markers', name='Net Pressure',
+                        line=dict(color='#FFD740', width=2, dash='dot'),
+                        marker=dict(size=4)
+                    ))
+                    _fig_pr.add_hline(y=0.15, line_dash='dash', line_color='#00C853',
+                                      annotation_text='+0.15 Bull', annotation_position='bottom right')
+                    _fig_pr.add_hline(y=-0.15, line_dash='dash', line_color='#FF5252',
+                                      annotation_text='-0.15 Bear', annotation_position='top right')
+                    _fig_pr.add_hline(y=0, line_color='#555', line_width=1)
+                    # Current value markers (present values shown in graph)
+                    _pr_cur_call = _pr_hist_df['call_pressure'].iloc[-1]
+                    _pr_cur_put  = _pr_hist_df['put_pressure'].iloc[-1]
+                    _pr_cur_net  = _pr_hist_df['net_pressure'].iloc[-1]
+                    _fig_pr.add_trace(go.Scatter(
+                        x=[_pr_hist_df['time'].iloc[-1]], y=[_pr_cur_net],
+                        mode='markers+text', text=[f'Net:{_pr_cur_net:+.3f}'],
+                        textposition='top right', textfont=dict(size=9, color='#FFD740'),
+                        marker=dict(size=9, color='#FFD740', symbol='circle'),
+                        showlegend=False, hoverinfo='skip',
+                    ))
+                    _fig_pr.update_layout(
+                        title=f'Call / Put / Net Pressure Over Time (ATM ± 2) — Net: {_pr_cur_net:+.3f}',
+                        height=250, margin=dict(l=40, r=20, t=40, b=30),
+                        paper_bgcolor='#111', plot_bgcolor='#111',
+                        font=dict(color='#ccc'),
+                        xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333'),
+                        showlegend=True, legend=dict(orientation='h', y=-0.3)
+                    )
+                    st.plotly_chart(_fig_pr, use_container_width=True)
+
+                # ---- ATM ±2 Strike Comparison — CE IV · PE IV (5-column per-strike) ----
+                if len(st.session_state.iv_skew_history) >= 2:
+                    _ivh_df = pd.DataFrame(st.session_state.iv_skew_history)
+                    st.markdown("### 📊 ATM ±2 Strike Comparison — CE IV · PE IV")
+                    _ivp_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
+                    _ivp_pos_keys   = ['ATM-2', 'ATM-1', 'ATM', 'ATM+1', 'ATM+2']
+                    _ivp_pos_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
+                    _ivp_5cols = st.columns(5)
+                    for _ivc_i, _ivc_col in enumerate(_ivp_5cols):
+                        with _ivc_col:
+                            _ivlk = _ivp_pos_keys[_ivc_i]
+                            _ck = f"iv_ce_{_ivlk}"
+                            _pk = f"iv_pe_{_ivlk}"
+                            _prk = f"pres_{_ivlk}"
+                            _ivc_clr = _ivp_pos_colors[_ivc_i]
+                            if _ck not in _ivh_df.columns and _pk not in _ivh_df.columns:
+                                st.info(f"{_ivp_pos_labels[_ivc_i]} N/A")
+                                continue
+                            _fig_ivs = go.Figure()
+                            # CE IV (solid cyan)
+                            if _ck in _ivh_df.columns:
+                                _fig_ivs.add_trace(go.Scatter(
+                                    x=_ivh_df['time'], y=_ivh_df[_ck],
+                                    mode='lines+markers', name='CE IV%',
+                                    line=dict(color='#00ccff', width=2),
+                                    marker=dict(size=3),
+                                ))
+                            # PE IV (dashed orange)
+                            if _pk in _ivh_df.columns:
+                                _fig_ivs.add_trace(go.Scatter(
+                                    x=_ivh_df['time'], y=_ivh_df[_pk],
+                                    mode='lines+markers', name='PE IV%',
+                                    line=dict(color='#ffaa00', width=2, dash='dash'),
+                                    marker=dict(size=3),
+                                ))
+                            # Current value markers
+                            _iv_ce_cur = _ivh_df[_ck].iloc[-1] if _ck in _ivh_df.columns else None
+                            _iv_pe_cur = _ivh_df[_pk].iloc[-1] if _pk in _ivh_df.columns else None
+                            if _iv_ce_cur is not None:
+                                _fig_ivs.add_trace(go.Scatter(
+                                    x=[_ivh_df['time'].iloc[-1]], y=[_iv_ce_cur],
+                                    mode='markers+text', text=[f'{_iv_ce_cur:.1f}%'],
+                                    textposition='top right', textfont=dict(size=8, color='#00ccff'),
+                                    marker=dict(size=8, color='#00ccff', symbol='circle'),
+                                    showlegend=False, hoverinfo='skip',
+                                ))
+                            if _iv_pe_cur is not None:
+                                _fig_ivs.add_trace(go.Scatter(
+                                    x=[_ivh_df['time'].iloc[-1]], y=[_iv_pe_cur],
+                                    mode='markers+text', text=[f'{_iv_pe_cur:.1f}%'],
+                                    textposition='bottom right', textfont=dict(size=8, color='#ffaa00'),
+                                    marker=dict(size=8, color='#ffaa00', symbol='diamond'),
+                                    showlegend=False, hoverinfo='skip',
+                                ))
+                            # Determine IV skew signal for this strike
+                            _ivs_skew = (_iv_pe_cur / (_iv_ce_cur + 1e-6)) if (_iv_ce_cur and _iv_pe_cur) else 1.0
+                            _ivs_title = f"{_ivp_pos_labels[_ivc_i]}<br>{_ivlk}"
+                            if _iv_ce_cur is not None:
+                                _ivs_title += f"<br>CE:{_iv_ce_cur:.1f}% PE:{_iv_pe_cur:.1f}%" if _iv_pe_cur else f"<br>CE:{_iv_ce_cur:.1f}%"
+                            _fig_ivs.update_layout(
+                                title=dict(text=_ivs_title, font=dict(size=10)),
+                                template='plotly_dark', height=300,
+                                showlegend=True,
+                                legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                                            xanchor='center', x=0.5, font=dict(size=8)),
+                                margin=dict(l=5, r=10, t=80, b=30),
+                                xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                                yaxis=dict(title='IV%', tickfont=dict(size=8)),
+                                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            )
+                            st.plotly_chart(_fig_ivs, use_container_width=True)
+                            # Net pressure caption
+                            _pres_cur = _ivh_df[_prk].iloc[-1] if (_prk in _ivh_df.columns and len(_ivh_df) > 0) else None
+                            _pres_sig = "🟢Bull" if (_pres_cur and _pres_cur > 0.15) else ("🔴Bear" if (_pres_cur and _pres_cur < -0.15) else "🟡Ntrl")
+                            _pres_str = f'{_pres_cur:+.3f}' if _pres_cur is not None else '—'
+                            _iv_skew_str = f'{_ivs_skew:.3f}' if _iv_ce_cur else '—'
+                            st.caption(f"IV Skew:{_iv_skew_str} · Pres:{_pres_str} {_pres_sig}")
+
+                _ivp_col_l, _ivp_col_r = st.columns([3, 1])
+                with _ivp_col_l:
+                    st.caption(f"📡 IV pts: {len(st.session_state.iv_skew_history)} · Pressure pts: {len(st.session_state.pressure_history)}")
+                with _ivp_col_r:
+                    if st.button("🗑️ Clear IV/Pressure History"):
+                        st.session_state.iv_skew_history = []
+                        st.session_state.pressure_history = []
+                        st.rerun()
+            else:
+                st.info("ATM strike not identified — IV Skew & Pressure unavailable.")
+        else:
+            st.info("Option chain data required for IV Skew & Pressure signals.")
+
+    except Exception as _ivp_e:
+        st.warning(f"IV Skew & Pressure unavailable: {str(_ivp_e)}")
+
+    # ===== AUTO ENTRY ENGINE =====
+    st.markdown("---")
+    st.markdown("## 🎯 Auto Entry Engine — CE / PE Strike + SL + Target")
+
+    try:
+        _ae_df = option_data.get('df_summary') if option_data else None
+        _ae_underlying = option_data.get('underlying') if option_data else None
+
+        # Ensure optional columns exist
+        if _ae_df is not None:
+            for _col in ['impliedVolatility_CE', 'impliedVolatility_PE',
+                         'bidQty_CE', 'bidQty_PE', 'askQty_CE', 'askQty_PE']:
+                if _col not in _ae_df.columns:
+                    _ae_df[_col] = 0.0
+
+        if (_ae_df is not None and _ae_underlying and 'Zone' in _ae_df.columns):
+
+            # Re-compute signals (lightweight — uses same logic as above)
+            _ae_atm_idx = _ae_df[_ae_df['Zone'] == 'ATM'].index
+            if len(_ae_atm_idx) > 0:
+                _ae_atm_pos = _ae_df.index.get_loc(_ae_atm_idx[0])
+                _ae_start = max(0, _ae_atm_pos - 2)
+                _ae_end = min(len(_ae_df), _ae_atm_pos + 3)
+                _ae_slice = _ae_df.iloc[_ae_start:_ae_end].copy()
+
+                # IV Skew
+                _ae_iv_ce = _ae_slice['impliedVolatility_CE'].fillna(0).mean()
+                _ae_iv_pe = _ae_slice['impliedVolatility_PE'].fillna(0).mean() if 'impliedVolatility_PE' in _ae_slice.columns else 0
+                _ae_iv_skew = _ae_iv_pe / (_ae_iv_ce + 1e-6)
+
+                # Net Pressure
+                _ae_cp_list, _ae_pp_list = [], []
+                for _, _aer in _ae_slice.iterrows():
+                    _bc = float(_aer.get('bidQty_CE', 0) or 0)
+                    _ac = float(_aer.get('askQty_CE', 0) or 0)
+                    _bp = float(_aer.get('bidQty_PE', 0) or 0)
+                    _ap = float(_aer.get('askQty_PE', 0) or 0)
+                    _ae_cp_list.append((_bc - _ac) / (_bc + _ac + 1e-6))
+                    _ae_pp_list.append((_bp - _ap) / (_bp + _ap + 1e-6))
+                _ae_avg_cp = sum(_ae_cp_list) / len(_ae_cp_list) if _ae_cp_list else 0
+                _ae_avg_pp = sum(_ae_pp_list) / len(_ae_pp_list) if _ae_pp_list else 0
+                _ae_net_pres = _ae_avg_cp - _ae_avg_pp
+
+                # Pressure spike (vs history)
+                _ae_prev_np = st.session_state.pressure_history[-2]['net_pressure'] if len(st.session_state.pressure_history) >= 2 else _ae_net_pres
+                _ae_pres_change = _ae_net_pres - _ae_prev_np
+
+                # PCR OI (ATM)
+                _ae_atm_row = _ae_df[_ae_df['Zone'] == 'ATM']
+                _ae_pcr = float(_ae_atm_row['PCR'].values[0]) if (len(_ae_atm_row) > 0 and 'PCR' in _ae_atm_row.columns) else 1.0
+
+                # Total Net GEX (from existing gex_data if available)
+                _ae_net_gex = 0.0
+                try:
+                    if gex_data and 'net_gex' in gex_data:
+                        _ae_net_gex = float(gex_data['net_gex'])
+                    elif gex_data and 'gex_df' in gex_data:
+                        _ae_gdf = gex_data['gex_df']
+                        if 'Net_GEX' in _ae_gdf.columns:
+                            _ae_net_gex = float(_ae_gdf['Net_GEX'].sum())
+                except Exception:
+                    pass
+
+                # ATM strike value
+                _ae_atm_strike = float(_ae_atm_row['Strike'].values[0]) if len(_ae_atm_row) > 0 else round(_ae_underlying / 50) * 50
+
+                # Determine strike step (50 or 100 points)
+                _ae_strikes_sorted = sorted(_ae_slice['Strike'].unique())
+                _ae_step = int(_ae_strikes_sorted[1] - _ae_strikes_sorted[0]) if len(_ae_strikes_sorted) >= 2 else 50
+
+                # ---- ENTRY LOGIC ----
+                _ae_signal = "NO TRADE"
+                _ae_strike = _ae_atm_strike
+                _ae_sl = None
+                _ae_target = None
+                _ae_trade_type = "Low Edge"
+                _ae_option_type = ""
+
+                # Safety filter: avoid trades when market is pinned
+                if _ae_net_gex > 10:
+                    _ae_signal = "NO TRADE"
+                    _ae_trade_type = "Market Capped (GEX > 10L)"
+                elif _ae_iv_skew < 0.90 and _ae_net_pres > 0.15 and _ae_net_gex < 0:
+                    _ae_signal = "BUY CE"
+                    _ae_option_type = "CE"
+                    if _ae_net_pres > 0.30:
+                        _ae_strike = _ae_atm_strike + _ae_step
+                        _ae_trade_type = "Breakout"
+                    elif _ae_net_pres > 0.50:
+                        _ae_strike = _ae_atm_strike + 2 * _ae_step
+                        _ae_trade_type = "Strong Breakout"
+                    else:
+                        _ae_strike = _ae_atm_strike
+                        _ae_trade_type = "Scalp"
+                    _ae_sl = _ae_underlying - 20
+                    _ae_target = _ae_underlying + 40
+
+                elif _ae_iv_skew > 1.10 and _ae_net_pres < -0.15 and _ae_net_gex < 0:
+                    _ae_signal = "BUY PE"
+                    _ae_option_type = "PE"
+                    if _ae_net_pres < -0.30:
+                        _ae_strike = _ae_atm_strike - _ae_step
+                        _ae_trade_type = "Breakdown"
+                    elif _ae_net_pres < -0.50:
+                        _ae_strike = _ae_atm_strike - 2 * _ae_step
+                        _ae_trade_type = "Strong Breakdown"
+                    else:
+                        _ae_strike = _ae_atm_strike
+                        _ae_trade_type = "Scalp"
+                    _ae_sl = _ae_underlying + 20
+                    _ae_target = _ae_underlying - 40
+
+                elif _ae_iv_skew < 0.90 and _ae_net_pres < 0:
+                    _ae_signal = "BUY PE"
+                    _ae_option_type = "PE"
+                    _ae_strike = _ae_atm_strike
+                    _ae_trade_type = "Bull Trap Reversal"
+                    _ae_sl = _ae_underlying + 15
+                    _ae_target = _ae_underlying - 30
+
+                elif _ae_iv_skew > 1.10 and _ae_net_pres > 0:
+                    _ae_signal = "BUY CE"
+                    _ae_option_type = "CE"
+                    _ae_strike = _ae_atm_strike
+                    _ae_trade_type = "Bear Trap Reversal"
+                    _ae_sl = _ae_underlying - 15
+                    _ae_target = _ae_underlying + 30
+
+                _ae_timing = "ENTER NOW ⚡" if abs(_ae_pres_change) > 0.15 else "WAIT ⏳"
+
+                # Signal color
+                if "BUY CE" in _ae_signal:
+                    _ae_sig_color = "#00C853"
+                elif "BUY PE" in _ae_signal:
+                    _ae_sig_color = "#FF5252"
+                else:
+                    _ae_sig_color = "#888888"
+
+                # ---- UI ----
+                _ae_c1, _ae_c2, _ae_c3, _ae_c4 = st.columns(4)
+                with _ae_c1:
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:2px solid {_ae_sig_color};">
+                    <div style="color:#aaa;font-size:11px;">SIGNAL</div>
+                    <div style="font-size:20px;font-weight:bold;color:{_ae_sig_color};">{_ae_signal}</div>
+                    <div style="font-size:12px;color:#aaa;margin-top:4px;">{_ae_trade_type}</div>
+                    <div style="font-size:13px;margin-top:4px;color:#FFD740;">{_ae_timing}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _ae_c2:
+                    _ae_strike_label = f"₹{int(_ae_strike)}" if _ae_signal != "NO TRADE" else "—"
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid #444;">
+                    <div style="color:#aaa;font-size:11px;">STRIKE</div>
+                    <div style="font-size:22px;font-weight:bold;color:#fff;">{_ae_strike_label}</div>
+                    <div style="font-size:12px;color:#aaa;margin-top:4px;">{_ae_option_type or '—'}</div>
+                    <div style="font-size:11px;color:#777;margin-top:2px;">ATM: ₹{int(_ae_atm_strike)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _ae_c3:
+                    _ae_sl_label = f"₹{_ae_sl:.0f}" if _ae_sl else "—"
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid #FF5252;">
+                    <div style="color:#aaa;font-size:11px;">STOP LOSS (Spot)</div>
+                    <div style="font-size:20px;font-weight:bold;color:#FF5252;">{_ae_sl_label}</div>
+                    <div style="font-size:11px;color:#777;margin-top:4px;">Spot: ₹{_ae_underlying:.0f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _ae_c4:
+                    _ae_tgt_label = f"₹{_ae_target:.0f}" if _ae_target else "—"
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid #00C853;">
+                    <div style="color:#aaa;font-size:11px;">TARGET (Spot)</div>
+                    <div style="font-size:20px;font-weight:bold;color:#00C853;">{_ae_tgt_label}</div>
+                    <div style="font-size:11px;color:#777;margin-top:4px;">
+                        {"R:R = 1:2" if _ae_sl and _ae_target else ""}
+                    </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # ---- Inputs summary row ----
+                st.markdown("<br>", unsafe_allow_html=True)
+                _ae_meta_cols = st.columns(5)
+                _ae_meta_labels = [
+                    ("IV Skew", f"{_ae_iv_skew:.3f}"),
+                    ("Net Pressure", f"{_ae_net_pres:+.3f}"),
+                    ("PCR (OI)", f"{_ae_pcr:.2f}"),
+                    ("Net GEX", f"{_ae_net_gex:+.1f}L"),
+                    ("Pressure Δ", f"{_ae_pres_change:+.3f}"),
+                ]
+                for _col, (_lbl, _val) in zip(_ae_meta_cols, _ae_meta_labels):
+                    with _col:
+                        st.metric(_lbl, _val)
+
+                with st.expander("📖 Auto Entry Engine — How It Works"):
+                    st.markdown("""
+                    | Condition | Signal |
+                    |-----------|--------|
+                    | IV Skew < 0.90 AND Net Pressure > 0.15 AND GEX < 0 | **BUY CE** (Breakout/Scalp) |
+                    | IV Skew > 1.10 AND Net Pressure < -0.15 AND GEX < 0 | **BUY PE** (Breakdown/Scalp) |
+                    | IV Skew < 0.90 AND Net Pressure < 0 | **BUY PE** (Bull Trap Reversal) |
+                    | IV Skew > 1.10 AND Net Pressure > 0 | **BUY CE** (Bear Trap Reversal) |
+                    | GEX > 10L | **NO TRADE** (Market Capped) |
+
+                    **Strike Selection:**
+                    - Net Pressure > 0.50 → ATM+2 (Strong Breakout)
+                    - Net Pressure > 0.30 → ATM+1 (Breakout)
+                    - Otherwise → ATM (Scalp)
+
+                    **SL/Target based on spot points:**
+                    - CE trade: SL = Spot − 20, Target = Spot + 40
+                    - PE trade: SL = Spot + 20, Target = Spot − 40
+                    - Trap reversals: Tighter (±15 SL / ∓30 Target)
+
+                    **Entry Timing:** Pressure spike > 0.15 in last interval → ENTER NOW ⚡
+
+                    > ⚠️ These are directional signals for educational use.
+                    > Always apply your own risk management and position sizing.
+                    """)
+            else:
+                st.info("ATM strike not identified — Auto Entry Engine unavailable.")
+        else:
+            st.info("Option chain data required for Auto Entry Engine.")
+
+    except Exception as _ae_e:
+        st.warning(f"Auto Entry Engine unavailable: {str(_ae_e)}")
+
+    # ===== DELTA & GAMMA ENGINE (PER STRIKE + OVERALL) =====
+    st.markdown("---")
+    st.markdown("## ⚡ Delta & Gamma Engine — Per Strike + Overall (ATM ± 2)")
+
+    try:
+        _dg_df = option_data.get('df_summary') if option_data else None
+        _dg_underlying = option_data.get('underlying') if option_data else None
+
+        _dg_required = ['Zone', 'Strike', 'Delta_CE', 'Delta_PE', 'Gamma_CE', 'Gamma_PE',
+                        'openInterest_CE', 'openInterest_PE']
+
+        if (_dg_df is not None and _dg_underlying and
+                all(c in _dg_df.columns for c in _dg_required)):
+
+            # --- ATM ± 2 slice ---
+            _dg_atm_idx = _dg_df[_dg_df['Zone'] == 'ATM'].index
+            if len(_dg_atm_idx) > 0:
+                _dg_atm_pos = _dg_df.index.get_loc(_dg_atm_idx[0])
+                _dg_start = max(0, _dg_atm_pos - 2)
+                _dg_end   = min(len(_dg_df), _dg_atm_pos + 3)
+                _dg_slice = _dg_df.iloc[_dg_start:_dg_end].copy()
+
+                _dg_strikes_sorted = sorted(_dg_slice['Strike'].unique())
+                _dg_step = int(_dg_strikes_sorted[1] - _dg_strikes_sorted[0]) if len(_dg_strikes_sorted) >= 2 else 50
+                _dg_atm_val = float(_dg_df[_dg_df['Zone'] == 'ATM']['Strike'].values[0])
+
+                # Strike position labels
+                def _dg_label(s):
+                    diff = int(round((s - _dg_atm_val) / _dg_step))
+                    if diff == 0:   return "ATM"
+                    if diff > 0:    return f"ATM+{diff}"
+                    return f"ATM{diff}"
+
+                # --- PER STRIKE delta & gamma ---
+                _dg_delta_per = {}
+                _dg_gamma_per = {}
+                _contract_mult = 25
+
+                for _, _r in _dg_slice.iterrows():
+                    _s = float(_r['Strike'])
+                    _lbl = _dg_label(_s)
+                    _d_ce = float(_r.get('Delta_CE', 0) or 0)
+                    _d_pe = float(_r.get('Delta_PE', 0) or 0)
+                    _g_ce = float(_r.get('Gamma_CE', 0) or 0)
+                    _g_pe = float(_r.get('Gamma_PE', 0) or 0)
+                    _oi_ce = float(_r.get('openInterest_CE', 0) or 0)
+                    _oi_pe = float(_r.get('openInterest_PE', 0) or 0)
+
+                    _dg_delta_per[_lbl] = round(_d_ce + _d_pe, 4)
+                    # Gamma per strike in Lakhs (PE builds − CE pins)
+                    _dg_gamma_per[_lbl] = round(
+                        (_g_pe * _oi_pe - _g_ce * _oi_ce) * _contract_mult * _dg_underlying / 100000, 2
+                    )
+
+                # --- OVERALL NET ---
+                _all_d_ce = [float(_r.get('Delta_CE', 0) or 0) for _, _r in _dg_slice.iterrows()]
+                _all_d_pe = [float(_r.get('Delta_PE', 0) or 0) for _, _r in _dg_slice.iterrows()]
+                _avg_d_ce = sum(_all_d_ce) / len(_all_d_ce) if _all_d_ce else 0
+                _avg_d_pe = sum(_all_d_pe) / len(_all_d_pe) if _all_d_pe else 0
+                _net_delta = round(_avg_d_ce + _avg_d_pe, 4)
+                _net_gamma = round(sum(_dg_gamma_per.values()), 2)
+
+                # --- HISTORY (time-series) ---
+                _dg_now = datetime.now(pytz.timezone('Asia/Kolkata'))
+                _dg_should_append = (
+                    not st.session_state.delta_gamma_history or
+                    (_dg_now - _to_ist(st.session_state.delta_gamma_history[-1]['time'])).total_seconds() >= 30
+                )
+                if _dg_should_append:
+                    _dg_entry = {
+                        'time': _dg_now,
+                        'net_delta': _net_delta,
+                        'net_gamma': _net_gamma,
+                        **{f"delta_{k}": v for k, v in _dg_delta_per.items()},
+                        **{f"gamma_{k}": v for k, v in _dg_gamma_per.items()},
+                    }
+                    st.session_state.delta_gamma_history.append(_dg_entry)
+                    if len(st.session_state.delta_gamma_history) > 200:
+                        st.session_state.delta_gamma_history = st.session_state.delta_gamma_history[-200:]
+                    db.save_option_history('delta_gamma_history', _dg_entry)
+
+                # --- CHANGE vs PREVIOUS ---
+                _prev_dg = st.session_state.delta_gamma_history
+                _prev_nd = _prev_dg[-2]['net_delta'] if len(_prev_dg) >= 2 else _net_delta
+                _prev_ng = _prev_dg[-2]['net_gamma'] if len(_prev_dg) >= 2 else _net_gamma
+                _delta_change = round(_net_delta - _prev_nd, 4)
+                _gamma_change = round(_net_gamma - _prev_ng, 2)
+
+                # --- HOT STRIKE (highest abs gamma) ---
+                _hot_lbl = max(_dg_gamma_per, key=lambda k: abs(_dg_gamma_per[k])) if _dg_gamma_per else "ATM"
+                _hot_val = _dg_gamma_per.get(_hot_lbl, 0)
+
+                if _hot_lbl in ("ATM+1", "ATM+2") and _hot_val > 0:
+                    _hot_signal = "🚀 Bullish Build Above ATM"
+                    _hot_color  = "#00C853"
+                elif _hot_lbl in ("ATM-1", "ATM-2") and _hot_val < 0:
+                    _hot_signal = "🔥 Bearish Build Below ATM"
+                    _hot_color  = "#FF5252"
+                elif _hot_lbl == "ATM":
+                    _hot_signal = "📌 Pinned at ATM"
+                    _hot_color  = "#FFD740"
+                else:
+                    _hot_signal = "➡️ Neutral"
+                    _hot_color  = "#888888"
+
+                # --- MAIN SIGNAL ---
+                if _net_delta > 0.15 and _gamma_change > 0:
+                    _dg_main_signal = "🚀 Bullish Momentum"
+                    _dg_main_color  = "#00C853"
+                elif _net_delta < -0.15 and _gamma_change > 0:
+                    _dg_main_signal = "🔥 Bearish Momentum"
+                    _dg_main_color  = "#FF5252"
+                elif _net_delta > 0.05:
+                    _dg_main_signal = "🟡 Mild Bullish"
+                    _dg_main_color  = "#FFD740"
+                elif _net_delta < -0.05:
+                    _dg_main_signal = "🟡 Mild Bearish"
+                    _dg_main_color  = "#FFD740"
+                else:
+                    _dg_main_signal = "⏳ No Clear Trend"
+                    _dg_main_color  = "#888888"
+
+                # --- EARLY ENTRY ENGINE ---
+                if _net_delta > 0 and _gamma_change > 0 and _hot_lbl in ("ATM+1", "ATM+2"):
+                    _dg_entry = "🚀 ENTER CE — Early Breakout"
+                    _dg_entry_color = "#00C853"
+                elif _net_delta < 0 and _gamma_change > 0 and _hot_lbl in ("ATM-1", "ATM-2"):
+                    _dg_entry = "🔥 ENTER PE — Early Breakdown"
+                    _dg_entry_color = "#FF5252"
+                elif _gamma_change > 0:
+                    _dg_entry = "⚡ Gamma Rising — Watch for breakout"
+                    _dg_entry_color = "#FFD740"
+                else:
+                    _dg_entry = "WAIT ⏳"
+                    _dg_entry_color = "#888888"
+
+                # ======== TELEGRAM ALERT (rate-limited to 5 min) ========
+                if enable_signals:
+                    _dg_tg_now  = datetime.now(pytz.timezone('Asia/Kolkata'))
+                    _dg_tg_last = st.session_state.get('delta_gamma_last_alert')
+                    if _dg_tg_last is None or (_dg_tg_now - _dg_tg_last).total_seconds() > 300:
+                        # Build ATM ±2 strike comparison table rows
+                        _dg_tg_strike_lines = []
+                        for _dg_tg_lk in ['ATM-2', 'ATM-1', 'ATM', 'ATM+1', 'ATM+2']:
+                            _dg_tg_d = _dg_delta_per.get(_dg_tg_lk)
+                            _dg_tg_g = _dg_gamma_per.get(_dg_tg_lk)
+                            if _dg_tg_d is None and _dg_tg_g is None:
+                                continue
+                            _dg_tg_hot = " 🔥" if _dg_tg_lk == _hot_lbl else ""
+                            _dg_tg_d_str = f"{_dg_tg_d:+.4f}" if _dg_tg_d is not None else "—"
+                            _dg_tg_g_str = f"{_dg_tg_g:+.2f}L" if _dg_tg_g is not None else "—"
+                            _dg_tg_strike_lines.append(
+                                f"  <b>{_dg_tg_lk}</b>{_dg_tg_hot}  Δ:{_dg_tg_d_str}  Γ:{_dg_tg_g_str}"
+                            )
+                        _dg_gamma_dir = "⬆️ Gamma expanding" if _gamma_change > 0 else "⬇️ Gamma contracting"
+                        _dg_tg_msg = "\n".join([
+                            "<b>⚡ Delta &amp; Gamma Engine — ATM ± 2</b>",
+                            "",
+                            "<b>NET DELTA</b>",
+                            f"  Value: <b>{_net_delta:+.4f}</b>  |  Δ change: {_delta_change:+.4f}",
+                            f"  avg CE Δ: {_avg_d_ce:+.3f}   PE Δ: {_avg_d_pe:+.3f}",
+                            "",
+                            "<b>NET GAMMA (Lakhs)</b>",
+                            f"  Value: <b>{_net_gamma:+.2f}L</b>  |  Δ change: {_gamma_change:+.2f}L",
+                            f"  {_dg_gamma_dir}",
+                            "",
+                            "<b>HOT STRIKE</b>",
+                            f"  Strike: <b>{_hot_lbl}</b>  {_hot_signal}",
+                            f"  Gamma: {_hot_val:+.2f}L",
+                            "",
+                            "<b>SIGNAL &amp; ENTRY</b>",
+                            f"  {_dg_main_signal}",
+                            f"  {_dg_entry}",
+                            "",
+                            "<b>📊 ATM ±2 Strike Comparison</b>",
+                        ] + _dg_tg_strike_lines + [
+                            "",
+                            f"{index_name} Spot: ₹{int(_dg_underlying):,}",
+                        ])
+                        st.session_state.delta_gamma_last_alert = _dg_tg_now
+
+                # ======== UI OUTPUT ========
+                _dg_c1, _dg_c2, _dg_c3, _dg_c4 = st.columns(4)
+                with _dg_c1:
+                    _nd_color = "#00C853" if _net_delta > 0.05 else ("#FF5252" if _net_delta < -0.05 else "#FFD740")
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_nd_color};">
+                    <div style="color:#aaa;font-size:11px;">NET DELTA</div>
+                    <div style="font-size:22px;font-weight:bold;color:{_nd_color};">{_net_delta:+.4f}</div>
+                    <div style="font-size:12px;color:#aaa;margin-top:4px;">Δ change: {_delta_change:+.4f}</div>
+                    <div style="font-size:11px;color:#777;">avg CE Δ: {_avg_d_ce:+.3f} &nbsp; PE Δ: {_avg_d_pe:+.3f}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _dg_c2:
+                    _ng_color = "#00C853" if _net_gamma > 5 else ("#FF5252" if _net_gamma < -5 else "#FFD740")
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_ng_color};">
+                    <div style="color:#aaa;font-size:11px;">NET GAMMA (Lakhs)</div>
+                    <div style="font-size:22px;font-weight:bold;color:{_ng_color};">{_net_gamma:+.2f}L</div>
+                    <div style="font-size:12px;color:#aaa;margin-top:4px;">Δ change: {_gamma_change:+.2f}L</div>
+                    <div style="font-size:11px;color:#777;">{"⬆️ Gamma expanding" if _gamma_change > 0 else "⬇️ Gamma contracting"}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _dg_c3:
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_hot_color};">
+                    <div style="color:#aaa;font-size:11px;">HOT STRIKE</div>
+                    <div style="font-size:20px;font-weight:bold;color:{_hot_color};">{_hot_lbl}</div>
+                    <div style="font-size:12px;margin-top:4px;">{_hot_signal}</div>
+                    <div style="font-size:11px;color:#777;margin-top:2px;">Gamma: {_hot_val:+.2f}L</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with _dg_c4:
+                    st.markdown(f"""
+                    <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:2px solid {_dg_main_color};">
+                    <div style="color:#aaa;font-size:11px;">SIGNAL &amp; ENTRY</div>
+                    <div style="font-size:14px;font-weight:bold;color:{_dg_main_color};margin-top:4px;">{_dg_main_signal}</div>
+                    <div style="font-size:13px;color:{_dg_entry_color};margin-top:6px;">{_dg_entry}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ---- Per-Strike Current Snapshot ----
+                _dg_snap_rows = []
+                for _lk in sorted(_dg_delta_per.keys(), key=lambda x: (
+                    -99 if x == 'ATM-2' else -1 if x == 'ATM-1' else 0 if x == 'ATM' else 1 if x == 'ATM+1' else 2
+                )):
+                    _dg_snap_rows.append({
+                        'Strike': _lk,
+                        'Net Delta': f"{_dg_delta_per[_lk]:+.4f}",
+                        'Net Gamma (L)': f"{_dg_gamma_per.get(_lk, 0):+.2f}",
+                        'Hot': '🔥' if _lk == _hot_lbl else ''
+                    })
+                if _dg_snap_rows:
+                    _dg_snap_df = pd.DataFrame(_dg_snap_rows)
+                    st.dataframe(_dg_snap_df, use_container_width=True, hide_index=True)
+
+                # ---- Overall Delta & Gamma Time-Series ----
+                if len(st.session_state.delta_gamma_history) >= 2:
+                    _dgh = pd.DataFrame(st.session_state.delta_gamma_history)
+                    _fig_dg = go.Figure()
+                    _fig_dg.add_trace(go.Scatter(
+                        x=_dgh['time'], y=_dgh['net_delta'],
+                        mode='lines+markers', name='Net Delta',
+                        line=dict(color='#00C853', width=2),
+                        marker=dict(size=4), yaxis='y1'
+                    ))
+                    _fig_dg.add_trace(go.Scatter(
+                        x=_dgh['time'], y=_dgh['net_gamma'],
+                        mode='lines+markers', name='Net Gamma (L)',
+                        line=dict(color='#FFD740', width=2, dash='dot'),
+                        marker=dict(size=4), yaxis='y2'
+                    ))
+                    _fig_dg.add_hline(y=0.15, line_dash='dash', line_color='#00C853',
+                                      annotation_text='Bull Δ 0.15', annotation_position='bottom right',
+                                      yref='y1')
+                    _fig_dg.add_hline(y=-0.15, line_dash='dash', line_color='#FF5252',
+                                      annotation_text='Bear Δ -0.15', annotation_position='top right',
+                                      yref='y1')
+                    # Current value markers (present values shown in graph)
+                    _cur_nd = _dgh['net_delta'].iloc[-1]
+                    _cur_ng = _dgh['net_gamma'].iloc[-1]
+                    _fig_dg.add_trace(go.Scatter(
+                        x=[_dgh['time'].iloc[-1]], y=[_cur_nd],
+                        mode='markers+text', text=[f'{_cur_nd:+.4f}'],
+                        textposition='top right', textfont=dict(size=9, color='#00C853'),
+                        marker=dict(size=9, color='#00C853', symbol='circle'),
+                        showlegend=False, hoverinfo='skip', yaxis='y1'
+                    ))
+                    _fig_dg.add_trace(go.Scatter(
+                        x=[_dgh['time'].iloc[-1]], y=[_cur_ng],
+                        mode='markers+text', text=[f'{_cur_ng:+.2f}L'],
+                        textposition='bottom right', textfont=dict(size=9, color='#FFD740'),
+                        marker=dict(size=9, color='#FFD740', symbol='diamond'),
+                        showlegend=False, hoverinfo='skip', yaxis='y2'
+                    ))
+                    _fig_dg.update_layout(
+                        title=f'Net Delta & Net Gamma Over Time (ATM ± 2) — Δ:{_cur_nd:+.4f} Γ:{_cur_ng:+.2f}L',
+                        height=280, margin=dict(l=40, r=60, t=40, b=30),
+                        paper_bgcolor='#111', plot_bgcolor='#111',
+                        font=dict(color='#ccc'),
+                        xaxis=dict(gridcolor='#333'),
+                        yaxis=dict(title=dict(text='Net Delta', font=dict(color='#00C853')), gridcolor='#333'),
+                        yaxis2=dict(title=dict(text='Net Gamma (L)', font=dict(color='#FFD740')),
+                                    overlaying='y', side='right', showgrid=False),
+                        showlegend=True, legend=dict(orientation='h', y=-0.3)
+                    )
+                    st.plotly_chart(_fig_dg, use_container_width=True)
+
+                    # ---- ATM ±2 Strike Comparison — Delta · Gamma (5-column per-strike) ----
+                    st.markdown("### 📊 ATM ±2 Strike Comparison — Delta · Gamma")
+                    _dg_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
+                    _dg_pos_keys   = ['ATM-2', 'ATM-1', 'ATM', 'ATM+1', 'ATM+2']
+                    _dg_pos_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
+                    _dg_ps_cols = st.columns(5)
+                    for _dg_ci, _dg_col in enumerate(_dg_ps_cols):
+                        with _dg_col:
+                            _lk = _dg_pos_keys[_dg_ci]
+                            _dk = f"delta_{_lk}"
+                            _gk = f"gamma_{_lk}"
+                            _clr = _dg_pos_colors[_dg_ci]
+                            if _dk not in _dgh.columns and _gk not in _dgh.columns:
+                                st.info(f"{_dg_pos_labels[_dg_ci]} N/A")
+                                continue
+                            _fig_dg_ps = go.Figure()
+                            # Delta (solid, left y-axis)
+                            if _dk in _dgh.columns:
+                                _fig_dg_ps.add_trace(go.Scatter(
+                                    x=_dgh['time'], y=_dgh[_dk],
+                                    mode='lines+markers', name='Delta',
+                                    line=dict(color='#00C853', width=2),
+                                    marker=dict(size=3), yaxis='y1'
+                                ))
+                            # Gamma (dashed, right y-axis)
+                            if _gk in _dgh.columns:
+                                _fig_dg_ps.add_trace(go.Scatter(
+                                    x=_dgh['time'], y=_dgh[_gk],
+                                    mode='lines+markers', name='Gamma (L)',
+                                    line=dict(color='#FFD740', width=2, dash='dash'),
+                                    marker=dict(size=3), yaxis='y2'
+                                ))
+                            _fig_dg_ps.add_hline(y=0, line_color='rgba(255,255,255,0.3)', line_width=1, yref='y1')
+                            # Current value markers
+                            _ps_cur_d = _dgh[_dk].iloc[-1] if _dk in _dgh.columns and len(_dgh) > 0 else None
+                            _ps_cur_g = _dgh[_gk].iloc[-1] if _gk in _dgh.columns and len(_dgh) > 0 else None
+                            if _ps_cur_d is not None:
+                                _fig_dg_ps.add_trace(go.Scatter(
+                                    x=[_dgh['time'].iloc[-1]], y=[_ps_cur_d],
+                                    mode='markers+text', text=[f'{_ps_cur_d:+.4f}'],
+                                    textposition='top right', textfont=dict(size=8, color='#00C853'),
+                                    marker=dict(size=8, color='#00C853', symbol='circle'),
+                                    showlegend=False, hoverinfo='skip', yaxis='y1'
+                                ))
+                            if _ps_cur_g is not None:
+                                _fig_dg_ps.add_trace(go.Scatter(
+                                    x=[_dgh['time'].iloc[-1]], y=[_ps_cur_g],
+                                    mode='markers+text', text=[f'{_ps_cur_g:+.2f}L'],
+                                    textposition='bottom right', textfont=dict(size=8, color='#FFD740'),
+                                    marker=dict(size=8, color='#FFD740', symbol='diamond'),
+                                    showlegend=False, hoverinfo='skip', yaxis='y2'
+                                ))
+                            _hot_border = '2px solid #ff4444' if _lk == _hot_lbl else '1px solid #333'
+                            _title_txt = f"{_dg_pos_labels[_dg_ci]}<br>{_lk}"
+                            if _ps_cur_d is not None:
+                                _title_txt += f"<br>Δ:{_ps_cur_d:+.4f}"
+                            if _ps_cur_g is not None:
+                                _title_txt += f" Γ:{_ps_cur_g:+.2f}L"
+                            _fig_dg_ps.update_layout(
+                                title=dict(text=_title_txt, font=dict(size=10)),
+                                template='plotly_dark', height=300,
+                                showlegend=True,
+                                legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                                            xanchor='center', x=0.5, font=dict(size=8)),
+                                margin=dict(l=5, r=35, t=80, b=30),
+                                xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
+                                yaxis=dict(title='Delta', title_font=dict(color='#00C853', size=9),
+                                           tickfont=dict(size=8), gridcolor='#333'),
+                                yaxis2=dict(title='Gamma (L)', title_font=dict(color='#FFD740', size=9),
+                                            overlaying='y', side='right', showgrid=False,
+                                            tickfont=dict(size=8)),
+                                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            )
+                            st.plotly_chart(_fig_dg_ps, use_container_width=True)
+                            _sig_d = "🟢" if _ps_cur_d and _ps_cur_d > 0.05 else ("🔴" if _ps_cur_d and _ps_cur_d < -0.05 else "🟡")
+                            _sig_g = "📍Pin" if _ps_cur_g and _ps_cur_g > 5 else ("⚡Acc" if _ps_cur_g and _ps_cur_g < -5 else "➡️Ntrl")
+                            _ps_d_str = f'{_ps_cur_d:+.4f}' if _ps_cur_d is not None else '—'
+                            _ps_g_str = f'{_ps_cur_g:+.2f}L' if _ps_cur_g is not None else '—'
+                            st.caption(f"{_sig_d} Δ:{_ps_d_str} · {_sig_g} Γ:{_ps_g_str}")
+
+                _dg_col_l, _dg_col_r = st.columns([3, 1])
+                with _dg_col_l:
+                    st.caption(f"⚡ Delta/Gamma pts: {len(st.session_state.delta_gamma_history)}")
+                with _dg_col_r:
+                    if st.button("🗑️ Clear Delta/Gamma History"):
+                        st.session_state.delta_gamma_history = []
+                        st.rerun()
+            else:
+                st.info("ATM strike not identified — Delta & Gamma Engine unavailable.")
+        else:
+            st.info("Option chain data with Greeks required for Delta & Gamma Engine.")
+
+    except Exception as _dg_e:
+        st.warning(f"Delta & Gamma Engine unavailable: {str(_dg_e)}")
+
+    # Expandable section for detailed Greeks and raw values
+    with st.expander("📊 Detailed Greeks & Raw Values"):
+        df_summary = option_data['df_summary']
+        detail_cols = ['Strike', 'Zone', 'lastPrice_CE', 'lastPrice_PE',
+                       'openInterest_CE', 'openInterest_PE', 'changeinOpenInterest_CE', 'changeinOpenInterest_PE',
+                       'totalTradedVolume_CE', 'totalTradedVolume_PE',
+                       'Delta_CE', 'Delta_PE', 'Gamma_CE', 'Gamma_PE', 'Vega_CE', 'Vega_PE', 'Theta_CE', 'Theta_PE',
+                       'impliedVolatility_CE', 'impliedVolatility_PE',
+                       'bidQty_CE', 'bidQty_PE', 'askQty_CE', 'askQty_PE']
+        detail_cols = [col for col in detail_cols if col in df_summary.columns]
+        if detail_cols:
+            st.dataframe(df_summary[detail_cols].style.apply(highlight_atm_row, axis=1), use_container_width=True)
+
+    # Add download button for CSV
+    csv_data = create_csv_download(option_data['df_summary'])
+    st.download_button(
+        label="📥 Download Summary as CSV",
+        data=csv_data,
+        file_name=f"{index_name.lower()}_options_summary_{option_data['expiry']}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        mime="text/csv"
+    )
+
+
 def main():
     st.title("📈 Nifty Trading & Options Analyzer")
 
@@ -16567,6 +23118,16 @@ def main():
     # Initialize session state for Strike Zone Classification Engine
     if 'zone_history' not in st.session_state:
         st.session_state.zone_history = []
+
+    # Initialize per-index session state for BankNifty and Sensex (isolated histories)
+    for _idx_pfx in ('bnf', 'sx'):
+        for _ss_key in _OPT_SS_KEYS:
+            _pkey = f'{_idx_pfx}_{_ss_key}'
+            if _pkey not in st.session_state:
+                if _ss_key.endswith('_history'):
+                    st.session_state[_pkey] = []
+                else:
+                    st.session_state[_pkey] = None
 
     # ===== NEW ENGINE HISTORIES =====
     if 'spike_history' not in st.session_state:
@@ -16762,23 +23323,49 @@ def main():
     
     # Options expiry selection
     st.sidebar.header("📅 Options Settings")
-    
-    # Get available expiry dates
+
+    # ── NIFTY expiry ──
     expiry_data = get_dhan_expiry_list_cached(NIFTY_UNDERLYING_SCRIP, NIFTY_UNDERLYING_SEG)
     expiry_dates = []
     if expiry_data and 'data' in expiry_data:
         expiry_dates = expiry_data['data']
-    
+
     selected_expiry = None
     if expiry_dates:
         expiry_options = [f"{exp} ({'Weekly' if i < 4 else 'Monthly'})" for i, exp in enumerate(expiry_dates)]
         selected_expiry_idx = st.sidebar.selectbox(
-            "Select Expiry",
+            "NIFTY Expiry",
             range(len(expiry_options)),
             format_func=lambda x: expiry_options[x]
         )
         selected_expiry = expiry_dates[selected_expiry_idx]
-    
+
+    # ── BANK NIFTY expiry ──
+    _bnf_expiry_data = get_dhan_expiry_list_cached(BANKNIFTY_UNDERLYING_SCRIP, BANKNIFTY_UNDERLYING_SEG)
+    _bnf_expiry_dates = _bnf_expiry_data['data'] if _bnf_expiry_data and 'data' in _bnf_expiry_data else []
+    if _bnf_expiry_dates:
+        _bnf_exp_opts = [f"{e} ({'Weekly' if i < 4 else 'Monthly'})" for i, e in enumerate(_bnf_expiry_dates)]
+        _bnf_exp_idx = st.sidebar.selectbox(
+            "BANK NIFTY Expiry", range(len(_bnf_exp_opts)),
+            format_func=lambda x: _bnf_exp_opts[x], key="bnf_expiry_sel"
+        )
+        st.session_state['_bnf_selected_expiry'] = _bnf_expiry_dates[_bnf_exp_idx]
+    else:
+        st.session_state['_bnf_selected_expiry'] = None
+
+    # ── SENSEX expiry ──
+    _sx_expiry_data = get_dhan_expiry_list_cached(SENSEX_UNDERLYING_SCRIP, SENSEX_UNDERLYING_SEG)
+    _sx_expiry_dates = _sx_expiry_data['data'] if _sx_expiry_data and 'data' in _sx_expiry_data else []
+    if _sx_expiry_dates:
+        _sx_exp_opts = [f"{e} ({'Weekly' if i < 4 else 'Monthly'})" for i, e in enumerate(_sx_expiry_dates)]
+        _sx_exp_idx = st.sidebar.selectbox(
+            "SENSEX Expiry", range(len(_sx_exp_opts)),
+            format_func=lambda x: _sx_exp_opts[x], key="sx_expiry_sel"
+        )
+        st.session_state['_sx_selected_expiry'] = _sx_expiry_dates[_sx_exp_idx]
+    else:
+        st.session_state['_sx_selected_expiry'] = None
+
     # Auto-refresh settings
     auto_refresh = st.sidebar.checkbox("Auto Refresh (2 min)", value=user_prefs['auto_refresh'])
     
@@ -18204,6466 +24791,73 @@ def main():
         underlying_price=underlying_price if 'underlying_price' in dir() else None,
     )
 
-    # ===== OPTIONS CHAIN AND HTF S/R TABLES BELOW CHART =====
-    if option_data and option_data.get('underlying'):
-        st.markdown("---")
-        # Anchor for sidebar navigation
-        st.markdown('<a name="smart-money-panel"></a>', unsafe_allow_html=True)
-        st.header("📊 Options Chain Analysis")
-        st.info(
-            "⬇️ **Smart Money & Market Sentiment Analysis** panel is directly below — scroll down to see "
-            "OI activity, sentiment score, trap & breakout detection, support/resistance strength, and key levels."
-        )
+    # ===== MULTI-INDEX OPTIONS CHAIN ANALYSIS TABS (NIFTY / BANKNIFTY / SENSEX) =====
+    _tab_nifty, _tab_bnf, _tab_sensex = st.tabs([
+        "📊 NIFTY 50", "📈 BANK NIFTY", "📊 SENSEX"
+    ])
 
-        # ── 🧠 SMART MONEY PANEL — shown first so it's always visible ────────
-        render_smart_money_master_analysis(option_data, current_price)
-
-        # ── 🧠 VOB2 PRE-MARKET INTELLIGENCE REPORT ──────────────────────────
-        render_pre_market_intelligence_report(option_data, current_price)
-
-        # OI Change metrics
-        st.markdown("## Open Interest Change (in Lakhs)")
-        oi_col1, oi_col2 = st.columns(2)
-        with oi_col1:
-            st.metric("CALL ΔOI", f"{option_data['total_ce_change']:+.1f}L", delta_color="inverse")
-        with oi_col2:
-            st.metric("PUT ΔOI", f"{option_data['total_pe_change']:+.1f}L", delta_color="normal")
-
-        # ===== STRIKE PRICE vs LTP TABLE (ATM ± 5) =====
-        st.markdown("---")
-        st.markdown("## Strike Price vs LTP (ATM ± 5)")
-
-        df_summary_ltp = option_data.get('df_summary')
-        atm_strike_ltp = option_data.get('atm_strike')
-
-        if (df_summary_ltp is not None
-                and 'lastPrice_CE' in df_summary_ltp.columns
-                and 'lastPrice_PE' in df_summary_ltp.columns):
-
-            NIFTY_LOT_SIZE = 65
-            _expiry = option_data.get('expiry', '')
-
-            # Collect scrp_cd columns if available (for order placement)
-            ltp_extra = [c for c in ('scrp_cd_CE', 'scrp_cd_PE') if c in df_summary_ltp.columns]
-            ltp_tbl = df_summary_ltp[['Strike', 'lastPrice_CE', 'lastPrice_PE', 'Zone'] + ltp_extra].copy()
-            ltp_tbl = ltp_tbl.sort_values('Strike', ascending=False).reset_index(drop=True)
-
-            has_scrp = 'scrp_cd_CE' in ltp_tbl.columns and 'scrp_cd_PE' in ltp_tbl.columns
-            if not has_scrp:
-                st.info("Security IDs (scrp_cd) not available in option chain data — Buy buttons disabled.")
-
-            # Build expiry suffix for trading symbol e.g. "25FEB27"
-            try:
-                from datetime import datetime as _dt
-                _exp_sfx = _dt.strptime(_expiry, "%Y-%m-%d").strftime('%y%b%d').upper()
-            except Exception:
-                _exp_sfx = ''
-
-            # Header row
-            hdr = st.columns([2, 1.5, 1, 2, 1, 2, 1.5])
-            for col_h, label, color in zip(
-                hdr,
-                ["CE LTP", "CE Val (x65)", "BUY CE", "STRIKE", "BUY PE", "PE LTP", "PE Val (x65)"],
-                ["#00cc66", "#00cc66", "#aaa", "#FFD700", "#aaa", "#ff6b6b", "#ff6b6b"]
-            ):
-                col_h.markdown(f"<b style='color:{color}'>{label}</b>", unsafe_allow_html=True)
-
-            st.markdown("<hr style='margin:4px 0; border-color:#333'>", unsafe_allow_html=True)
-
-            for _, row in ltp_tbl.iterrows():
-                strike = int(row['Strike'])
-                ce_ltp = float(row['lastPrice_CE'])
-                pe_ltp = float(row['lastPrice_PE'])
-                ce_val = ce_ltp * NIFTY_LOT_SIZE
-                pe_val = pe_ltp * NIFTY_LOT_SIZE
-                is_atm = row['Zone'] == 'ATM'
-                scrp_ce = str(row['scrp_cd_CE']) if has_scrp else ''
-                scrp_pe = str(row['scrp_cd_PE']) if has_scrp else ''
-                ts_ce = f"NIFTY{_exp_sfx}{strike}CE" if _exp_sfx else f"NIFTY{strike}CE"
-                ts_pe = f"NIFTY{_exp_sfx}{strike}PE" if _exp_sfx else f"NIFTY{strike}PE"
-
-                ce_color = "#00ff88" if is_atm else "#00cc66"
-                pe_color = "#ff8888" if is_atm else "#ff6b6b"
-                fw = "bold" if is_atm else "normal"
-                strike_style = "color:#FFD700; font-weight:bold; font-size:1.1em" if is_atm else "color:#c0c0c0"
-
-                r = st.columns([2, 1.5, 1, 2, 1, 2, 1.5])
-                r[0].markdown(f"<span style='color:{ce_color}; font-weight:{fw}'>{ce_ltp:.2f}</span>", unsafe_allow_html=True)
-                r[1].markdown(f"<span style='color:{ce_color}'>₹{ce_val:,.0f}</span>", unsafe_allow_html=True)
-                buy_ce = r[2].button("BUY", key=f"buy_ce_{strike}", type="primary",
-                                     disabled=not (has_scrp and scrp_ce))
-                r[3].markdown(f"<div style='text-align:center'><span style='{strike_style}'>{strike}</span></div>",
-                               unsafe_allow_html=True)
-                buy_pe = r[4].button("BUY", key=f"buy_pe_{strike}", type="primary",
-                                     disabled=not (has_scrp and scrp_pe))
-                r[5].markdown(f"<span style='color:{pe_color}; font-weight:{fw}'>{pe_ltp:.2f}</span>", unsafe_allow_html=True)
-                r[6].markdown(f"<span style='color:{pe_color}'>₹{pe_val:,.0f}</span>", unsafe_allow_html=True)
-
-                if buy_ce:
-                    ok, res = api.place_order(scrp_ce, ts_ce)
-                    if ok:
-                        st.success(f"CE BUY order placed for {ts_ce} | Order ID: {res.get('orderId', res)}")
-                    else:
-                        st.error(f"CE BUY failed for {ts_ce}: {res}")
-
-                if buy_pe:
-                    ok, res = api.place_order(scrp_pe, ts_pe)
-                    if ok:
-                        st.success(f"PE BUY order placed for {ts_pe} | Order ID: {res.get('orderId', res)}")
-                    else:
-                        st.error(f"PE BUY failed for {ts_pe}: {res}")
-
-        # ===== ATM ±3 STRIKE DATA TABLE =====
-        st.markdown("---")
-        st.markdown("## 📋 ATM ±3 Strike Data — Full Tabulation (7 Strikes)")
-        try:
-            _t5_src = option_data.get('df_summary') if option_data else None
-            if _t5_src is not None:
-                _t5_atm_idx = _t5_src[_t5_src['Zone'] == 'ATM'].index
-                if len(_t5_atm_idx) > 0:
-                    _t5_atm_pos = _t5_src.index.get_loc(_t5_atm_idx[0])
-                    _t5_start   = max(0, _t5_atm_pos - 3)
-                    _t5_end     = min(len(_t5_src), _t5_atm_pos + 4)
-                    _t5         = _t5_src.iloc[_t5_start:_t5_end].copy().reset_index(drop=True)
-
-                    _t5_atm_strike  = _t5[_t5['Zone'] == 'ATM']['Strike'].values[0]
-                    _t5_stk_list    = _t5['Strike'].tolist()
-                    _t5_atm_i       = _t5_stk_list.index(_t5_atm_strike)
-                    def _t5_zone(i):
-                        d = i - _t5_atm_i
-                        return '🟡 ATM' if d == 0 else (f'🟣 ITM{d}' if d < 0 else f'🔵 OTM+{d}')
-
-                    # Underlying direction for OI type
-                    _t5_und = option_data.get('underlying', 0) or 0
-                    if '_oi_prev_underlying' not in st.session_state:
-                        st.session_state['_oi_prev_underlying'] = _t5_und
-                    _t5_und_up = _t5_und >= st.session_state['_oi_prev_underlying']
-                    st.session_state['_oi_prev_underlying'] = _t5_und
-
-                    def _t5_oi_type(chgoi, price_up):
-                        oi_up = (chgoi or 0) > 0
-                        if price_up and oi_up:     return "🟢 Long Build-up"
-                        if not price_up and oi_up: return "🔴 Short Build-up"
-                        if price_up and not oi_up: return "🟡 Short Covering"
-                        return "🟠 Long Unwinding"
-
-                    _t5_tbl = pd.DataFrame()
-                    _t5_tbl['Strike']   = _t5['Strike']
-                    _t5_tbl['Zone']     = [_t5_zone(i) for i in range(len(_t5))]
-
-                    # LTP + Straddle
-                    if 'lastPrice_CE' in _t5.columns:
-                        _t5_tbl['CE LTP']   = _t5['lastPrice_CE'].round(2)
-                        _t5_tbl['PE LTP']   = _t5['lastPrice_PE'].round(2)
-                        _t5_tbl['Straddle'] = (_t5['lastPrice_CE'] + _t5['lastPrice_PE']).round(2)
-
-                    # PCR (OI)
-                    if 'PCR' in _t5.columns:
-                        _t5_tbl['PCR OI']   = _t5['PCR']
-                        _t5_tbl['OI Sig']   = _t5['PCR'].apply(
-                            lambda v: '🟢 Bull' if v > 1.2 else ('🔴 Bear' if v < 0.7 else '🟡 Ntrl'))
-
-                    # PCR (ChgOI)
-                    if 'changeinOpenInterest_CE' in _t5.columns:
-                        _ce_chg = _t5['changeinOpenInterest_CE'].replace(0, np.nan)
-                        _t5_tbl['PCR ΔOI']  = (_t5['changeinOpenInterest_PE'] / _ce_chg).round(3)
-                        _t5_tbl['ΔOI Sig']  = _t5_tbl['PCR ΔOI'].apply(
-                            lambda v: '🟢 Bull' if (pd.notna(v) and v > 1.2) else (
-                                      '🔴 Bear' if (pd.notna(v) and v < 0.7) else '🟡 Ntrl'))
-
-                    # Vol PCR
-                    if 'totalTradedVolume_CE' in _t5.columns:
-                        _ce_vol = _t5['totalTradedVolume_CE'].replace(0, np.nan)
-                        _t5_tbl['Vol PCR']  = (_t5['totalTradedVolume_PE'] / _ce_vol).round(3)
-
-                    # OI in Lakhs
-                    if 'openInterest_CE' in _t5.columns:
-                        _t5_tbl['CE OI(L)'] = (_t5['openInterest_CE'] / 100000).round(2)
-                        _t5_tbl['PE OI(L)'] = (_t5['openInterest_PE'] / 100000).round(2)
-
-                    # ΔOI + OI Type (separately for CE and PE)
-                    if 'changeinOpenInterest_CE' in _t5.columns:
-                        _t5_tbl['CE ΔOI']    = _t5['changeinOpenInterest_CE'].fillna(0).astype(int)
-                        _t5_tbl['CE OI Type'] = _t5['changeinOpenInterest_CE'].apply(
-                            lambda v: _t5_oi_type(v, _t5_und_up))
-                        _t5_tbl['PE ΔOI']    = _t5['changeinOpenInterest_PE'].fillna(0).astype(int)
-                        _t5_tbl['PE OI Type'] = _t5['changeinOpenInterest_PE'].apply(
-                            lambda v: _t5_oi_type(v, _t5_und_up))
-
-                    # IV
-                    if 'impliedVolatility_CE' in _t5.columns:
-                        _t5_tbl['IV CE']    = _t5['impliedVolatility_CE'].round(2)
-                        _t5_tbl['IV PE']    = _t5['impliedVolatility_PE'].round(2)
-
-                    # GEX Net (Lakhs)
-                    if 'GammaExp_Net' in _t5.columns:
-                        _t5_tbl['GEX(L)']   = (_t5['GammaExp_Net'] / 100000).round(2)
-
-                    # Bias + Verdict
-                    if 'BiasScore' in _t5.columns:
-                        _t5_tbl['Bias%']    = _t5['BiasScore'].round(1)
-                    if 'Verdict' in _t5.columns:
-                        _t5_tbl['Verdict']  = _t5['Verdict']
-
-                    # Row styling
-                    def _t5_style(row):
-                        if row['Zone'] == '🟡 ATM':
-                            return ['background-color: rgba(255,200,0,0.18)'] * len(row)
-                        pcr = row.get('PCR OI', 1.0)
-                        if pd.notna(pcr) and pcr > 1.2:
-                            return ['background-color: rgba(0,255,136,0.07)'] * len(row)
-                        if pd.notna(pcr) and pcr < 0.7:
-                            return ['background-color: rgba(255,68,68,0.07)'] * len(row)
-                        return [''] * len(row)
-
-                    st.dataframe(
-                        _t5_tbl.style.apply(_t5_style, axis=1),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-                    _t5_und_dir = "↑" if _t5_und_up else "↓"
-                    st.caption(
-                        f"📍 ATM ₹{_t5_atm_strike} · ATM±3 ({len(_t5_tbl)} strikes) · "
-                        f"Underlying {_t5_und_dir} ₹{_t5_und:.0f} · "
-                        f"🟢 Long Build-up  🔴 Short Build-up  🟡 Short Covering  🟠 Long Unwinding"
-                    )
-                else:
-                    st.info("ATM strike not identified in current data.")
-            else:
-                st.info("Option data not available yet — wait for first refresh.")
-        except Exception as _t5_exc:
-            st.warning(f"ATM ±3 table error: {str(_t5_exc)[:120]}")
-
-        # Option Chain Bias Summary Table
-        st.markdown("---")
-        st.markdown("## Option Chain Bias Summary")
-        if option_data.get('styled_df') is not None:
-            st.dataframe(option_data['styled_df'], use_container_width=True)
-
-        # ===== HTF SUPPORT & RESISTANCE TABLES (SPLIT) =====
-        st.markdown("---")
-        st.markdown("## 📈 HTF Support & Resistance Levels")
-
-        sr_data = option_data.get('sr_data', [])
-        max_pain_strike = option_data.get('max_pain_strike')
-
-        if sr_data:
-            # Split into Support and Resistance
-            support_data = [d for d in sr_data if '🟢' in d['Type'] or '🎯' in d['Type']]
-            resistance_data = [d for d in sr_data if '🔴' in d['Type']]
-
-            sr_col1, sr_col2 = st.columns(2)
-
-            with sr_col1:
-                st.markdown("### 🟢 SUPPORT LEVELS")
-                if support_data:
-                    support_df = pd.DataFrame(support_data)
-                    st.dataframe(support_df, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No support levels identified")
-
-            with sr_col2:
-                st.markdown("### 🔴 RESISTANCE LEVELS")
-                if resistance_data:
-                    resistance_df = pd.DataFrame(resistance_data)
-                    st.dataframe(resistance_df, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No resistance levels identified")
-
-            # Max Pain summary
-            if max_pain_strike:
-                st.info(f"🎯 **Max Pain Level:** ₹{max_pain_strike:.0f} - Price magnet at expiry")
-
-        # ===== KEY LEVELS FROM ORDER BOOK DEPTH CHART (time-series) =====
-        st.markdown("---")
-        _depth_df_summary = option_data.get('df_summary')
-        if _depth_df_summary is not None:
-            _has_bid = 'bidQty_PE' in _depth_df_summary.columns and not _depth_df_summary['bidQty_PE'].isna().all()
-            _has_ask = 'askQty_CE' in _depth_df_summary.columns and not _depth_df_summary['askQty_CE'].isna().all()
-            if _has_bid or _has_ask:
-                _ist = pytz.timezone('Asia/Kolkata')
-                _depth_now = datetime.now(_ist)
-                _depth_entry = {'time': _depth_now}
-                if _has_bid:
-                    _top3_sup = _depth_df_summary.nlargest(3, 'bidQty_PE')[['Strike', 'bidQty_PE']].copy()
-                    _top3_sup = _top3_sup.sort_values('Strike', ascending=False).reset_index(drop=True)
-                    for _i, _r in _top3_sup.iterrows():
-                        _depth_entry[f'S{_i+1}_qty'] = _r['bidQty_PE']
-                        _depth_entry[f'S{_i+1}_price'] = _r['Strike']
-                if _has_ask:
-                    _top3_res = _depth_df_summary.nlargest(3, 'askQty_CE')[['Strike', 'askQty_CE']].copy()
-                    _top3_res = _top3_res.sort_values('Strike').reset_index(drop=True)
-                    for _i, _r in _top3_res.iterrows():
-                        _depth_entry[f'R{_i+1}_qty'] = _r['askQty_CE']
-                        _depth_entry[f'R{_i+1}_price'] = _r['Strike']
-                _should_add_depth = True
-                if st.session_state.depth_history:
-                    _last_depth = st.session_state.depth_history[-1]
-                    _last_time = _last_depth['time']
-                    if isinstance(_last_time, str):
-                        _last_time = pd.to_datetime(_last_time).to_pydatetime()
-                    if _last_time.tzinfo is None:
-                        _last_time = _ist.localize(_last_time)
-                    if (_depth_now - _last_time).total_seconds() < 30:
-                        _should_add_depth = False
-                if _should_add_depth:
-                    st.session_state.depth_history.append(_depth_entry)
-                    if len(st.session_state.depth_history) > 200:
-                        st.session_state.depth_history = st.session_state.depth_history[-200:]
-                    db.save_option_history('depth_history', _depth_entry)
-
-        st.markdown("### 📊 Key Levels from Order Book Depth")
-        if st.session_state.depth_history:
-            _depth_hist_df = pd.DataFrame(st.session_state.depth_history)
-            _support_colors = ['#00cc66', '#00aa55', '#008844']
-            _resist_colors  = ['#ff4444', '#dd3333', '#bb2222']
-            _depth_levels = (
-                [('S', i+1, _support_colors[i], 'Support', 'bidQty_PE') for i in range(3)] +
-                [('R', i+1, _resist_colors[i],  'Resistance', 'askQty_CE') for i in range(3)]
+    with _tab_nifty:
+        if option_data and option_data.get('underlying'):
+            render_options_analysis_panel(
+                option_data=option_data,
+                current_price=current_price,
+                api=api,
+                lot_size=65,
+                index_name="NIFTY",
+                symbol_prefix="NIFTY",
             )
-            _depth_cols = st.columns(6)
-            for _col_idx, (_col, (_side, _n, _clr, _label, _)) in enumerate(zip(_depth_cols, _depth_levels)):
-                with _col:
-                    _qty_col   = f'{_side}{_n}_qty'
-                    _price_col = f'{_side}{_n}_price'
-                    if _qty_col not in _depth_hist_df.columns:
-                        st.info(f"{_side}{_n} N/A")
-                        continue
-                    _cur_qty = _depth_hist_df[_qty_col].iloc[-1]
-                    _cur_price = (
-                        _depth_hist_df[_price_col].iloc[-1]
-                        if _price_col in _depth_hist_df.columns else None
-                    )
-                    _price_str = f'₹{_cur_price:,.0f}' if _cur_price is not None else ''
-                    _rgb = tuple(int(_clr.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
-                    _fill = f'rgba({_rgb[0]},{_rgb[1]},{_rgb[2]},0.15)'
-                    _qty_vals = _depth_hist_df[_qty_col].dropna()
-                    _max_qty = _qty_vals.max() if len(_qty_vals) > 0 else 1
-                    _fig_d = go.Figure()
-                    _fig_d.add_trace(go.Scatter(
-                        x=_depth_hist_df['time'],
-                        y=_depth_hist_df[_qty_col],
-                        mode='lines+markers',
-                        name=_label,
-                        line=dict(color=_clr, width=2),
-                        marker=dict(size=3),
-                        fill='tozeroy',
-                        fillcolor=_fill,
-                        hovertemplate=f'{_side}{_n} {_label}<br>Qty: %{{y:,.0f}}<br>Time: %{{x|%H:%M}}<extra></extra>',
-                    ))
-                    _fig_d.update_layout(
-                        title=dict(
-                            text=f"{'🟢' if _side=='S' else '🔴'} {_side}{_n} {_label}<br>{_price_str}<br>Qty: {_cur_qty:,.0f}",
-                            font=dict(size=11)
-                        ),
-                        template='plotly_dark',
-                        height=300,
-                        showlegend=False,
-                        margin=dict(l=5, r=10, t=70, b=30),
-                        xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                        yaxis=dict(
-                            title='Bid Qty' if _side == 'S' else 'Ask Qty',
-                            tickformat=',.0f',
-                            range=[0, _max_qty * 1.2],
-                            title_font=dict(color=_clr, size=9),
-                            tickfont=dict(size=8),
-                        ),
-                        plot_bgcolor='#1e1e1e',
-                        paper_bgcolor='#1e1e1e',
-                    )
-                    st.plotly_chart(_fig_d, use_container_width=True)
-                    _caption = f"{'PE Bid' if _side=='S' else 'CE Ask'} {_cur_qty:,.0f}"
-                    if _cur_price is not None:
-                        _caption += f" @ {_price_str}"
-                    st.caption(_caption)
         else:
-            depth_fig = plot_depth_levels(
-                option_data.get('df_summary'),
-                option_data.get('underlying')
+            st.info("No NIFTY option chain data available.")
+
+    with _tab_bnf:
+        with st.spinner("Loading BANK NIFTY option chain..."):
+            _bnf_option_data = analyze_option_chain(
+                selected_expiry=st.session_state.get('_bnf_selected_expiry'),
+                underlying_scrip=BANKNIFTY_UNDERLYING_SCRIP,
+                underlying_seg=BANKNIFTY_UNDERLYING_SEG,
+                index_name="BANKNIFTY",
             )
-            if depth_fig is not None:
-                st.plotly_chart(depth_fig, use_container_width=True)
-
-        # ===== PRE-COMPUTE GEX + TRACK HISTORY (before comparison view) =====
-        _gex_pre_summary = option_data.get('df_summary')
-        _gex_pre_underlying = option_data.get('underlying')
-        gex_data_pre = None
-        if _gex_pre_summary is not None and _gex_pre_underlying:
+        if _bnf_option_data and _bnf_option_data.get('underlying'):
+            st.info(f"**BANK NIFTY SPOT:** {_bnf_option_data['underlying']:.2f}")
+            _idx_swap_in('bnf')
             try:
-                gex_data_pre = calculate_dealer_gex(_gex_pre_summary, _gex_pre_underlying)
-                if gex_data_pre:
-                    st.session_state.gex_last_valid_data = gex_data_pre
-                    _gex_df_pre = gex_data_pre['gex_df']
-                    _gex_ist = pytz.timezone('Asia/Kolkata')
-                    _gex_now = datetime.now(_gex_ist)
-                    _gex_entry = {'time': _gex_now, 'total_gex': gex_data_pre['total_gex']}
-                    for _, _gr in _gex_df_pre.iterrows():
-                        _gex_entry[str(int(_gr['Strike']))] = _gr['Net_GEX']
-                    st.session_state.gex_current_strikes = sorted(
-                        [int(_gr['Strike']) for _, _gr in _gex_df_pre.iterrows()])
-                    _should_gex = True
-                    if st.session_state.gex_history:
-                        if (_gex_now - _to_ist(st.session_state.gex_history[-1]['time'])).total_seconds() < 30:
-                            _should_gex = False
-                    if _should_gex:
-                        st.session_state.gex_history.append(_gex_entry)
-                        if len(st.session_state.gex_history) > 200:
-                            st.session_state.gex_history = st.session_state.gex_history[-200:]
-                        db.save_option_history('gex_history', _gex_entry)
-            except Exception:
-                pass
-
-        # ===== COMPOSITE SCORE & VERDICT — TOP DISPLAY =====
-        st.markdown("---")
-        st.markdown("## 🧭 Composite Direction Signal — PCR × ΔOI × GEX")
-        _cs_last   = st.session_state.get('composite_signal_last_valid')
-        _cs_hist   = st.session_state.get('composite_signal_history', [])
-
-        if _cs_last:
-            _cs_verdict      = _cs_last['verdict']
-            _cs_icon         = _cs_last['verdict_icon']
-            _cs_color        = _cs_last['verdict_color']
-            _cs_desc         = _cs_last['verdict_desc']
-            _cs_score        = _cs_last['total_score']
-            _cs_pct          = _cs_last['score_pct']
-            _cs_gex          = _cs_last['total_net_gex']
-            _cs_pcr          = _cs_last['avg_pcr']
-            _cs_chgoi        = _cs_last['avg_chgoi']
-            _cs_max          = 14.0
-            _cs_gex_trending = _cs_gex < -10
-            _cs_gex_pinning  = _cs_gex > 10
-            _cs_gex_lbl      = 'Trending' if _cs_gex_trending else 'Pinning' if _cs_gex_pinning else 'Neutral'
-
-            # Main verdict card
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, {_cs_color}15, {_cs_color}30);
-                        padding: 22px; border-radius: 15px; border: 3px solid {_cs_color};
-                        text-align: center; margin-bottom: 16px;">
-                <h1 style="color: {_cs_color}; margin: 0; font-size: 44px;">{_cs_icon} {_cs_verdict}</h1>
-                <p style="color: #cccccc; margin: 8px 0 0 0; font-size: 15px;">{_cs_desc}</p>
-                <p style="color: {_cs_color}; margin: 5px 0 0 0; font-size: 13px;">
-                    Composite Score: {_cs_score:+.1f} / {_cs_max:.0f} ({_cs_pct:+.0f}%) &nbsp;|&nbsp;
-                    Net GEX: {_cs_gex:.1f}L ({_cs_gex_lbl})
-                </p>
-            </div>""", unsafe_allow_html=True)
-
-            # Three metric cards
-            _cm1, _cm2, _cm3 = st.columns(3)
-            with _cm1:
-                _c = "#00ff88" if _cs_pcr > 1.2 else "#ff4444" if _cs_pcr < 0.7 else "#FFD700"
-                st.markdown(f"""
-                <div style="background:{_c}20;padding:12px;border-radius:10px;border:2px solid {_c};text-align:center;">
-                <h4 style="color:{_c};margin:0;">Avg PCR (OI)</h4>
-                <h2 style="color:{_c};margin:5px 0;">{_cs_pcr:.2f}</h2>
-                <p style="color:white;margin:0;font-size:12px;">{'Bullish' if _cs_pcr > 1.2 else 'Bearish' if _cs_pcr < 0.7 else 'Neutral'}</p>
-                </div>""", unsafe_allow_html=True)
-            with _cm2:
-                _c = "#00ff88" if _cs_chgoi > 1.2 else "#ff4444" if _cs_chgoi < 0.7 else "#FFD700"
-                st.markdown(f"""
-                <div style="background:{_c}20;padding:12px;border-radius:10px;border:2px solid {_c};text-align:center;">
-                <h4 style="color:{_c};margin:0;">Avg PCR (ΔOI)</h4>
-                <h2 style="color:{_c};margin:5px 0;">{_cs_chgoi:.2f}</h2>
-                <p style="color:white;margin:0;font-size:12px;">{'Bullish' if _cs_chgoi > 1.2 else 'Bearish' if _cs_chgoi < 0.7 else 'Neutral'}</p>
-                </div>""", unsafe_allow_html=True)
-            with _cm3:
-                _c = "#00ff88" if _cs_gex > 10 else "#ff4444" if _cs_gex < -10 else "#FFD700"
-                st.markdown(f"""
-                <div style="background:{_c}20;padding:12px;border-radius:10px;border:2px solid {_c};text-align:center;">
-                <h4 style="color:{_c};margin:0;">Total GEX (ATM±2)</h4>
-                <h2 style="color:{_c};margin:5px 0;">{_cs_gex:.1f}L</h2>
-                <p style="color:white;margin:0;font-size:12px;">{'Pin/Chop' if _cs_gex > 10 else 'Trend/Accel' if _cs_gex < -10 else 'Neutral'}</p>
-                </div>""", unsafe_allow_html=True)
-
-            # Time-series chart if history available
-            if len(_cs_hist) >= 2:
-                _cs_df = pd.DataFrame(_cs_hist)
-                _cs_marker_colors = [
-                    '#00ff88' if r.get('verdict_numeric', 0) >= 2 else
-                    '#90EE90' if r.get('verdict_numeric', 0) == 1 else
-                    '#ff4444' if r.get('verdict_numeric', 0) <= -2 else
-                    '#FFB6C1' if r.get('verdict_numeric', 0) == -1 else '#FFD700'
-                    for _, r in _cs_df.iterrows()
-                ]
-                _fig_cs = go.Figure()
-                _fig_cs.add_trace(go.Scatter(
-                    x=_cs_df['time'], y=_cs_df['score_pct'],
-                    mode='lines+markers', name='Score %',
-                    line=dict(color='#00aaff', width=3),
-                    marker=dict(size=8, color=_cs_marker_colors),
-                    fill='tozeroy', fillcolor='rgba(0,170,255,0.08)'
-                ))
-                _y_max = max(abs(_cs_df['score_pct'].max()), abs(_cs_df['score_pct'].min()), 30) * 1.2
-                _fig_cs.add_hline(y=0, line_dash="dash", line_color="white", line_width=1.5,
-                                  annotation_text="Neutral (0%)", annotation_position="right")
-                _fig_cs.add_hline(y=15, line_dash="dot", line_color="#00ff88", line_width=1,
-                                  annotation_text="Bullish Zone", annotation_position="right")
-                _fig_cs.add_hline(y=-15, line_dash="dot", line_color="#ff4444", line_width=1,
-                                  annotation_text="Bearish Zone", annotation_position="right")
-                _fig_cs.add_hrect(y0=15, y1=_y_max, fillcolor="rgba(0,255,136,0.06)", line_width=0)
-                _fig_cs.add_hrect(y0=-_y_max, y1=-15, fillcolor="rgba(255,68,68,0.06)", line_width=0)
-                # Sparse verdict labels
-                _step = max(1, len(_cs_df) // 10)
-                for _ci, (_cii, _crow) in enumerate(_cs_df.iterrows()):
-                    if _ci % _step == 0:
-                        _fig_cs.add_annotation(
-                            x=_crow['time'], y=_crow['score_pct'],
-                            text=_crow['verdict'], showarrow=False,
-                            yshift=14, font=dict(size=8, color='white'),
-                            bgcolor='rgba(0,0,0,0.5)', borderpad=2
-                        )
-                # Companion: PCR + GEX sub-charts inline
-                _cc1, _cc2 = st.columns(2)
-                with _cc1:
-                    _fig_cs.update_layout(
-                        title=f"Composite Score Time-Series | Now: {_cs_pct:+.0f}% ({_cs_verdict})",
-                        template='plotly_dark', height=360,
-                        showlegend=False,
-                        xaxis=dict(tickformat='%H:%M', title='Time'),
-                        yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                        margin=dict(l=50, r=60, t=55, b=40)
-                    )
-                    st.plotly_chart(_fig_cs, use_container_width=True)
-                with _cc2:
-                    _fig_cs2 = go.Figure()
-                    if 'avg_pcr' in _cs_df.columns:
-                        _fig_cs2.add_trace(go.Scatter(
-                            x=_cs_df['time'], y=_cs_df['avg_pcr'],
-                            mode='lines+markers', name='PCR OI',
-                            line=dict(color='#00aaff', width=2), marker=dict(size=4)
-                        ))
-                    if 'avg_chgoi' in _cs_df.columns:
-                        _fig_cs2.add_trace(go.Scatter(
-                            x=_cs_df['time'], y=_cs_df['avg_chgoi'],
-                            mode='lines+markers', name='PCR ΔOI',
-                            line=dict(color='#ff44ff', width=2), marker=dict(size=4)
-                        ))
-                    if 'total_gex' in _cs_df.columns:
-                        _fig_cs2.add_trace(go.Scatter(
-                            x=_cs_df['time'], y=_cs_df['total_gex'],
-                            mode='lines', name='GEX (L)',
-                            line=dict(color='#FFD700', width=2, dash='dot'),
-                            yaxis='y2'
-                        ))
-                    _fig_cs2.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
-                    _fig_cs2.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
-                    _fig_cs2.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
-                    _pcr_all = _cs_df['avg_pcr'].dropna().tolist() + _cs_df['avg_chgoi'].dropna().tolist() + [0.7, 1.2]
-                    _fig_cs2.update_layout(
-                        title="PCR OI · PCR ΔOI · GEX",
-                        template='plotly_dark', height=360,
-                        showlegend=True,
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right"),
-                        xaxis=dict(tickformat='%H:%M', title=''),
-                        yaxis=dict(title='PCR', range=[max(0, min(_pcr_all)*0.9), max(_pcr_all)*1.1]),
-                        yaxis2=dict(title='GEX (L)', overlaying='y', side='right',
-                                    showgrid=False, zeroline=True, zerolinecolor='rgba(255,255,255,0.3)'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                        margin=dict(l=40, r=55, t=55, b=40)
-                    )
-                    st.plotly_chart(_fig_cs2, use_container_width=True)
-
-            st.caption(f"📊 {len(_cs_hist)} data points · updates every ~30s · "
-                       f"Full analysis with per-strike breakdown further below ↓")
+                render_options_analysis_panel(
+                    option_data=_bnf_option_data,
+                    current_price=_bnf_option_data['underlying'],
+                    api=api,
+                    lot_size=35,
+                    index_name="BANKNIFTY",
+                    symbol_prefix="BANKNIFTY",
+                )
+            finally:
+                _idx_swap_out('bnf')
         else:
-            st.info("🕐 Composite Score builds up after first refresh — data will appear here on the next cycle.")
-
-        # ===== UNIFIED OPTIONS FLOW SENTIMENT ENGINE =====
-        st.markdown("---")
-        st.markdown("## 🧭 Unified Options Flow Sentiment Engine")
-        try:
-            _pro_df    = option_data.get('df_summary') if option_data else None
-            _pro_spot  = option_data.get('underlying') if option_data else None
-
-            # Ensure optional columns exist
-            if _pro_df is not None:
-                for _c in ['impliedVolatility_CE', 'impliedVolatility_PE',
-                           'bidQty_CE', 'askQty_CE', 'bidQty_PE', 'askQty_PE',
-                           'Delta_CE', 'Delta_PE', 'Gamma_CE', 'Gamma_PE',
-                           'changeinOpenInterest_CE', 'changeinOpenInterest_PE',
-                           'totalTradedVolume_CE', 'totalTradedVolume_PE']:
-                    if _c not in _pro_df.columns:
-                        _pro_df[_c] = 0.0
-
-            if _pro_df is not None and _pro_spot and 'Zone' in _pro_df.columns:
-                _pro_atm_idx = _pro_df[_pro_df['Zone'] == 'ATM'].index
-                if len(_pro_atm_idx) > 0:
-                    _pro_atm_pos = _pro_df.index.get_loc(_pro_atm_idx[0])
-                    _pro_start   = max(0, _pro_atm_pos - 2)
-                    _pro_end     = min(len(_pro_df), _pro_atm_pos + 3)
-                    _pro_slice   = _pro_df.iloc[_pro_start:_pro_end].copy()
-                    _pro_atm_val = float(_pro_df[_pro_df['Zone'] == 'ATM']['Strike'].values[0])
-                    _pro_strikes = sorted(_pro_slice['Strike'].unique())
-                    _pro_step    = int(_pro_strikes[1] - _pro_strikes[0]) if len(_pro_strikes) >= 2 else 50
-
-                    def _pro_lbl(s):
-                        d = int(round((s - _pro_atm_val) / _pro_step))
-                        if d == 0: return "ATM"
-                        return f"ATM+{d}" if d > 0 else f"ATM{d}"
-
-                    _pro_now = datetime.now(pytz.timezone('Asia/Kolkata'))
-                    _pro_lot = 25
-
-                    # ── 1. Straddle per strike ──────────────────────────────────
-                    _pro_straddles = {}
-                    for _, _r in _pro_slice.iterrows():
-                        _lbl = _pro_lbl(_r['Strike'])
-                        _pro_straddles[_lbl] = round(
-                            float(_r.get('lastPrice_CE', 0) or 0) +
-                            float(_r.get('lastPrice_PE', 0) or 0), 2)
-                    _pro_atm_straddle = _pro_straddles.get('ATM', 0)
-
-                    # ── 2. IV per strike ───────────────────────────────────────
-                    _pro_iv_ce, _pro_iv_pe = {}, {}
-                    for _, _r in _pro_slice.iterrows():
-                        _lbl = _pro_lbl(_r['Strike'])
-                        _pro_iv_ce[_lbl] = float(_r.get('impliedVolatility_CE', 0) or 0)
-                        _pro_iv_pe[_lbl] = float(_r.get('impliedVolatility_PE', 0) or 0)
-                    _pro_avg_iv_ce    = sum(_pro_iv_ce.values()) / max(len(_pro_iv_ce), 1)
-                    _pro_avg_iv_pe    = sum(_pro_iv_pe.values()) / max(len(_pro_iv_pe), 1)
-                    _pro_market_iv_sk = round(_pro_avg_iv_pe - _pro_avg_iv_ce, 2)
-
-                    # ── 3. PCR (OI, Volume, ΔOI) ──────────────────────────────
-                    _pro_ce_oi    = _pro_slice['openInterest_CE'].fillna(0).sum()
-                    _pro_pe_oi    = _pro_slice['openInterest_PE'].fillna(0).sum()
-                    _pro_pcr_oi   = round(_pro_pe_oi / (_pro_ce_oi + 1e-6), 3)
-                    _pro_ce_vol   = _pro_slice['totalTradedVolume_CE'].fillna(0).sum()
-                    _pro_pe_vol   = _pro_slice['totalTradedVolume_PE'].fillna(0).sum()
-                    _pro_pcr_vol  = round(_pro_pe_vol / (_pro_ce_vol + 1e-6), 3)
-                    _pro_ce_chg   = _pro_slice['changeinOpenInterest_CE'].fillna(0).sum()
-                    _pro_pe_chg   = _pro_slice['changeinOpenInterest_PE'].fillna(0).sum()
-                    _pro_pcr_chg  = round(abs(_pro_pe_chg) / (abs(_pro_ce_chg) + 1e-6), 3)
-
-                    # ── 4. Bid/Ask Pressure ────────────────────────────────────
-                    _pro_cp_list, _pro_pp_list = [], []
-                    for _, _r in _pro_slice.iterrows():
-                        _bc = float(_r.get('bidQty_CE', 0) or 0)
-                        _ac = float(_r.get('askQty_CE', 0) or 0)
-                        _bp = float(_r.get('bidQty_PE', 0) or 0)
-                        _ap = float(_r.get('askQty_PE', 0) or 0)
-                        _pro_cp_list.append(_bc / (_bc + _ac + 1e-6))
-                        _pro_pp_list.append(_bp / (_bp + _ap + 1e-6))
-                    _pro_call_pres = round(sum(_pro_cp_list) / max(len(_pro_cp_list), 1), 4)
-                    _pro_put_pres  = round(sum(_pro_pp_list) / max(len(_pro_pp_list), 1), 4)
-
-                    # ── 5. Delta Exposure ──────────────────────────────────────
-                    _pro_call_dexp = sum(
-                        float(_r.get('Delta_CE', 0) or 0) *
-                        float(_r.get('openInterest_CE', 0) or 0) * _pro_lot
-                        for _, _r in _pro_slice.iterrows())
-                    _pro_put_dexp  = sum(
-                        float(_r.get('Delta_PE', 0) or 0) *
-                        float(_r.get('openInterest_PE', 0) or 0) * _pro_lot
-                        for _, _r in _pro_slice.iterrows())
-                    _pro_net_delta = round(_pro_call_dexp + _pro_put_dexp, 0)
-
-                    # ── 6. Net Gamma Exposure (Lakhs) ──────────────────────────
-                    _pro_net_gex = round(sum(
-                        (float(_r.get('Gamma_CE', 0) or 0) * float(_r.get('openInterest_CE', 0) or 0) -
-                         float(_r.get('Gamma_PE', 0) or 0) * float(_r.get('openInterest_PE', 0) or 0))
-                        * _pro_lot * _pro_spot
-                        for _, _r in _pro_slice.iterrows()) / 100000, 2)
-
-                    # ── Store in history ───────────────────────────────────────
-                    _pro_entry = {
-                        'time': _pro_now, 'spot': _pro_spot, 'atm_strike': _pro_atm_val,
-                        'straddle_atm': _pro_atm_straddle,
-                        **{f'straddle_{k}': v for k, v in _pro_straddles.items()},
-                        'avg_iv_ce': round(_pro_avg_iv_ce, 2),
-                        'avg_iv_pe': round(_pro_avg_iv_pe, 2),
-                        'iv_skew': _pro_market_iv_sk,
-                        'pcr_oi': _pro_pcr_oi, 'pcr_vol': _pro_pcr_vol, 'pcr_chgoi': _pro_pcr_chg,
-                        'call_pressure': _pro_call_pres, 'put_pressure': _pro_put_pres,
-                        'net_delta': _pro_net_delta, 'net_gex': _pro_net_gex,
-                    }
-                    _pro_should_add = (
-                        not st.session_state.pro_trader_history or
-                        (_pro_now - _to_ist(st.session_state.pro_trader_history[-1]['time'])).total_seconds() >= 28
-                    )
-                    if _pro_should_add:
-                        st.session_state.pro_trader_history.append(_pro_entry)
-                        if len(st.session_state.pro_trader_history) > 200:
-                            st.session_state.pro_trader_history = st.session_state.pro_trader_history[-200:]
-                        db.save_option_history('pro_trader_history', _pro_entry)
-
-                    # ── 7a. Composite Direction Signal (PCR × ΔOI × GEX) ────────
-                    _comp_position_labels = ['ITM-2', 'ITM-1', 'ATM', 'OTM+1', 'OTM+2']
-                    _comp_weights = [1.0, 1.5, 2.0, 1.5, 1.0]
-                    _comp_strike_scores, _comp_strike_details, _comp_per_strike_scores = [], [], {}
-                    _comp_data_available = False
-                    _verdict = _verdict_icon = _verdict_color = _verdict_desc = None
-                    _comp_total_score = _comp_score_pct = 0.0
-                    _comp_total_gex = _comp_avg_pcr = _comp_avg_chgoi = 0.0
-                    _comp_gex_trending = _comp_gex_pinning = False
-                    _comp_max_possible = 14.0
-                    _verdict_numeric = 0
-                    _slice_has_comp = ('PCR' in _pro_slice.columns and
-                                       'changeinOpenInterest_CE' in _pro_slice.columns and
-                                       'Gamma_CE' in _pro_slice.columns)
-                    if _slice_has_comp:
-                        _sc = _pro_slice.copy()
-                        _sc['_PCR_ChgOI'] = _sc.apply(
-                            lambda r: abs(float(r['changeinOpenInterest_PE']) /
-                                          float(r['changeinOpenInterest_CE']))
-                            if float(r['changeinOpenInterest_CE']) != 0 else 0.0, axis=1)
-                        _sc['_Net_GEX'] = (
-                            -1 * _sc['Gamma_CE'].fillna(0) * _sc['openInterest_CE'].fillna(0) *
-                            _pro_lot * _pro_spot / 100000 +
-                            _sc['Gamma_PE'].fillna(0) * _sc['openInterest_PE'].fillna(0) *
-                            _pro_lot * _pro_spot / 100000)
-                        _comp_total_gex  = _sc['_Net_GEX'].sum()
-                        _comp_avg_pcr    = float(_sc['PCR'].mean()) if 'PCR' in _sc.columns else 1.0
-                        _comp_avg_chgoi  = float(_sc['_PCR_ChgOI'].mean())
-                        _comp_gex_trending = _comp_total_gex < -10
-                        _comp_gex_pinning  = _comp_total_gex > 10
-                        for _ci, (_, _cr) in enumerate(_sc.iterrows()):
-                            _pv = float(_cr.get('PCR', 1.0) or 1.0)
-                            _cv = float(_cr['_PCR_ChgOI'])
-                            _gv = float(_cr['_Net_GEX'])
-                            _ps = 1 if _pv > 1.2 else (-1 if _pv < 0.7 else 0)
-                            _cs = 1 if _cv > 1.2 else (-1 if _cv < 0.7 else 0)
-                            _ds = _ps + _cs
-                            _cw = _comp_weights[_ci] if _ci < len(_comp_weights) else 1.0
-                            _comp_strike_scores.append(_ds * _cw)
-                            _slbl2 = str(int(_cr['Strike']))
-                            _comp_per_strike_scores[_slbl2] = round(_ds * _cw, 2)
-                            _clbl = _comp_position_labels[_ci] if _ci < len(_comp_position_labels) else f"S{_ci}"
-                            _comp_strike_details.append({
-                                'Position': _clbl, 'Strike': int(_cr['Strike']),
-                                'PCR (OI)': round(_pv, 2),
-                                'PCR Signal': 'Bull' if _ps > 0 else ('Bear' if _ps < 0 else 'Neut'),
-                                'PCR (ΔOI)': round(_cv, 2),
-                                'ΔOI Signal': 'Bull' if _cs > 0 else ('Bear' if _cs < 0 else 'Neut'),
-                                'Net GEX': round(_gv, 2),
-                                'GEX Signal': 'Pin' if _gv > 10 else ('Accel' if _gv < -10 else 'Neut'),
-                                'Score': round(_ds * _cw, 1)
-                            })
-                        _comp_total_score = sum(_comp_strike_scores)
-                        _comp_score_pct   = (_comp_total_score / _comp_max_possible) * 100
-                        if abs(_comp_score_pct) < 15:
-                            if _comp_gex_pinning:
-                                _verdict, _verdict_icon, _verdict_color = "SIDEWAYS", "↔️", "#FFD700"
-                                _verdict_desc = "Mixed signals + Positive GEX = Range-bound / Choppy"
-                                _verdict_numeric = 0
-                            else:
-                                _verdict, _verdict_icon, _verdict_color = "NEUTRAL", "⚪", "#888888"
-                                _verdict_desc = "No clear directional bias from ATM±2 strikes"
-                                _verdict_numeric = 0
-                        elif _comp_score_pct > 0:
-                            if _comp_gex_trending:
-                                _verdict, _verdict_icon, _verdict_color = "STRONG UP", "🟢🔥", "#00ff88"
-                                _verdict_desc = "Bullish PCR + Fresh put writing + Negative GEX = Breakout UP"
-                                _verdict_numeric = 3
-                            elif _comp_gex_pinning:
-                                _verdict, _verdict_icon, _verdict_color = "UP (CAPPED)", "🟢📍", "#90EE90"
-                                _verdict_desc = "Bullish bias but positive GEX may cap upside momentum"
-                                _verdict_numeric = 1
-                            else:
-                                _verdict, _verdict_icon, _verdict_color = "UP", "🟢", "#00ff88"
-                                _verdict_desc = "Bullish PCR + Put writing activity across ATM±2 strikes"
-                                _verdict_numeric = 2
-                        else:
-                            if _comp_gex_trending:
-                                _verdict, _verdict_icon, _verdict_color = "STRONG DOWN", "🔴🔥", "#ff4444"
-                                _verdict_desc = "Bearish PCR + Fresh call writing + Negative GEX = Breakdown"
-                                _verdict_numeric = -3
-                            elif _comp_gex_pinning:
-                                _verdict, _verdict_icon, _verdict_color = "DOWN (SUPPORTED)", "🔴📍", "#FFB6C1"
-                                _verdict_desc = "Bearish PCR + Positive GEX may provide support"
-                                _verdict_numeric = -1
-                            else:
-                                _verdict, _verdict_icon, _verdict_color = "DOWN", "🔴", "#ff4444"
-                                _verdict_desc = "Bearish PCR + Call writing activity across ATM±2 strikes"
-                                _verdict_numeric = -2
-                        _comp_data_available = True
-                        st.session_state.composite_signal_last_valid = {
-                            'verdict': _verdict, 'verdict_icon': _verdict_icon,
-                            'verdict_color': _verdict_color, 'verdict_desc': _verdict_desc,
-                            'total_score': _comp_total_score, 'score_pct': _comp_score_pct,
-                            'total_net_gex': _comp_total_gex, 'avg_pcr': _comp_avg_pcr,
-                            'avg_chgoi': _comp_avg_chgoi, 'strike_details': _comp_strike_details,
-                            'per_strike_scores': _comp_per_strike_scores
-                        }
-                        _comp_should_add = (
-                            not st.session_state.composite_signal_history or
-                            (_pro_now - _to_ist(st.session_state.composite_signal_history[-1]['time'])).total_seconds() >= 30
-                        )
-                        if _comp_should_add:
-                            _comp_hist_entry = {
-                                'time': _pro_now, 'score': round(_comp_total_score, 2),
-                                'score_pct': round(_comp_score_pct, 1), 'verdict': _verdict,
-                                'verdict_numeric': _verdict_numeric,
-                                'avg_pcr': round(_comp_avg_pcr, 3),
-                                'avg_chgoi': round(_comp_avg_chgoi, 3),
-                                'total_gex': round(_comp_total_gex, 2),
-                            }
-                            for _ck, _cv2 in _comp_per_strike_scores.items():
-                                _comp_hist_entry[f'score_{_ck}'] = _cv2
-                            st.session_state.composite_signal_history.append(_comp_hist_entry)
-                            if len(st.session_state.composite_signal_history) > 200:
-                                st.session_state.composite_signal_history = st.session_state.composite_signal_history[-200:]
-                            db.save_option_history('composite_signal_history', _comp_hist_entry)
-                    # Fall back to cached composite verdict
-                    if not _comp_data_available:
-                        _lv = st.session_state.composite_signal_last_valid
-                        if _lv:
-                            _verdict, _verdict_icon = _lv['verdict'], _lv['verdict_icon']
-                            _verdict_color = _lv['verdict_color']
-                            _verdict_desc  = _lv['verdict_desc']
-                            _comp_total_score = _lv['total_score']
-                            _comp_score_pct   = _lv['score_pct']
-                            _comp_total_gex   = _lv['total_net_gex']
-                            _comp_avg_pcr     = _lv['avg_pcr']
-                            _comp_avg_chgoi   = _lv['avg_chgoi']
-                            _comp_strike_details = _lv.get('strike_details', [])
-                            _comp_gex_trending   = _comp_total_gex < -10
-                            _comp_gex_pinning    = _comp_total_gex > 10
-
-                    # ── 7b. Weighted PCR per strike (ATM±2) ─────────────────────
-                    _wts_map = {'ATM-2': 1.0, 'ATM-1': 1.5, 'ATM': 2.0, 'ATM+1': 1.5, 'ATM+2': 1.0}
-                    _wpcr_oi = _wpcr_chgoi = _wpcr_vol = _wtotal = 0.0
-                    for _, _wr in _pro_slice.iterrows():
-                        _wlbl = _pro_lbl(float(_wr['Strike']))
-                        _ww = _wts_map.get(_wlbl, 1.0)
-                        _wtotal += _ww
-                        _wce_oi = float(_wr.get('openInterest_CE', 0) or 0)
-                        _wpe_oi = float(_wr.get('openInterest_PE', 0) or 0)
-                        _wce_ch = abs(float(_wr.get('changeinOpenInterest_CE', 0) or 0))
-                        _wpe_ch = abs(float(_wr.get('changeinOpenInterest_PE', 0) or 0))
-                        _wce_vl = float(_wr.get('totalTradedVolume_CE', 0) or 0)
-                        _wpe_vl = float(_wr.get('totalTradedVolume_PE', 0) or 0)
-                        _wpcr_oi    += (_wpe_oi / (_wce_oi + 1e-6)) * _ww
-                        _wpcr_chgoi += (_wpe_ch / (_wce_ch + 1e-6)) * _ww
-                        _wpcr_vol   += (_wpe_vl / (_wce_vl + 1e-6)) * _ww
-                    if _wtotal > 0:
-                        _wpcr_oi /= _wtotal
-                        _wpcr_chgoi /= _wtotal
-                        _wpcr_vol /= _wtotal
-
-                    # ── 7c. Unified Sentiment Score (0–100) ─────────────────────
-                    _pro_h_tmp = st.session_state.pro_trader_history
-                    _pro_h_df_tmp = pd.DataFrame(_pro_h_tmp) if len(_pro_h_tmp) >= 2 else None
-                    # PCR OI score (±20)
-                    _ss_pcr = (20 if _wpcr_oi > 1.2 else
-                               -20 if _wpcr_oi < 0.7 else
-                               int((_wpcr_oi - 0.95) / 0.25 * 20))
-                    # ΔOI trend score (±20)
-                    _ss_chgoi = 0
-                    if _pro_h_df_tmp is not None and 'pcr_chgoi' in _pro_h_df_tmp.columns and len(_pro_h_df_tmp) >= 3:
-                        _chgoi_tr = _pro_h_df_tmp['pcr_chgoi'].iloc[-1] - _pro_h_df_tmp['pcr_chgoi'].iloc[-3]
-                        _ss_chgoi = (20 if _chgoi_tr > 0.05 else
-                                     -20 if _chgoi_tr < -0.05 else int(_chgoi_tr * 200))
-                    elif _wpcr_chgoi > 1.2:
-                        _ss_chgoi = 20
-                    elif _wpcr_chgoi < 0.7:
-                        _ss_chgoi = -20
-                    # GEX conviction score (±20) — amplifies PCR direction
-                    _gex_mag = abs(_pro_net_gex)
-                    _ss_gex_raw = (20 if _gex_mag > 50 else 14 if _gex_mag > 20 else
-                                   10 if _gex_mag > 10 else 5 if _gex_mag > 5 else 0)
-                    _ss_gex_dir = 1 if _ss_pcr >= 0 else -1
-                    if _pro_net_gex < -10:
-                        _ss_gex = _ss_gex_raw * _ss_gex_dir
-                    elif _pro_net_gex < 0:
-                        _ss_gex = int(_ss_gex_raw * 0.5) * _ss_gex_dir
-                    elif _pro_net_gex > 10:
-                        _ss_gex = -5
-                    else:
-                        _ss_gex = 0
-                    # Straddle momentum score (±20)
-                    _ss_straddle = 0
-                    if _pro_h_df_tmp is not None and 'straddle_atm' in _pro_h_df_tmp.columns and len(_pro_h_df_tmp) >= 3:
-                        _st_roc2 = (_pro_h_df_tmp['straddle_atm'].iloc[-1] -
-                                    _pro_h_df_tmp['straddle_atm'].iloc[-3]) / (
-                            abs(_pro_h_df_tmp['straddle_atm'].iloc[-3]) + 1e-6) * 100
-                        _ss_straddle = (20 if _st_roc2 > 2 else 10 if _st_roc2 > 0.5 else
-                                        -10 if _st_roc2 < -2 else 0)
-                    # Pressure imbalance score (±20)
-                    _pres_diff = _pro_call_pres - _pro_put_pres
-                    _ss_pressure = (20 if _pres_diff > 0.10 else
-                                    -20 if _pres_diff < -0.10 else int(_pres_diff * 100))
-                    # Combine: raw range −20 to +20, map to 0–100
-                    _sentiment_raw = (0.25 * _ss_pcr + 0.20 * _ss_chgoi + 0.20 * _ss_gex +
-                                      0.20 * _ss_straddle + 0.15 * _ss_pressure)
-                    _sentiment_score = int(max(0, min(100, (_sentiment_raw + 20) * 2.5)))
-
-                    if _sentiment_score >= 80:
-                        _sent_verdict = "STRONG BULLISH TREND"; _sent_icon = "🚀"; _sent_color = "#00ff88"
-                    elif _sentiment_score >= 60:
-                        _sent_verdict = "BULLISH BIAS"; _sent_icon = "🟢"; _sent_color = "#00C853"
-                    elif _sentiment_score >= 40:
-                        _sent_verdict = "SIDEWAYS MARKET"; _sent_icon = "↔️"; _sent_color = "#FFD700"
-                    elif _sentiment_score >= 20:
-                        _sent_verdict = "BEARISH BIAS"; _sent_icon = "🔴"; _sent_color = "#FF5252"
-                    else:
-                        _sent_verdict = "STRONG BEARISH TREND"; _sent_icon = "🔥"; _sent_color = "#FF1744"
-
-                    _market_bias = ("BULLISH" if _sentiment_score > 65 else
-                                    "BEARISH" if _sentiment_score < 35 else "SIDEWAYS")
-
-                    # ── 7d. Final Institutional Signal ──────────────────────────
-                    if _verdict == "STRONG UP" and _sentiment_score > 70:
-                        _final_signal = "🔥 INSTITUTIONAL BULLISH FLOW"
-                        _final_color  = "#00ff88"
-                        _final_desc   = "Options flow + PCR × GEX aligned — Smart money buying"
-                    elif _verdict == "STRONG DOWN" and _sentiment_score < 30:
-                        _final_signal = "⚡ INSTITUTIONAL BEARISH FLOW"
-                        _final_color  = "#FF5252"
-                        _final_desc   = "Options flow + PCR × GEX aligned — Smart money selling"
-                    elif _verdict in ("STRONG UP", "UP") and _sentiment_score < 40:
-                        _final_signal = "⚠️ FLOW DIVERGENCE — BULL TRAP POSSIBLE"
-                        _final_color  = "#FF9800"
-                        _final_desc   = "Composite bullish but sentiment weak — caution"
-                    elif _verdict in ("STRONG DOWN", "DOWN") and _sentiment_score > 60:
-                        _final_signal = "⚠️ FLOW DIVERGENCE — BEAR TRAP POSSIBLE"
-                        _final_color  = "#FF9800"
-                        _final_desc   = "Composite bearish but sentiment strong — caution"
-                    elif _sentiment_score >= 60:
-                        _final_signal = f"{_sent_icon} {_sent_verdict}"
-                        _final_color  = _sent_color
-                        _final_desc   = f"Sentiment Score: {_sentiment_score}/100"
-                    elif _sentiment_score <= 40:
-                        _final_signal = f"{_sent_icon} {_sent_verdict}"
-                        _final_color  = _sent_color
-                        _final_desc   = f"Sentiment Score: {_sentiment_score}/100"
-                    elif _verdict:
-                        _final_signal = f"{_verdict_icon} {_verdict}"
-                        _final_color  = _verdict_color
-                        _final_desc   = _verdict_desc or ""
-                    else:
-                        _final_signal = "⚪ NEUTRAL"
-                        _final_color  = "#888888"
-                        _final_desc   = "Insufficient data for signal"
-
-                    # ── Store sentiment history ──────────────────────────────────
-                    _sent_should_add = (
-                        not st.session_state.sentiment_history or
-                        (_pro_now - _to_ist(st.session_state.sentiment_history[-1]['time'])).total_seconds() >= 28
-                    )
-                    if _sent_should_add:
-                        _sent_entry = {
-                            'time': _pro_now,
-                            'sentiment_score': _sentiment_score,
-                            'comp_score_pct': round(_comp_score_pct, 1),
-                            'total_gex': round(_comp_total_gex, 2),
-                            'verdict': _final_signal,
-                        }
-                        st.session_state.sentiment_history.append(_sent_entry)
-                        if len(st.session_state.sentiment_history) > 200:
-                            st.session_state.sentiment_history = st.session_state.sentiment_history[-200:]
-                        db.save_option_history('sentiment_history', _sent_entry)
-
-
-                    # ── 7. Breakout Probability Score (0–100) ──────────────────
-                    _pro_h    = st.session_state.pro_trader_history
-                    _pro_h_df = pd.DataFrame(_pro_h) if len(_pro_h) >= 2 else None
-
-                    def _rate_of_change(series, window=5):
-                        if series is None or len(series) < 2: return 0.0
-                        s = series.tail(window)
-                        return (s.iloc[-1] - s.iloc[0]) / (abs(s.iloc[0]) + 1e-6) * 100
-
-                    # Straddle momentum score (0–20)
-                    _s1 = 10
-                    if _pro_h_df is not None and 'straddle_atm' in _pro_h_df.columns:
-                        _roc = _rate_of_change(_pro_h_df['straddle_atm'])
-                        _s1 = int(min(20, max(0, _roc * 2 + 10)))
-
-                    # IV expansion score (0–20)
-                    _s2 = 10
-                    if _pro_h_df is not None and 'avg_iv_ce' in _pro_h_df.columns:
-                        _roc_ce = _rate_of_change(_pro_h_df['avg_iv_ce'])
-                        _roc_pe = _rate_of_change(_pro_h_df['avg_iv_pe'])
-                        _s2 = int(min(20, max(0, (_roc_ce + _roc_pe) + 10)))
-
-                    # Gamma shift score — negative GEX → trending (0–20)
-                    _s3 = (20 if _pro_net_gex < -50 else 16 if _pro_net_gex < -20 else
-                           12 if _pro_net_gex < -10 else 10 if _pro_net_gex < 0 else
-                           8  if _pro_net_gex < 10  else 6  if _pro_net_gex < 20  else 4)
-
-                    # Volume spike score (0–20)
-                    _s4 = 10
-                    if _pro_h_df is not None and 'pcr_vol' in _pro_h_df.columns and len(_pro_h_df) >= 3:
-                        _pv = _pro_h_df['pcr_vol']
-                        _dev = abs(_pv.iloc[-1] - _pv.mean()) / (_pv.std() + 1e-6)
-                        _s4 = int(min(20, max(0, _dev * 5 + 8)))
-
-                    # Pressure imbalance score (0–20)
-                    _s5 = int(min(20, max(0, abs(_pro_call_pres - _pro_put_pres) * 80 + 5)))
-
-                    _pro_score = min(100, _s1 + _s2 + _s3 + _s4 + _s5)
-                    if st.session_state.pro_trader_history:
-                        st.session_state.pro_trader_history[-1]['breakout_score'] = _pro_score
-
-                    _pro_mode_color = "#FF5252" if _pro_net_gex < 0 else "#00C853"
-                    _pro_market_mode = "⚡ TRENDING" if _pro_net_gex < 0 else "📌 RANGE"
-                    _bs_color = ("#FF5252" if _pro_score >= 70 else
-                                 "#FFD740" if _pro_score >= 40 else "#00BCD4")
-                    _bs_label = ("🔥 High Prob Breakout" if _pro_score >= 70 else
-                                 "⚡ Possible Move"       if _pro_score >= 40 else "📌 Range")
-
-                    # ── 8. Smart Signal Engine ─────────────────────────────────
-                    _pro_alert = None
-                    _pro_alert_color = "#888"
-                    if _pro_h_df is not None and len(_pro_h_df) >= 3:
-                        _st_rising  = _pro_h_df['straddle_atm'].iloc[-1] > _pro_h_df['straddle_atm'].iloc[-3]
-                        _gex_dec    = _pro_h_df['net_gex'].iloc[-1] < _pro_h_df['net_gex'].iloc[-3]
-                        _nd_rising  = _pro_h_df['net_delta'].iloc[-1] > _pro_h_df['net_delta'].iloc[-3]
-                        if _st_rising and _pro_call_pres > _pro_put_pres and _gex_dec and _nd_rising:
-                            _pro_alert = "🚀 BULLISH BREAKOUT PROBABLE"
-                            _pro_alert_color = "#00C853"
-                        elif _st_rising and _pro_put_pres > _pro_call_pres and _gex_dec and not _nd_rising:
-                            _pro_alert = "🔥 BEARISH BREAKDOWN PROBABLE"
-                            _pro_alert_color = "#FF5252"
-                        if _pro_alert and enable_signals:
-                            _last_sig = st.session_state.pro_smart_signal_last
-                            if (_last_sig is None or
-                                    (_pro_now - _last_sig[0]).total_seconds() > 300 or
-                                    _last_sig[1] != _pro_alert):
-                                st.session_state.pro_smart_signal_last = (_pro_now, _pro_alert)
-
-                    # ── Supabase write ─────────────────────────────────────────
-                    if _pro_should_add:
-                        try:
-                            db.client.table('pro_trader_metrics').upsert({
-                                'timestamp':      _pro_now.isoformat(),
-                                'spot':           float(_pro_spot),
-                                'atm_strike':     int(_pro_atm_val),
-                                'straddle_atm':   float(_pro_atm_straddle),
-                                'iv_skew':        float(_pro_market_iv_sk),
-                                'pcr_oi':         float(_pro_pcr_oi),
-                                'pcr_vol':        float(_pro_pcr_vol),
-                                'pcr_chgoi':      float(_pro_pcr_chg),
-                                'call_pressure':  float(_pro_call_pres),
-                                'put_pressure':   float(_pro_put_pres),
-                                'net_delta':      float(_pro_net_delta),
-                                'net_gex':        float(_pro_net_gex),
-                                'breakout_score': int(_pro_score),
-                            }, on_conflict='timestamp').execute()
-                        except Exception:
-                            pass  # Supabase table may not exist yet; fail silently
-
-                    # ══════════════════════════════════════════════════════════
-                    # UNIFIED SENTIMENT TOP PANEL
-                    # ══════════════════════════════════════════════════════════
-                    _prev_atm_st = (_pro_h_df['straddle_atm'].iloc[-2]
-                                    if _pro_h_df is not None and len(_pro_h_df) >= 2
-                                    else _pro_atm_straddle)
-                    _st_chg = _pro_atm_straddle - _prev_atm_st
-                    _st_clr = "#FF5252" if _st_chg > 5 else ("#00C853" if _st_chg < -5 else "#FFD740")
-
-                    # Row 1: Large FinalSignal verdict (left) + 4 metric cards (right)
-                    _uf1, _uf2 = st.columns([3, 2])
-                    with _uf1:
-                        _vc_txt = _verdict_color if _verdict_color else "#888888"
-                        st.markdown(f"""
-                        <div style="background:linear-gradient(135deg,{_final_color}10,{_final_color}25);
-                                    padding:20px;border-radius:12px;border:3px solid {_final_color};
-                                    text-align:center;min-height:130px;">
-                            <div style="color:#888;font-size:10px;letter-spacing:2px;">
-                                UNIFIED OPTIONS FLOW SENTIMENT</div>
-                            <div style="color:{_final_color};font-size:30px;font-weight:bold;margin:6px 0;
-                                        line-height:1.2;">{_final_signal}</div>
-                            <div style="color:#ccc;font-size:12px;">{_final_desc}</div>
-                            <div style="color:{_sent_color};font-size:11px;margin-top:6px;">
-                                Sentiment <b>{_sentiment_score}/100</b> — {_sent_verdict} &nbsp;|&nbsp;
-                                Direction <b>{_verdict_icon if _verdict_icon else "⚪"} {_verdict if _verdict else "NEUTRAL"}</b>
-                                ({_comp_score_pct:+.0f}%)
-                            </div>
-                        </div>""", unsafe_allow_html=True)
-                    with _uf2:
-                        _um1, _um2 = st.columns(2)
-                        with _um1:
-                            st.markdown(f"""
-                            <div style="background:#1e1e1e;padding:10px;border-radius:8px;border:1px solid #444;margin-bottom:5px;">
-                            <div style="color:#aaa;font-size:10px;">SPOT / ATM</div>
-                            <div style="font-size:18px;font-weight:bold;color:#FFD740;">{_pro_spot:,.0f}</div>
-                            <div style="font-size:10px;color:#888;">ATM: ₹{int(_pro_atm_val)}</div>
-                            </div>""", unsafe_allow_html=True)
-                            st.markdown(f"""
-                            <div style="background:#1e1e1e;padding:10px;border-radius:8px;border:2px solid {_pro_mode_color};">
-                            <div style="color:#aaa;font-size:10px;">MARKET MODE</div>
-                            <div style="font-size:14px;font-weight:bold;color:{_pro_mode_color};">{_pro_market_mode}</div>
-                            <div style="font-size:10px;color:#888;">GEX {_pro_net_gex:+.1f}L</div>
-                            </div>""", unsafe_allow_html=True)
-                        with _um2:
-                            st.markdown(f"""
-                            <div style="background:#1e1e1e;padding:10px;border-radius:8px;border:2px solid {_bs_color};margin-bottom:5px;">
-                            <div style="color:#aaa;font-size:10px;">BREAKOUT SCORE</div>
-                            <div style="font-size:18px;font-weight:bold;color:{_bs_color};">{_pro_score}/100</div>
-                            <div style="font-size:10px;color:{_bs_color};">{_bs_label}</div>
-                            </div>""", unsafe_allow_html=True)
-                            st.markdown(f"""
-                            <div style="background:#1e1e1e;padding:10px;border-radius:8px;border:1px solid {_st_clr};">
-                            <div style="color:#aaa;font-size:10px;">ATM STRADDLE</div>
-                            <div style="font-size:18px;font-weight:bold;color:{_st_clr};">₹{_pro_atm_straddle:.0f}</div>
-                            <div style="font-size:10px;color:#888;">Chg {_st_chg:+.1f}</div>
-                            </div>""", unsafe_allow_html=True)
-
-                    # Row 2: 4 composite metric cards
-                    _cm1, _cm2, _cm3, _cm4 = st.columns(4)
-                    with _cm1:
-                        _pclr = "#00ff88" if _comp_avg_pcr > 1.2 else "#ff4444" if _comp_avg_pcr < 0.7 else "#FFD700"
-                        st.markdown(f"""
-                        <div style="background:{_pclr}12;padding:9px;border-radius:7px;border:1px solid {_pclr};
-                                    text-align:center;margin-top:5px;">
-                        <div style="color:{_pclr};font-size:10px;font-weight:bold;">AVG PCR (OI)</div>
-                        <div style="color:{_pclr};font-size:18px;font-weight:bold;">{_comp_avg_pcr:.2f}</div>
-                        <div style="color:#ccc;font-size:10px;">{'Bull' if _comp_avg_pcr > 1.2 else 'Bear' if _comp_avg_pcr < 0.7 else 'Neut'}</div>
-                        </div>""", unsafe_allow_html=True)
-                    with _cm2:
-                        _cclr = "#00ff88" if _comp_avg_chgoi > 1.2 else "#ff4444" if _comp_avg_chgoi < 0.7 else "#FFD700"
-                        st.markdown(f"""
-                        <div style="background:{_cclr}12;padding:9px;border-radius:7px;border:1px solid {_cclr};
-                                    text-align:center;margin-top:5px;">
-                        <div style="color:{_cclr};font-size:10px;font-weight:bold;">AVG PCR (ΔOI)</div>
-                        <div style="color:{_cclr};font-size:18px;font-weight:bold;">{_comp_avg_chgoi:.2f}</div>
-                        <div style="color:#ccc;font-size:10px;">{'Bull' if _comp_avg_chgoi > 1.2 else 'Bear' if _comp_avg_chgoi < 0.7 else 'Neut'}</div>
-                        </div>""", unsafe_allow_html=True)
-                    with _cm3:
-                        _gclr = "#00ff88" if _comp_total_gex > 10 else "#ff4444" if _comp_total_gex < -10 else "#FFD700"
-                        st.markdown(f"""
-                        <div style="background:{_gclr}12;padding:9px;border-radius:7px;border:1px solid {_gclr};
-                                    text-align:center;margin-top:5px;">
-                        <div style="color:{_gclr};font-size:10px;font-weight:bold;">TOTAL GEX</div>
-                        <div style="color:{_gclr};font-size:18px;font-weight:bold;">{_comp_total_gex:.1f}L</div>
-                        <div style="color:#ccc;font-size:10px;">{'Pin' if _comp_total_gex > 10 else 'Accel' if _comp_total_gex < -10 else 'Neut'}</div>
-                        </div>""", unsafe_allow_html=True)
-                    with _cm4:
-                        st.markdown(f"""
-                        <div style="background:{_sent_color}12;padding:9px;border-radius:7px;border:1px solid {_sent_color};
-                                    text-align:center;margin-top:5px;">
-                        <div style="color:{_sent_color};font-size:10px;font-weight:bold;">SENTIMENT</div>
-                        <div style="color:{_sent_color};font-size:18px;font-weight:bold;">{_sentiment_score}/100</div>
-                        <div style="color:#ccc;font-size:10px;">{_market_bias}</div>
-                        </div>""", unsafe_allow_html=True)
-
-                    # Smart signal + divergence alert banner
-                    _alert_txt = _pro_alert or ""
-                    _alert_clr = _pro_alert_color
-                    if not _pro_alert and "DIVERGENCE" in _final_signal:
-                        _alert_txt = _final_signal
-                        _alert_clr = _final_color
-                    if _alert_txt:
-                        st.markdown(f"""
-                        <div style="background:{_alert_clr}22;border:2px solid {_alert_clr};
-                             border-radius:8px;padding:10px;margin:8px 0;text-align:center;">
-                        <span style="font-size:15px;font-weight:bold;color:{_alert_clr};">{_alert_txt}</span>
-                        <span style="font-size:12px;color:#ccc;margin-left:12px;">
-                            Score: {_pro_score}/100 · Sentiment: {_sentiment_score}/100</span>
-                        </div>""", unsafe_allow_html=True)
-
-                    st.markdown("<br>", unsafe_allow_html=True)
-
-                    if _pro_h_df is not None and len(_pro_h_df) >= 2:
-                        # ══════════════════════════════════════════════════════
-                        # MIDDLE CHARTS  (2 × 2)
-                        # ══════════════════════════════════════════════════════
-                        _mc1, _mc2 = st.columns(2)
-                        _pos_keys   = ['ATM-2', 'ATM-1', 'ATM', 'ATM+1', 'ATM+2']
-                        _pos_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
-
-                        with _mc1:
-                            # Straddle Engine Chart
-                            _fig_st = go.Figure()
-                            for _si, _sk in enumerate(_pos_keys):
-                                _col = f'straddle_{_sk}'
-                                if _col in _pro_h_df.columns:
-                                    _cv = _pro_h_df[_col].iloc[-1]
-                                    _fig_st.add_trace(go.Scatter(
-                                        x=_pro_h_df['time'], y=_pro_h_df[_col],
-                                        mode='lines', name=_sk,
-                                        line=dict(color=_pos_colors[_si],
-                                                  width=2.5 if _sk == 'ATM' else 1.5)
-                                    ))
-                                    _fig_st.add_trace(go.Scatter(
-                                        x=[_pro_h_df['time'].iloc[-1]], y=[_cv],
-                                        mode='markers+text', text=[f'{_cv:.0f}'],
-                                        textposition='top right',
-                                        textfont=dict(size=8, color=_pos_colors[_si]),
-                                        marker=dict(size=6, color=_pos_colors[_si]),
-                                        showlegend=False, hoverinfo='skip'
-                                    ))
-                            _fig_st.update_layout(
-                                title=f'Straddle Engine — ATM: ₹{_pro_atm_straddle:.0f}',
-                                height=280, template='plotly_dark',
-                                margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='₹ Straddle'),
-                                showlegend=True,
-                                legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
-                            )
-                            st.plotly_chart(_fig_st, use_container_width=True)
-
-                        with _mc2:
-                            # IV Skew Engine Chart
-                            _fig_iv2 = go.Figure()
-                            for _col_k, _col_n, _col_c, _tp in [
-                                ('avg_iv_ce', 'Call IV avg', '#00C853', 'top right'),
-                                ('avg_iv_pe', 'Put IV avg',  '#FF5252', 'bottom right'),
-                                ('iv_skew',   'IV Skew (PE−CE)', '#FFD740', 'top left'),
-                            ]:
-                                if _col_k in _pro_h_df.columns:
-                                    _cv = _pro_h_df[_col_k].iloc[-1]
-                                    _fig_iv2.add_trace(go.Scatter(
-                                        x=_pro_h_df['time'], y=_pro_h_df[_col_k],
-                                        mode='lines', name=_col_n,
-                                        line=dict(color=_col_c, width=2,
-                                                  dash='dot' if _col_k == 'iv_skew' else 'solid')
-                                    ))
-                                    _fig_iv2.add_trace(go.Scatter(
-                                        x=[_pro_h_df['time'].iloc[-1]], y=[_cv],
-                                        mode='markers+text',
-                                        text=[f'{_cv:+.1f}' if _col_k == 'iv_skew' else f'{_cv:.1f}%'],
-                                        textposition=_tp, textfont=dict(size=8, color=_col_c),
-                                        marker=dict(size=7, color=_col_c),
-                                        showlegend=False, hoverinfo='skip'
-                                    ))
-                            _fig_iv2.add_hline(y=0, line_color='#555', line_width=1)
-                            _fig_iv2.update_layout(
-                                title=f'IV Skew Engine — PE−CE: {_pro_market_iv_sk:+.1f}',
-                                height=280, template='plotly_dark',
-                                margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='IV %'),
-                                showlegend=True,
-                                legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
-                            )
-                            st.plotly_chart(_fig_iv2, use_container_width=True)
-
-                        _mc3, _mc4 = st.columns(2)
-
-                        with _mc3:
-                            # PCR Trend Chart
-                            _fig_pcr2 = go.Figure()
-                            for _pk, _pn, _pc, _pd in [
-                                ('pcr_oi',    'PCR OI',     '#00ccff', 'solid'),
-                                ('pcr_vol',   'PCR Volume', '#ffaa00', 'dash'),
-                                ('pcr_chgoi', 'PCR ΔOI',   '#ff44ff', 'dot'),
-                            ]:
-                                if _pk in _pro_h_df.columns:
-                                    _cv = _pro_h_df[_pk].iloc[-1]
-                                    _fig_pcr2.add_trace(go.Scatter(
-                                        x=_pro_h_df['time'], y=_pro_h_df[_pk],
-                                        mode='lines', name=_pn,
-                                        line=dict(color=_pc, width=2, dash=_pd)
-                                    ))
-                                    _fig_pcr2.add_trace(go.Scatter(
-                                        x=[_pro_h_df['time'].iloc[-1]], y=[_cv],
-                                        mode='markers+text', text=[f'{_cv:.2f}'],
-                                        textposition='top right',
-                                        textfont=dict(size=8, color=_pc),
-                                        marker=dict(size=7, color=_pc),
-                                        showlegend=False, hoverinfo='skip'
-                                    ))
-                            _fig_pcr2.add_hline(y=1.2, line_dash='dot',
-                                                line_color='rgba(0,255,136,0.5)',
-                                                annotation_text='Bull 1.2',
-                                                annotation_position='right',
-                                                annotation_font_size=8)
-                            _fig_pcr2.add_hline(y=0.7, line_dash='dot',
-                                                line_color='rgba(255,68,68,0.5)',
-                                                annotation_text='Bear 0.7',
-                                                annotation_position='right',
-                                                annotation_font_size=8)
-                            _fig_pcr2.add_hline(y=1.0, line_color='rgba(255,255,255,0.2)', line_width=1)
-                            _fig_pcr2.update_layout(
-                                title=f'PCR Engine — OI:{_pro_pcr_oi:.2f} Vol:{_pro_pcr_vol:.2f} ΔOI:{_pro_pcr_chg:.2f}',
-                                height=280, template='plotly_dark',
-                                margin=dict(l=40, r=40, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='PCR'),
-                                showlegend=True,
-                                legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
-                            )
-                            st.plotly_chart(_fig_pcr2, use_container_width=True)
-
-                        with _mc4:
-                            # Gamma Pressure Chart
-                            _fig_gam = go.Figure()
-                            if 'net_gex' in _pro_h_df.columns:
-                                _gv = _pro_h_df['net_gex']
-                                _g_cur = _gv.iloc[-1]
-                                _fig_gam.add_trace(go.Scatter(
-                                    x=_pro_h_df['time'], y=_gv,
-                                    mode='lines+markers', name='Net GEX (L)',
-                                    line=dict(color='#FFD740', width=2),
-                                    marker=dict(size=4,
-                                                color=['#00C853' if v >= 0 else '#FF5252' for v in _gv]),
-                                    fill='tozeroy', fillcolor='rgba(255,215,0,0.08)'
-                                ))
-                                _fig_gam.add_hline(y=0, line_color='white', line_width=1.5)
-                                _fig_gam.add_trace(go.Scatter(
-                                    x=[_pro_h_df['time'].iloc[-1]], y=[_g_cur],
-                                    mode='markers+text', text=[f'{_g_cur:+.1f}L'],
-                                    textposition='top right',
-                                    textfont=dict(size=9, color='#FFD740'),
-                                    marker=dict(size=9, color='#FFD740', symbol='circle'),
-                                    showlegend=False, hoverinfo='skip'
-                                ))
-                            _fig_gam.update_layout(
-                                title=f'Gamma Pressure — {_pro_market_mode} (GEX: {_pro_net_gex:+.1f}L)',
-                                height=280, template='plotly_dark',
-                                margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='GEX (L)',
-                                           zeroline=True, zerolinecolor='white'),
-                                showlegend=False,
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
-                            )
-                            st.plotly_chart(_fig_gam, use_container_width=True)
-
-                        # ══════════════════════════════════════════════════════
-                        # BOTTOM CHARTS  (3 columns)
-                        # ══════════════════════════════════════════════════════
-                        _bc1, _bc2, _bc3 = st.columns(3)
-
-                        with _bc1:
-                            # Bid/Ask Pressure Chart
-                            _fig_pres2 = go.Figure()
-                            for _pk2, _pn2, _pc2, _tp2 in [
-                                ('call_pressure', 'Call Pressure', '#00C853', 'top right'),
-                                ('put_pressure',  'Put Pressure',  '#FF5252', 'bottom right'),
-                            ]:
-                                if _pk2 in _pro_h_df.columns:
-                                    _cv2 = _pro_h_df[_pk2].iloc[-1]
-                                    _fig_pres2.add_trace(go.Scatter(
-                                        x=_pro_h_df['time'], y=_pro_h_df[_pk2],
-                                        mode='lines', name=_pn2,
-                                        line=dict(color=_pc2, width=2)
-                                    ))
-                                    _fig_pres2.add_trace(go.Scatter(
-                                        x=[_pro_h_df['time'].iloc[-1]], y=[_cv2],
-                                        mode='markers+text', text=[f'{_cv2:.3f}'],
-                                        textposition=_tp2,
-                                        textfont=dict(size=8, color=_pc2),
-                                        marker=dict(size=7, color=_pc2),
-                                        showlegend=False, hoverinfo='skip'
-                                    ))
-                            _fig_pres2.add_hline(y=0.5, line_color='#555', line_width=1)
-                            _fig_pres2.update_layout(
-                                title=f'Bid/Ask Pressure — C:{_pro_call_pres:.3f} P:{_pro_put_pres:.3f}',
-                                height=250, template='plotly_dark',
-                                margin=dict(l=30, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', range=[0, 1], title='Pressure'),
-                                showlegend=True,
-                                legend=dict(orientation='h', y=-0.4, font=dict(size=9)),
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
-                            )
-                            st.plotly_chart(_fig_pres2, use_container_width=True)
-                            _p_sig = ("🚀 Call Dominating" if _pro_call_pres > _pro_put_pres + 0.1
-                                      else "🔥 Put Dominating" if _pro_put_pres > _pro_call_pres + 0.1
-                                      else "⚖️ Balanced")
-                            st.caption(_p_sig)
-
-                        with _bc2:
-                            # Net Delta Shift Chart
-                            _fig_nd = go.Figure()
-                            if 'net_delta' in _pro_h_df.columns:
-                                _nd_vals = _pro_h_df['net_delta']
-                                _nd_cur  = _nd_vals.iloc[-1]
-                                _fig_nd.add_trace(go.Scatter(
-                                    x=_pro_h_df['time'], y=_nd_vals,
-                                    mode='lines+markers', name='Net Delta',
-                                    line=dict(color='#00BCD4', width=2),
-                                    marker=dict(
-                                        size=4,
-                                        color=['#00C853' if v >= 0 else '#FF5252' for v in _nd_vals]),
-                                    fill='tozeroy', fillcolor='rgba(0,188,212,0.08)'
-                                ))
-                                _fig_nd.add_hline(y=0, line_color='white', line_width=1)
-                                _fig_nd.add_trace(go.Scatter(
-                                    x=[_pro_h_df['time'].iloc[-1]], y=[_nd_cur],
-                                    mode='markers+text', text=[f'{_nd_cur:+.0f}'],
-                                    textposition='top right',
-                                    textfont=dict(size=9, color='#00BCD4'),
-                                    marker=dict(size=9, color='#00BCD4', symbol='circle'),
-                                    showlegend=False, hoverinfo='skip'
-                                ))
-                            _fig_nd.update_layout(
-                                title=f'Net Delta Shift — {_pro_net_delta:+,.0f}',
-                                height=250, template='plotly_dark',
-                                margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='Net Δ', zeroline=True,
-                                           zerolinecolor='white'),
-                                showlegend=False,
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
-                            )
-                            st.plotly_chart(_fig_nd, use_container_width=True)
-                            _nd_sig = ("📈 Bullish Positioning" if _pro_net_delta > 0
-                                       else "📉 Bearish Positioning")
-                            st.caption(_nd_sig)
-
-                        with _bc3:
-                            # Breakout Probability Bar Chart
-                            _fig_bs = go.Figure()
-                            if 'breakout_score' in _pro_h_df.columns:
-                                _bs_s = _pro_h_df['breakout_score'].dropna()
-                                _bs_t = _pro_h_df['time'].loc[_bs_s.index]
-                                _fig_bs.add_trace(go.Bar(
-                                    x=_bs_t, y=_bs_s,
-                                    marker_color=['#FF5252' if v >= 70
-                                                  else '#FFD740' if v >= 40
-                                                  else '#00BCD4' for v in _bs_s],
-                                    name='Breakout Score'
-                                ))
-                                _fig_bs.add_hline(y=70, line_dash='dot',
-                                                  line_color='rgba(255,82,82,0.7)',
-                                                  annotation_text='Breakout 70',
-                                                  annotation_position='right',
-                                                  annotation_font_size=8)
-                                _fig_bs.add_hline(y=40, line_dash='dot',
-                                                  line_color='rgba(255,215,0,0.7)',
-                                                  annotation_text='Watch 40',
-                                                  annotation_position='right',
-                                                  annotation_font_size=8)
-                            _fig_bs.update_layout(
-                                title=f'Breakout Probability — {_pro_score}/100',
-                                height=250, template='plotly_dark',
-                                margin=dict(l=30, r=50, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', range=[0, 105], title='Score'),
-                                showlegend=False,
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
-                            )
-                            st.plotly_chart(_fig_bs, use_container_width=True)
-                            st.caption(f"Straddle {_s1}/20 · IV {_s2}/20 · Gamma {_s3}/20 · "
-                                       f"Volume {_s4}/20 · Pressure {_s5}/20")
-
-                    # ── Sentiment Over Time Chart ───────────────────────────────
-                    if st.session_state.sentiment_history:
-                        _sent_h_df = pd.DataFrame(st.session_state.sentiment_history)
-                        _fig_sent = go.Figure()
-                        _sent_mkr = []
-                        for _, _shr in _sent_h_df.iterrows():
-                            _sv = _shr.get('sentiment_score', 50)
-                            _sent_mkr.append(
-                                '#00ff88' if _sv >= 70 else '#FFD700' if _sv >= 40 else '#FF5252')
-                        _fig_sent.add_trace(go.Scatter(
-                            x=_sent_h_df['time'], y=_sent_h_df['sentiment_score'],
-                            mode='lines+markers', name='Sentiment Score',
-                            line=dict(color='#00aaff', width=2.5),
-                            marker=dict(size=6, color=_sent_mkr),
-                            fill='tozeroy', fillcolor='rgba(0,170,255,0.07)'))
-                        if 'comp_score_pct' in _sent_h_df.columns:
-                            _fig_sent.add_trace(go.Scatter(
-                                x=_sent_h_df['time'],
-                                y=_sent_h_df['comp_score_pct'].apply(lambda x: (x + 100) / 2),
-                                mode='lines', name='Direction Score (scaled 0-100)',
-                                line=dict(color='#ff44ff', width=1.5, dash='dash')))
-                        if 'total_gex' in _sent_h_df.columns:
-                            _fig_sent.add_trace(go.Scatter(
-                                x=_sent_h_df['time'],
-                                y=_sent_h_df['total_gex'].apply(
-                                    lambda x: max(0, min(100, (x + 100) / 2))),
-                                mode='lines', name='GEX (scaled)',
-                                line=dict(color='#FFD740', width=1.5, dash='dot')))
-                        _fig_sent.add_hline(y=70, line_dash='dot',
-                            line_color='rgba(0,255,136,0.5)', line_width=1,
-                            annotation_text='Bullish 70', annotation_position='right',
-                            annotation_font_size=8)
-                        _fig_sent.add_hline(y=30, line_dash='dot',
-                            line_color='rgba(255,68,68,0.5)', line_width=1,
-                            annotation_text='Bearish 30', annotation_position='right',
-                            annotation_font_size=8)
-                        _fig_sent.add_hrect(y0=70, y1=105,
-                            fillcolor='rgba(0,255,136,0.05)', line_width=0)
-                        _fig_sent.add_hrect(y0=0, y1=30,
-                            fillcolor='rgba(255,68,68,0.05)', line_width=0)
-                        _fig_sent.update_layout(
-                            title=f'Options Flow Sentiment — Current: {_sentiment_score}/100 ({_sent_verdict})',
-                            height=320, template='plotly_dark',
-                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                            yaxis=dict(title='Score (0–100)', range=[0, 105], gridcolor='#333'),
-                            legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
-                            margin=dict(l=40, r=65, t=45, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'))
-                        st.plotly_chart(_fig_sent, use_container_width=True)
-
-                    # ── Per-Strike Breakdown ─────────────────────────────────────
-                    if _comp_strike_details:
-                        with st.expander("📋 Per-Strike Direction Breakdown"):
-                            st.dataframe(pd.DataFrame(_comp_strike_details),
-                                         use_container_width=True, hide_index=True)
-
-                    # Controls
-                    _pro_cl, _pro_cm, _pro_cr = st.columns([3, 1, 1])
-                    with _pro_cl:
-                        _comp_status = "🟢 Live" if _comp_data_available else "🟡 Cached"
-                        st.caption(f"📊 Pro: {len(st.session_state.pro_trader_history)} pts · "
-                                   f"Sentiment: {len(st.session_state.sentiment_history)} pts · "
-                                   f"Composite: {len(st.session_state.composite_signal_history)} pts · "
-                                   f"{_comp_status} · Refreshes every 30s")
-                    with _pro_cm:
-                        if st.button("🗑️ Clear Pro"):
-                            st.session_state.pro_trader_history = []
-                            st.session_state.pro_smart_signal_last = None
-                            st.session_state.sentiment_history = []
-                            st.rerun()
-                    with _pro_cr:
-                        if st.button("🗑️ Clear Composite"):
-                            st.session_state.composite_signal_history = []
-                            st.session_state.composite_signal_last_valid = None
-                            st.rerun()
-                else:
-                    st.info("ATM strike not identified — Pro Dashboard unavailable.")
-            else:
-                st.info("Option chain data required for Pro Trader Dashboard.")
-        except Exception as _pro_e:
-            st.warning(f"Pro Dashboard error: {str(_pro_e)}")
-
-        # ===== INSTITUTIONAL TRADE MAP ENGINE =====
-        st.markdown("---")
-        st.markdown("## 🗺️ Institutional Trade Map")
-        try:
-            _itm_df   = option_data.get('df_summary') if option_data else None
-            _itm_spot = option_data.get('underlying') if option_data else None
-            _itm_lot  = 25
-
-            # Latest sentiment score from session state
-            _itm_sent_score = 50
-            _itm_market_bias = "SIDEWAYS"
-            if st.session_state.sentiment_history:
-                _itm_sent_score = st.session_state.sentiment_history[-1]['sentiment_score']
-                _itm_market_bias = ("BULLISH" if _itm_sent_score > 65 else
-                                    "BEARISH" if _itm_sent_score < 35 else "SIDEWAYS")
-            _itm_final_signal = (st.session_state.sentiment_history[-1].get('verdict', '⚪ NEUTRAL')
-                                 if st.session_state.sentiment_history else '⚪ NEUTRAL')
-
-            if _itm_df is not None and _itm_spot and 'Zone' in _itm_df.columns:
-                _itm_atm_idx = _itm_df[_itm_df['Zone'] == 'ATM'].index
-                if len(_itm_atm_idx) > 0:
-                    _itm_atm_pos = _itm_df.index.get_loc(_itm_atm_idx[0])
-                    # ATM±5 for OI walls
-                    _itm_s5 = max(0, _itm_atm_pos - 5)
-                    _itm_e5 = min(len(_itm_df), _itm_atm_pos + 6)
-                    _itm_slice5 = _itm_df.iloc[_itm_s5:_itm_e5].copy()
-                    _itm_atm_val = float(_itm_df[_itm_df['Zone'] == 'ATM']['Strike'].values[0])
-                    _itm_stk_list = sorted(_itm_slice5['Strike'].unique())
-                    _itm_step = int(_itm_stk_list[1] - _itm_stk_list[0]) if len(_itm_stk_list) >= 2 else 50
-                    for _c in ['openInterest_CE', 'openInterest_PE', 'Gamma_CE', 'Gamma_PE',
-                               'changeinOpenInterest_CE', 'changeinOpenInterest_PE']:
-                        if _c not in _itm_slice5.columns:
-                            _itm_slice5[_c] = 0.0
-
-                    # ── Put OI Wall & Call OI Wall ──────────────────────────────
-                    _pe_oi_s = _itm_slice5.set_index('Strike')['openInterest_PE'].fillna(0)
-                    _ce_oi_s = _itm_slice5.set_index('Strike')['openInterest_CE'].fillna(0)
-                    _put_oi_wall = float(_pe_oi_s.idxmax()) if len(_pe_oi_s) > 0 else _itm_atm_val - _itm_step * 2
-                    _call_oi_wall = float(_ce_oi_s.idxmax()) if len(_ce_oi_s) > 0 else _itm_atm_val + _itm_step * 2
-
-                    # ── Gamma Support / Resistance / Flip ──────────────────────
-                    _itm_slice5['_gex'] = (
-                        _itm_slice5['Gamma_PE'].fillna(0) * _itm_slice5['openInterest_PE'].fillna(0) *
-                        _itm_lot * _itm_spot / 100000 -
-                        _itm_slice5['Gamma_CE'].fillna(0) * _itm_slice5['openInterest_CE'].fillna(0) *
-                        _itm_lot * _itm_spot / 100000)
-                    _below_atm = _itm_slice5[_itm_slice5['Strike'] < _itm_atm_val]
-                    _above_atm = _itm_slice5[_itm_slice5['Strike'] > _itm_atm_val]
-                    _gamma_support = (float(_below_atm.loc[_below_atm['_gex'].idxmax(), 'Strike'])
-                                      if len(_below_atm) > 0 else _itm_atm_val - _itm_step)
-                    _gamma_resist  = (float(_above_atm.loc[_above_atm['_gex'].idxmin(), 'Strike'])
-                                      if len(_above_atm) > 0 else _itm_atm_val + _itm_step)
-                    # Gamma flip: first sign change in GEX
-                    _gamma_flip = _itm_atm_val
-                    _gex_arr = _itm_slice5['_gex'].values
-                    for _gi in range(len(_gex_arr) - 1):
-                        if (_gex_arr[_gi] * _gex_arr[_gi + 1]) < 0:
-                            _gamma_flip = (_itm_slice5['Strike'].iloc[_gi] +
-                                           _itm_slice5['Strike'].iloc[_gi + 1]) / 2
-                            break
-
-                    # ── VOB Support & Resistance ────────────────────────────────
-                    _vob_support = _itm_atm_val - _itm_step * 3
-                    _vob_resist  = _itm_atm_val + _itm_step * 3
-                    if vob_data and 'sr_levels' in vob_data and vob_data['sr_levels']:
-                        _vs = [l.get('mid', l.get('lower', 0)) for l in vob_data['sr_levels']
-                               if ('Support' in l.get('Type', '') or '🟢' in l.get('Type', ''))
-                               and l.get('mid', l.get('lower', 0)) > 0
-                               and l.get('mid', l.get('lower', 0)) < _itm_spot]
-                        _vr = [l.get('mid', l.get('upper', 0)) for l in vob_data['sr_levels']
-                               if ('Resistance' in l.get('Type', '') or '🔴' in l.get('Type', ''))
-                               and l.get('mid', l.get('upper', 0)) > _itm_spot]
-                        if _vs: _vob_support = max(_vs)
-                        if _vr: _vob_resist  = min(_vr)
-
-                    # ── Triple POC ──────────────────────────────────────────────
-                    _poc_val = _itm_spot
-                    if poc_data_for_chart:
-                        _pvs = []
-                        for _pk in ['poc1', 'poc2', 'poc3']:
-                            _pd2 = poc_data_for_chart.get(_pk, {})
-                            _pv2 = _pd2.get('poc', 0) if isinstance(_pd2, dict) else 0
-                            if isinstance(_pv2, (int, float)) and _pv2 > 0:
-                                _pvs.append(float(_pv2))
-                        if _pvs: _poc_val = sum(_pvs) / len(_pvs)
-
-                    # ── HTF Pivot Support & Resistance ──────────────────────────
-                    _piv_support = _itm_atm_val - _itm_step * 4
-                    _piv_resist  = _itm_atm_val + _itm_step * 4
-                    if pivots:
-                        _pl = [p['value'] for p in pivots
-                               if p.get('type') == 'low' and p['value'] < _itm_spot]
-                        _ph = [p['value'] for p in pivots
-                               if p.get('type') == 'high' and p['value'] > _itm_spot]
-                        if _pl: _piv_support = max(_pl)
-                        if _ph: _piv_resist  = min(_ph)
-
-                    # ── STEP 2: True Support ────────────────────────────────────
-                    _true_support = (0.30 * _put_oi_wall + 0.25 * _gamma_support +
-                                     0.20 * _vob_support + 0.15 * _poc_val + 0.10 * _piv_support)
-                    _true_support = round(_true_support / _itm_step) * _itm_step
-
-                    # ── STEP 3: True Resistance ─────────────────────────────────
-                    _true_resist = (0.30 * _call_oi_wall + 0.25 * _gamma_resist +
-                                    0.20 * _vob_resist + 0.15 * _poc_val + 0.10 * _piv_resist)
-                    _true_resist = round(_true_resist / _itm_step) * _itm_step
-
-                    # ── STEP 4: Entry Zones ─────────────────────────────────────
-                    _entry_support = round(
-                        (_gamma_support + _put_oi_wall + _vob_support) / 3 / _itm_step) * _itm_step
-                    _entry_resist  = round(
-                        (_gamma_resist + _call_oi_wall + _vob_resist) / 3 / _itm_step) * _itm_step
-
-                    # ── STEP 5: Exit Targets ────────────────────────────────────
-                    _above_spot = [l for l in [_call_oi_wall, _gamma_resist, _piv_resist, _poc_val]
-                                   if l > _itm_spot]
-                    _below_spot = [l for l in [_put_oi_wall, _gamma_support, _piv_support, _poc_val]
-                                   if l < _itm_spot]
-                    _exit_resist  = (round(min(_above_spot) / _itm_step) * _itm_step
-                                     if _above_spot else _true_resist)
-                    _exit_support = (round(max(_below_spot) / _itm_step) * _itm_step
-                                     if _below_spot else _true_support)
-
-                    # ── STEP 6: Breakout Level ──────────────────────────────────
-                    _breakout_lvl = round(
-                        (_itm_atm_val + _itm_step + _gamma_flip + _call_oi_wall) / 3 / _itm_step) * _itm_step
-
-                    # ── STEP 7: Breakdown Level ─────────────────────────────────
-                    _breakdown_lvl = round(
-                        (_itm_atm_val - _itm_step + _gamma_flip + _put_oi_wall) / 3 / _itm_step) * _itm_step
-
-                    # ── STEP 8: Stop Loss Engine ────────────────────────────────
-                    _sl_call_cands = [l for l in [_gamma_support, _put_oi_wall, _piv_support]
-                                      if l < _entry_support]
-                    _sl_call = (round(max(_sl_call_cands) / _itm_step) * _itm_step
-                                if _sl_call_cands else _entry_support - _itm_step * 2)
-                    _sl_put_cands = [l for l in [_gamma_resist, _call_oi_wall, _piv_resist]
-                                     if l > _entry_resist]
-                    _sl_put = (round(min(_sl_put_cands) / _itm_step) * _itm_step
-                               if _sl_put_cands else _entry_resist + _itm_step * 2)
-
-                    # ── STEP 9: Active Trade Setup ──────────────────────────────
-                    if _itm_market_bias == "BULLISH":
-                        _itm_entry   = _entry_support
-                        _itm_target  = _exit_resist
-                        _itm_sl      = _sl_call
-                        _itm_dir_clr = "#00ff88"
-                        _itm_dir_lbl = "🚀 BULLISH"
-                    elif _itm_market_bias == "BEARISH":
-                        _itm_entry   = _entry_resist
-                        _itm_target  = _exit_support
-                        _itm_sl      = _sl_put
-                        _itm_dir_clr = "#FF5252"
-                        _itm_dir_lbl = "🔥 BEARISH"
-                    else:
-                        _itm_entry   = _itm_atm_val
-                        _itm_target  = _itm_atm_val
-                        _itm_sl      = _itm_atm_val
-                        _itm_dir_clr = "#FFD700"
-                        _itm_dir_lbl = "↔️ SIDEWAYS"
-
-                    # ── STEP 10: Confidence Score ───────────────────────────────
-                    _conf_pts = 0
-                    _itm_net_gex = 0.0
-                    _itm_net_delta = 0.0
-                    _itm_call_pres = _itm_put_pres = 0.5
-                    _itm_wpcr_oi = 1.0
-                    # Pull from session state if available
-                    if st.session_state.pro_trader_history:
-                        _last_pro = st.session_state.pro_trader_history[-1]
-                        _itm_net_gex   = _last_pro.get('net_gex', 0)
-                        _itm_net_delta = _last_pro.get('net_delta', 0)
-                        _itm_call_pres = _last_pro.get('call_pressure', 0.5)
-                        _itm_put_pres  = _last_pro.get('put_pressure', 0.5)
-                        _itm_wpcr_oi   = _last_pro.get('pcr_oi', 1.0)
-                    # PCR aligned
-                    if ((_itm_market_bias == "BULLISH" and _itm_wpcr_oi > 1.1) or
-                            (_itm_market_bias == "BEARISH" and _itm_wpcr_oi < 0.9)):
-                        _conf_pts += 1
-                    # GEX trending (negative = conviction)
-                    if _itm_net_gex < -5:
-                        _conf_pts += 1
-                    # Delta aligned
-                    if ((_itm_market_bias == "BULLISH" and _itm_net_delta > 0) or
-                            (_itm_market_bias == "BEARISH" and _itm_net_delta < 0)):
-                        _conf_pts += 1
-                    # Pressure aligned
-                    if ((_itm_market_bias == "BULLISH" and _itm_call_pres > _itm_put_pres) or
-                            (_itm_market_bias == "BEARISH" and _itm_put_pres > _itm_call_pres)):
-                        _conf_pts += 1
-                    # Sentiment extreme
-                    if _itm_sent_score > 65 or _itm_sent_score < 35:
-                        _conf_pts += 1
-                    _confidence = ("HIGH" if _conf_pts >= 4 else
-                                   "MEDIUM" if _conf_pts >= 2 else "LOW")
-                    _conf_clr   = ("#00ff88" if _confidence == "HIGH" else
-                                   "#FFD700"  if _confidence == "MEDIUM" else "#FF5252")
-
-                    # ── STEP 9 Display: Trade Map Panel ────────────────────────
-                    st.markdown(f"""
-                    <div style="background:linear-gradient(135deg,{_itm_dir_clr}08,{_itm_dir_clr}18);
-                                padding:18px;border-radius:12px;border:2px solid {_itm_dir_clr};
-                                margin-bottom:14px;">
-                        <div style="color:#888;font-size:10px;letter-spacing:2px;">
-                            INSTITUTIONAL TRADE MAP — ATM±5 LIQUIDITY ANALYSIS</div>
-                        <div style="color:{_itm_dir_clr};font-size:28px;font-weight:bold;margin:6px 0;">
-                            {_itm_dir_lbl} &nbsp;·&nbsp; Confidence: <span style="border:1px solid {_conf_clr};
-                            color:{_conf_clr};padding:2px 10px;border-radius:5px;font-size:16px;">{_confidence}</span>
-                        </div>
-                        <div style="color:#aaa;font-size:12px;">
-                            Spot: <b style="color:#FFD740">{_itm_spot:,.0f}</b> &nbsp;|&nbsp;
-                            ATM: <b style="color:#FFD740">₹{int(_itm_atm_val)}</b> &nbsp;|&nbsp;
-                            Sentiment: <b style="color:{_conf_clr}">{_itm_sent_score}/100</b> &nbsp;|&nbsp;
-                            {_itm_final_signal}
-                        </div>
-                    </div>""", unsafe_allow_html=True)
-
-                    # Level grid (3 cols × 3 rows)
-                    _lg1, _lg2, _lg3 = st.columns(3)
-                    def _itm_card(label, value, color, note=""):
-                        return (f'<div style="background:{color}12;padding:11px;border-radius:8px;'
-                                f'border:1px solid {color};text-align:center;margin:3px 0;">'
-                                f'<div style="color:{color};font-size:10px;font-weight:bold;">{label}</div>'
-                                f'<div style="color:{color};font-size:20px;font-weight:bold;">{value:.0f}</div>'
-                                f'<div style="color:#aaa;font-size:10px;">{note}</div></div>')
-
-                    with _lg1:
-                        st.markdown(_itm_card("PUT OI WALL",     _put_oi_wall,   "#00ff88", "Max PE OI"),
-                                    unsafe_allow_html=True)
-                        st.markdown(_itm_card("TRUE SUPPORT",    _true_support,  "#00C853", "Weighted avg"),
-                                    unsafe_allow_html=True)
-                        st.markdown(_itm_card("ENTRY SUPPORT",   _entry_support, "#00aaff", "GEX+OI+VOB"),
-                                    unsafe_allow_html=True)
-                    with _lg2:
-                        st.markdown(_itm_card("TARGET",          _itm_target,    _itm_dir_clr, "Exit zone"),
-                                    unsafe_allow_html=True)
-                        st.markdown(_itm_card("ENTRY",           _itm_entry,     _itm_dir_clr, "Trade entry"),
-                                    unsafe_allow_html=True)
-                        st.markdown(_itm_card("STOP LOSS",       _itm_sl,        "#FF5252", "Max risk"),
-                                    unsafe_allow_html=True)
-                    with _lg3:
-                        st.markdown(_itm_card("CALL OI WALL",    _call_oi_wall,  "#FF5252", "Max CE OI"),
-                                    unsafe_allow_html=True)
-                        st.markdown(_itm_card("TRUE RESISTANCE", _true_resist,   "#FF1744", "Weighted avg"),
-                                    unsafe_allow_html=True)
-                        st.markdown(_itm_card("ENTRY RESIST",    _entry_resist,  "#ff8844", "GEX+OI+VOB"),
-                                    unsafe_allow_html=True)
-
-                    # Breakout / Breakdown / Gamma levels
-                    _bb1, _bb2, _bb3, _bb4 = st.columns(4)
-                    with _bb1:
-                        st.markdown(_itm_card("BREAKOUT ABOVE", _breakout_lvl,  "#00ff88", "ATM+1+GEX+Call OI"),
-                                    unsafe_allow_html=True)
-                    with _bb2:
-                        st.markdown(_itm_card("BREAKDOWN BELOW", _breakdown_lvl, "#FF5252", "ATM-1+GEX+Put OI"),
-                                    unsafe_allow_html=True)
-                    with _bb3:
-                        st.markdown(_itm_card("GAMMA FLIP",     _gamma_flip,    "#FFD700", "GEX zero crossing"),
-                                    unsafe_allow_html=True)
-                    with _bb4:
-                        st.markdown(_itm_card("POC (avg)",      _poc_val,       "#00BCD4", "Triple POC avg"),
-                                    unsafe_allow_html=True)
-
-                    # ── STEP 12: Institutional Levels Chart ────────────────────
-                    if st.session_state.sentiment_history:
-                        _itm_chart_times = [h['time'] for h in st.session_state.sentiment_history]
-                        _fig_itm = go.Figure()
-                        for _lv2, _ln, _lc, _ld in [
-                            (_true_support,  "Support",        "#00C853", "dash"),
-                            (_true_resist,   "Resistance",     "#FF1744", "dash"),
-                            (_itm_entry,     "Entry Zone",     _itm_dir_clr, "dot"),
-                            (_itm_target,    "Target",         "#00BCD4", "dot"),
-                            (_breakout_lvl,  "Breakout Level", "#00ff88", "dashdot"),
-                            (_breakdown_lvl, "Breakdown Level","#FF5252", "dashdot"),
-                            (_itm_sl,        "Stop Loss",      "#ff8800", "longdash"),
-                        ]:
-                            _fig_itm.add_hline(
-                                y=_lv2, line_dash=_ld, line_color=_lc, line_width=1.5,
-                                annotation_text=f"{_ln}: {_lv2:.0f}",
-                                annotation_position="right",
-                                annotation_font_size=9,
-                                annotation_font_color=_lc)
-                        _fig_itm.add_trace(go.Scatter(
-                            x=_itm_chart_times,
-                            y=[_itm_spot] * len(_itm_chart_times),
-                            mode='lines', name='Spot Price',
-                            line=dict(color='#FFD740', width=2)))
-                        _fig_itm.update_layout(
-                            title=f"Institutional Trade Map — Spot: {_itm_spot:,.0f}",
-                            height=350, template='plotly_dark',
-                            xaxis=dict(tickformat='%H:%M', gridcolor='#333'),
-                            yaxis=dict(title='Price', gridcolor='#333'),
-                            legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
-                            margin=dict(l=40, r=120, t=45, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'))
-                        st.plotly_chart(_fig_itm, use_container_width=True)
-
-                    # Source breakdown
-                    with st.expander("📖 Level Sources"):
-                        _src_data = [
-                            ["Put OI Wall",     f"₹{_put_oi_wall:.0f}",   "Max PE open interest strike (ATM±5)"],
-                            ["Call OI Wall",    f"₹{_call_oi_wall:.0f}",  "Max CE open interest strike (ATM±5)"],
-                            ["Gamma Support",   f"₹{_gamma_support:.0f}", "Highest positive GEX below ATM"],
-                            ["Gamma Resistance",f"₹{_gamma_resist:.0f}",  "Lowest negative GEX above ATM"],
-                            ["Gamma Flip",      f"₹{_gamma_flip:.0f}",    "GEX sign change level"],
-                            ["VOB Support",     f"₹{_vob_support:.0f}",   "Volume Order Block nearest below spot"],
-                            ["VOB Resistance",  f"₹{_vob_resist:.0f}",    "Volume Order Block nearest above spot"],
-                            ["POC (avg)",       f"₹{_poc_val:.0f}",       "Average of Short/Mid/Long POC"],
-                            ["Pivot Support",   f"₹{_piv_support:.0f}",   "Nearest HTF pivot low below spot"],
-                            ["Pivot Resistance",f"₹{_piv_resist:.0f}",    "Nearest HTF pivot high above spot"],
-                        ]
-                        st.dataframe(pd.DataFrame(_src_data,
-                            columns=['Level', 'Value', 'Source']),
-                            use_container_width=True, hide_index=True)
-                else:
-                    st.info("ATM strike not identified in option chain.")
-            else:
-                st.info("Option chain data required for Institutional Trade Map.")
-        except Exception as _itm_e:
-            st.warning(f"Institutional Trade Map error: {str(_itm_e)}")
-
-        # ===== ATM ±2 STRIKE COMPARISON: PCR / ChgOI PCR / GEX =====
-        st.markdown("---")
-        st.markdown("## 📊 ATM ±2 Strike Comparison — PCR · ChgOI PCR")
-
-        # Helper function to create PCR chart (defined outside try block for reuse)
-        def create_pcr_chart(history_df, col_name, color, title_prefix):
-            """Helper to create individual PCR chart - col_name is now just strike price"""
-            if col_name and col_name in history_df.columns:
-                strike_val = col_name  # Column name is now just the strike price
-
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=history_df['time'],
-                    y=history_df[col_name],
-                    mode='lines+markers',
-                    name=f'₹{strike_val}',
-                    line=dict(color=color, width=2),
-                    marker=dict(size=4),
-                    fill='tozeroy',
-                    fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.1])}'
-                ))
-
-                # Reference lines
-                fig.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
-                fig.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
-                fig.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
-
-                # Get current PCR value
-                current_pcr = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
-
-                # Dynamic Y range: data + reference thresholds always in view
-                _pcr_raw = history_df[col_name].dropna().tolist()
-                _pcr_all = _pcr_raw + [0.7, 1.2]
-                _pcr_ymin = max(0.0, min(_pcr_all) * 0.9)
-                _pcr_ymax = max(_pcr_all) * 1.1
-
-                fig.update_layout(
-                    title=f"{title_prefix}<br>₹{strike_val}<br>PCR: {current_pcr:.2f}",
-                    template='plotly_dark',
-                    height=280,
-                    showlegend=False,
-                    margin=dict(l=10, r=10, t=70, b=30),
-                    xaxis=dict(tickformat='%H:%M', title=''),
-                    yaxis=dict(title='PCR', range=[_pcr_ymin, _pcr_ymax]),
-                    plot_bgcolor='#1e1e1e',
-                    paper_bgcolor='#1e1e1e'
-                )
-                return fig, current_pcr
-            return None, 0
-
-        # Helper function for GEX charts (defined here so it's available in comparison view)
-        def create_gex_chart(history_df, col_name, color, title_prefix):
-            """Create individual GEX time-series chart per strike."""
-            if col_name and col_name in history_df.columns:
-                strike_val = col_name
-                gex_values = history_df[col_name].dropna()
-                max_abs = max(abs(gex_values.max()), abs(gex_values.min()), 15) if len(gex_values) > 0 else 20
-                y_range = [-max_abs * 1.1, max_abs * 1.1]
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=history_df['time'],
-                    y=history_df[col_name],
-                    mode='lines+markers',
-                    name=f'₹{strike_val}',
-                    line=dict(color=color, width=2),
-                    marker=dict(size=4),
-                    fill='tozeroy',
-                    fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.15])}'
-                ))
-                fig.add_hline(y=0, line_dash="solid", line_color="white", line_width=2)
-                fig.add_hline(y=10, line_dash="dot", line_color="#00ff88", line_width=1,
-                              annotation_text="+10", annotation_position="right")
-                fig.add_hline(y=-10, line_dash="dot", line_color="#ff4444", line_width=1,
-                              annotation_text="-10", annotation_position="right")
-                current_gex = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
-                fig.update_layout(
-                    title=f"{title_prefix}<br>₹{strike_val}<br>GEX: {current_gex:+.1f}L",
-                    template='plotly_dark', height=280, showlegend=False,
-                    margin=dict(l=10, r=10, t=70, b=30),
-                    xaxis=dict(tickformat='%H:%M', title=''),
-                    yaxis=dict(title='GEX (L)', range=y_range, zeroline=True,
-                               zerolinecolor='white', zerolinewidth=2,
-                               tickmode='array',
-                               tickvals=[-20, -10, 0, 10, 20] if max_abs <= 25 else None),
-                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e'
-                )
-                return fig, current_gex
-            return None, 0
-
-        # Try to get new data and add to history
-        pcr_data_available = False
-        pcr_df = None
-
-        df_summary = option_data.get('df_summary') if option_data else None
-        if df_summary is not None and 'Zone' in df_summary.columns and 'PCR' in df_summary.columns:
+            st.info("No BANK NIFTY option chain data available.")
+
+    with _tab_sensex:
+        with st.spinner("Loading SENSEX option chain..."):
+            _sx_option_data = analyze_option_chain(
+                selected_expiry=st.session_state.get('_sx_selected_expiry'),
+                underlying_scrip=SENSEX_UNDERLYING_SCRIP,
+                underlying_seg=SENSEX_UNDERLYING_SEG,
+                index_name="SENSEX",
+            )
+        if _sx_option_data and _sx_option_data.get('underlying'):
+            st.info(f"**SENSEX SPOT:** {_sx_option_data['underlying']:.2f}")
+            _idx_swap_in('sx')
             try:
-                # Find ATM index
-                atm_idx = df_summary[df_summary['Zone'] == 'ATM'].index
-                if len(atm_idx) > 0:
-                    atm_pos = df_summary.index.get_loc(atm_idx[0])
-
-                    # Get ATM ± 2 strikes (5 strikes total)
-                    start_idx = max(0, atm_pos - 2)
-                    end_idx = min(len(df_summary), atm_pos + 3)
-
-                    chgoi_avail = [c for c in ['changeinOpenInterest_CE', 'changeinOpenInterest_PE']
-                                   if c in df_summary.columns]
-                    vol_avail = [c for c in ['totalTradedVolume_CE', 'totalTradedVolume_PE']
-                                 if c in df_summary.columns]
-                    pcr_df = df_summary.iloc[start_idx:end_idx][
-                        ['Strike', 'Zone', 'PCR', 'PCR_Signal',
-                         'openInterest_CE', 'openInterest_PE'] + chgoi_avail + vol_avail
-                    ].copy()
-
-                    if not pcr_df.empty:
-                        pcr_data_available = True
-                        # Save as last valid data
-                        st.session_state.pcr_last_valid_data = pcr_df.copy()
-
-                        # Get current time
-                        ist = pytz.timezone('Asia/Kolkata')
-                        current_time = datetime.now(ist)
-
-                        # Add current PCR data to history - store by STRIKE PRICE ONLY (not zone)
-                        # This preserves history even when strikes change zone (OTM->ATM->ITM)
-                        pcr_entry = {'time': current_time}
-                        chgoi_entry = {'time': current_time}
-                        for _, row in pcr_df.iterrows():
-                            strike_label = str(int(row['Strike']))  # Store by strike only
-                            pcr_entry[strike_label] = row['PCR']
-                            # Per-strike ChgOI PCR
-                            if 'changeinOpenInterest_CE' in row and 'changeinOpenInterest_PE' in row:
-                                ce_chg = row['changeinOpenInterest_CE']
-                                pe_chg = row['changeinOpenInterest_PE']
-                                chgoi_entry[strike_label] = round(abs(pe_chg / ce_chg), 3) if ce_chg != 0 else 0.0
-
-                        # Collect raw CE/PE OI and ChgOI per strike for comparison charts
-                        ce_oi_entry = {'time': current_time}
-                        pe_oi_entry = {'time': current_time}
-                        ce_chgoi_entry = {'time': current_time}
-                        pe_chgoi_entry = {'time': current_time}
-                        # Collect raw CE/PE Volume per strike for comparison charts
-                        ce_vol_entry = {'time': current_time}
-                        pe_vol_entry = {'time': current_time}
-                        for _, row in pcr_df.iterrows():
-                            strike_label = str(int(row['Strike']))
-                            ce_oi_entry[strike_label] = row.get('openInterest_CE', 0)
-                            pe_oi_entry[strike_label] = row.get('openInterest_PE', 0)
-                            if 'changeinOpenInterest_CE' in row:
-                                ce_chgoi_entry[strike_label] = row['changeinOpenInterest_CE']
-                            if 'changeinOpenInterest_PE' in row:
-                                pe_chgoi_entry[strike_label] = row['changeinOpenInterest_PE']
-                            if 'totalTradedVolume_CE' in row:
-                                ce_vol_entry[strike_label] = row.get('totalTradedVolume_CE', 0) or 0
-                            if 'totalTradedVolume_PE' in row:
-                                pe_vol_entry[strike_label] = row.get('totalTradedVolume_PE', 0) or 0
-
-                        # Store current ATM ±2 strike positions for display
-                        current_strikes = pcr_df['Strike'].tolist()
-                        st.session_state.pcr_current_strikes = [int(s) for s in current_strikes]
-                        st.session_state.pcr_chgoi_strike_current_strikes = [int(s) for s in current_strikes]
-                        st.session_state.call_put_oi_current_strikes = [int(s) for s in current_strikes]
-
-                        # Check if we should add new entry (avoid duplicates within 30 seconds)
-                        should_add = True
-                        if st.session_state.pcr_history:
-                            last_entry = st.session_state.pcr_history[-1]
-                            time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
-                            if time_diff < 30:
-                                should_add = False
-
-                        if should_add:
-                            st.session_state.pcr_history.append(pcr_entry)
-                            if len(st.session_state.pcr_history) > 200:
-                                st.session_state.pcr_history = st.session_state.pcr_history[-200:]
-                            db.save_option_history('pcr_history', pcr_entry)
-                            # Also store per-strike ChgOI PCR if data was available
-                            if len(chgoi_entry) > 1:
-                                st.session_state.pcr_chgoi_strike_history.append(chgoi_entry)
-                                if len(st.session_state.pcr_chgoi_strike_history) > 200:
-                                    st.session_state.pcr_chgoi_strike_history = st.session_state.pcr_chgoi_strike_history[-200:]
-                                db.save_option_history('pcr_chgoi_strike_history', chgoi_entry)
-                            # Store raw CE/PE OI and ChgOI per strike
-                            if len(ce_oi_entry) > 1:
-                                st.session_state.call_put_oi_ce_history.append(ce_oi_entry)
-                                if len(st.session_state.call_put_oi_ce_history) > 200:
-                                    st.session_state.call_put_oi_ce_history = st.session_state.call_put_oi_ce_history[-200:]
-                                st.session_state.call_put_oi_pe_history.append(pe_oi_entry)
-                                if len(st.session_state.call_put_oi_pe_history) > 200:
-                                    st.session_state.call_put_oi_pe_history = st.session_state.call_put_oi_pe_history[-200:]
-                                db.save_option_history('call_put_oi_ce_history', ce_oi_entry)
-                                db.save_option_history('call_put_oi_pe_history', pe_oi_entry)
-                            if len(ce_chgoi_entry) > 1:
-                                st.session_state.call_put_chgoi_ce_history.append(ce_chgoi_entry)
-                                if len(st.session_state.call_put_chgoi_ce_history) > 200:
-                                    st.session_state.call_put_chgoi_ce_history = st.session_state.call_put_chgoi_ce_history[-200:]
-                                st.session_state.call_put_chgoi_pe_history.append(pe_chgoi_entry)
-                                if len(st.session_state.call_put_chgoi_pe_history) > 200:
-                                    st.session_state.call_put_chgoi_pe_history = st.session_state.call_put_chgoi_pe_history[-200:]
-                                db.save_option_history('call_put_chgoi_ce_history', ce_chgoi_entry)
-                                db.save_option_history('call_put_chgoi_pe_history', pe_chgoi_entry)
-                            # Store raw CE/PE Volume per strike
-                            if len(ce_vol_entry) > 1:
-                                st.session_state.call_put_vol_ce_history.append(ce_vol_entry)
-                                if len(st.session_state.call_put_vol_ce_history) > 200:
-                                    st.session_state.call_put_vol_ce_history = st.session_state.call_put_vol_ce_history[-200:]
-                                st.session_state.call_put_vol_pe_history.append(pe_vol_entry)
-                                if len(st.session_state.call_put_vol_pe_history) > 200:
-                                    st.session_state.call_put_vol_pe_history = st.session_state.call_put_vol_pe_history[-200:]
-                                db.save_option_history('call_put_vol_ce_history', ce_vol_entry)
-                                db.save_option_history('call_put_vol_pe_history', pe_vol_entry)
-                                # Compute Change-in-Volume (delta from previous snapshot)
-                                _chgvol_ce_entry = {'time': current_time}
-                                _chgvol_pe_entry = {'time': current_time}
-                                _prev_ce_vol = st.session_state.call_put_vol_ce_history[-2] if len(st.session_state.call_put_vol_ce_history) >= 2 else None
-                                _prev_pe_vol = st.session_state.call_put_vol_pe_history[-2] if len(st.session_state.call_put_vol_pe_history) >= 2 else None
-                                for _, _vr in pcr_df.iterrows():
-                                    _vsk = str(int(_vr['Strike']))
-                                    _cur_ce_v = ce_vol_entry.get(_vsk, 0)
-                                    _cur_pe_v = pe_vol_entry.get(_vsk, 0)
-                                    _prev_ce_v = _prev_ce_vol.get(_vsk, _cur_ce_v) if _prev_ce_vol else _cur_ce_v
-                                    _prev_pe_v = _prev_pe_vol.get(_vsk, _cur_pe_v) if _prev_pe_vol else _cur_pe_v
-                                    _chgvol_ce_entry[_vsk] = _cur_ce_v - _prev_ce_v
-                                    _chgvol_pe_entry[_vsk] = _cur_pe_v - _prev_pe_v
-                                st.session_state.call_put_chgvol_ce_history.append(_chgvol_ce_entry)
-                                if len(st.session_state.call_put_chgvol_ce_history) > 200:
-                                    st.session_state.call_put_chgvol_ce_history = st.session_state.call_put_chgvol_ce_history[-200:]
-                                st.session_state.call_put_chgvol_pe_history.append(_chgvol_pe_entry)
-                                if len(st.session_state.call_put_chgvol_pe_history) > 200:
-                                    st.session_state.call_put_chgvol_pe_history = st.session_state.call_put_chgvol_pe_history[-200:]
-                                db.save_option_history('call_put_chgvol_ce_history', _chgvol_ce_entry)
-                                db.save_option_history('call_put_chgvol_pe_history', _chgvol_pe_entry)
-
-            except Exception as e:
-                st.caption(f"⚠️ Current fetch issue: {str(e)[:50]}...")
-
-        # ALWAYS try to display the graph if we have history (even if current fetch failed)
-        if len(st.session_state.pcr_history) > 0:
-            try:
-                history_df = pd.DataFrame(st.session_state.pcr_history)
-
-                # Get current ATM ±2 strikes (stored by strike price only)
-                current_strikes = getattr(st.session_state, 'pcr_current_strikes', [])
-
-                # If no current strikes available, try to get from last valid data
-                if not current_strikes and st.session_state.pcr_last_valid_data is not None:
-                    current_strikes = [int(s) for s in st.session_state.pcr_last_valid_data['Strike'].tolist()]
-
-                # Sort strikes (ascending: ITM-2, ITM-1, ATM, OTM+1, OTM+2)
-                current_strikes = sorted(current_strikes)
-
-                position_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
-                position_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
-
-                # ── PCR OI + ChgOI PCR per strike ──
-                chgoi_hist = st.session_state.pcr_chgoi_strike_history
-                chgoi_history_df = pd.DataFrame(chgoi_hist) if chgoi_hist else None
-
-                combined_cols = st.columns(5)
-                for i, col in enumerate(combined_cols):
-                    with col:
-                        if i >= len(current_strikes):
-                            st.info(f"{position_labels[i]} N/A")
-                            continue
-
-                        strike = current_strikes[i]
-                        strike_col = str(strike)
-
-                        fig = go.Figure()
-
-                        # ── PCR OI (solid blue) ──
-                        if strike_col in history_df.columns:
-                            fig.add_trace(go.Scatter(
-                                x=history_df['time'],
-                                y=history_df[strike_col],
-                                mode='lines+markers',
-                                name='PCR OI',
-                                line=dict(color='#00ccff', width=2),
-                                marker=dict(size=3),
-                            ))
-
-                        # ── ChgOI PCR (dashed orange) ──
-                        if chgoi_history_df is not None and strike_col in chgoi_history_df.columns:
-                            fig.add_trace(go.Scatter(
-                                x=chgoi_history_df['time'],
-                                y=chgoi_history_df[strike_col],
-                                mode='lines+markers',
-                                name='PCR ChgOI',
-                                line=dict(color='#ffaa00', width=2, dash='dash'),
-                                marker=dict(size=3),
-                            ))
-
-                        # PCR reference lines
-                        fig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.533)", line_width=1,
-                                      annotation_text="Bull 1.2", annotation_position="right",
-                                      annotation_font_size=8, annotation_font_color="#00ff88")
-                        fig.add_hline(y=0.7, line_dash="dot", line_color="rgba(255,68,68,0.533)", line_width=1,
-                                      annotation_text="Bear 0.7", annotation_position="right",
-                                      annotation_font_size=8, annotation_font_color="#ff4444")
-
-                        # Dynamic Y range: include both OI PCR and ChgOI PCR values + thresholds
-                        _cmp_vals = []
-                        if strike_col in history_df.columns:
-                            _cmp_vals += history_df[strike_col].dropna().tolist()
-                        if chgoi_history_df is not None and strike_col in chgoi_history_df.columns:
-                            _cmp_vals += chgoi_history_df[strike_col].dropna().tolist()
-                        _cmp_vals += [0.7, 1.2]
-                        _cmp_ymin = max(0.0, min(_cmp_vals) * 0.9)
-                        _cmp_ymax = max(_cmp_vals) * 1.1
-
-                        # ── Current value markers (present value shown in graph) ──
-                        if strike_col in history_df.columns and len(history_df) > 0:
-                            _pcr_cur = history_df[strike_col].iloc[-1]
-                            fig.add_trace(go.Scatter(
-                                x=[history_df['time'].iloc[-1]], y=[_pcr_cur],
-                                mode='markers+text', text=[f'{_pcr_cur:.2f}'],
-                                textposition='top right', textfont=dict(size=9, color='#00ccff'),
-                                marker=dict(size=9, color='#00ccff', symbol='circle'),
-                                showlegend=False, hoverinfo='skip',
-                            ))
-                        if chgoi_history_df is not None and strike_col in chgoi_history_df.columns and len(chgoi_history_df) > 0:
-                            _chgoi_cur = chgoi_history_df[strike_col].iloc[-1]
-                            fig.add_trace(go.Scatter(
-                                x=[chgoi_history_df['time'].iloc[-1]], y=[_chgoi_cur],
-                                mode='markers+text', text=[f'{_chgoi_cur:.2f}'],
-                                textposition='bottom right', textfont=dict(size=9, color='#ffaa00'),
-                                marker=dict(size=9, color='#ffaa00', symbol='diamond'),
-                                showlegend=False, hoverinfo='skip',
-                            ))
-
-                        fig.update_layout(
-                            title=dict(text=f"{position_labels[i]}<br>₹{strike}", font=dict(size=11)),
-                            template='plotly_dark',
-                            height=300,
-                            showlegend=True,
-                            legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                                        xanchor='center', x=0.5, font=dict(size=8)),
-                            margin=dict(l=5, r=10, t=70, b=30),
-                            xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                            yaxis=dict(title='PCR', range=[_cmp_ymin, _cmp_ymax]),
-                            plot_bgcolor='#1e1e1e',
-                            paper_bgcolor='#1e1e1e',
-                        )
-
-                        st.plotly_chart(fig, use_container_width=True)
-
-                        # Signal summary below chart
-                        cur_pcr = history_df[strike_col].iloc[-1] if (
-                            strike_col in history_df.columns and len(history_df) > 0) else 1.0
-                        pcr_sig = "🟢 Bull" if cur_pcr > 1.2 else ("🔴 Bear" if cur_pcr < 0.7 else "🟡 Ntrl")
-                        st.caption(f"PCR {cur_pcr:.2f} {pcr_sig}")
-
-                # ── Send PCR chart to Telegram every 5 minutes ──
-                _now = datetime.now(pytz.timezone('Asia/Kolkata'))
-                _last_sent = st.session_state.pcr_telegram_last_sent
-                _should_send = (
-                    _last_sent is None
-                    or (_now - _last_sent).total_seconds() >= 300
+                render_options_analysis_panel(
+                    option_data=_sx_option_data,
+                    current_price=_sx_option_data['underlying'],
+                    api=api,
+                    lot_size=10,
+                    index_name="SENSEX",
+                    symbol_prefix="SENSEX",
                 )
-                if _should_send and current_strikes:
-                    try:
-                        from plotly.subplots import make_subplots as _make_subplots
-                        _n = len(current_strikes)
-                        _tg_fig = _make_subplots(
-                            rows=1, cols=_n,
-                            subplot_titles=[
-                                f"{position_labels[i]}<br>₹{current_strikes[i]}"
-                                for i in range(_n)
-                            ],
-                        )
-                        for _i, _strike in enumerate(current_strikes):
-                            _sc = str(_strike)
-                            _col_idx = _i + 1
-                            if _sc in history_df.columns:
-                                _tg_fig.add_trace(go.Scatter(
-                                    x=history_df['time'],
-                                    y=history_df[_sc],
-                                    mode='lines',
-                                    name='PCR OI',
-                                    line=dict(color='#00ccff', width=2),
-                                    showlegend=(_i == 0),
-                                ), row=1, col=_col_idx)
-                            if chgoi_history_df is not None and _sc in chgoi_history_df.columns:
-                                _tg_fig.add_trace(go.Scatter(
-                                    x=chgoi_history_df['time'],
-                                    y=chgoi_history_df[_sc],
-                                    mode='lines',
-                                    name='ChgOI PCR',
-                                    line=dict(color='#ffaa00', width=2, dash='dash'),
-                                    showlegend=(_i == 0),
-                                ), row=1, col=_col_idx)
-                            _tg_fig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.5)",
-                                              line_width=1, row=1, col=_col_idx)
-                            _tg_fig.add_hline(y=0.7, line_dash="dot", line_color="rgba(255,68,68,0.5)",
-                                              line_width=1, row=1, col=_col_idx)
-                        _tg_fig.update_layout(
-                            title="ATM ±2 Strike Comparison — PCR · ChgOI PCR",
-                            template='plotly_dark',
-                            height=350,
-                            width=1400,
-                            paper_bgcolor='#1e1e1e',
-                            plot_bgcolor='#1e1e1e',
-                            margin=dict(l=10, r=10, t=80, b=40),
-                            legend=dict(orientation='h', yanchor='bottom', y=1.06, xanchor='center', x=0.5),
-                        )
-                        _tg_fig.update_xaxes(tickformat='%H:%M', tickfont=dict(size=8))
-                        _tg_fig.update_yaxes(title_text='PCR', tickfont=dict(size=8))
-                        _img_bytes = _tg_fig.to_image(format="png", scale=2)
-                        # Build caption with current PCR values
-                        _caption_parts = [f"<b>ATM ±2 PCR · ChgOI PCR</b>  {_now.strftime('%H:%M')}  Spot: ₹{underlying_price:.0f}"]
-                        for _i, _strike in enumerate(current_strikes):
-                            _sc = str(_strike)
-                            _pcr_v = history_df[_sc].iloc[-1] if _sc in history_df.columns and len(history_df) > 0 else None
-                            _chg_v = (chgoi_history_df[_sc].iloc[-1]
-                                      if chgoi_history_df is not None and _sc in chgoi_history_df.columns and len(chgoi_history_df) > 0
-                                      else None)
-                            _lbl = position_labels[_i].split(" ", 1)[-1]  # strip emoji
-                            _sig = "🟢" if (_pcr_v and _pcr_v > 1.2) else ("🔴" if (_pcr_v and _pcr_v < 0.7) else "🟡")
-                            _pcr_str = f"{_pcr_v:.2f}" if _pcr_v is not None else "N/A"
-                            _chg_str = f"{_chg_v:.2f}" if _chg_v is not None else "N/A"
-                            _caption_parts.append(f"{_sig} ₹{_strike} ({_lbl}): OI={_pcr_str} | ChgOI={_chg_str}")
-                        send_telegram_photo_sync(_img_bytes, "\n".join(_caption_parts))
-                        st.session_state.pcr_telegram_last_sent = _now
-                    except Exception as _tg_err:
-                        pass  # silently skip if chart export fails
-
-                # ── ATM ±2 Strike GEX (separate row) ──
-                st.markdown("---")
-                st.markdown("### 📊 ATM ±2 Strike GEX")
-                has_gex_hist = len(st.session_state.gex_history) > 0
-                gex_hist_df = pd.DataFrame(st.session_state.gex_history) if has_gex_hist else None
-                gex_current_strikes = sorted(getattr(st.session_state, 'gex_current_strikes', current_strikes))
-
-                cur_gex_vals = {}
-                if gex_data_pre and 'gex_df' in gex_data_pre:
-                    for _, gr in gex_data_pre['gex_df'].iterrows():
-                        cur_gex_vals[int(gr['Strike'])] = gr['Net_GEX']
-
-                gex_cols = st.columns(5)
-                for i, col in enumerate(gex_cols):
-                    with col:
-                        if i >= len(current_strikes):
-                            st.info(f"{position_labels[i]} N/A")
-                            continue
-                        strike = current_strikes[i]
-                        strike_col = str(strike)
-                        clr = position_colors[i]
-                        _rgb = tuple(int(clr.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
-                        _fill = f'rgba({_rgb[0]},{_rgb[1]},{_rgb[2]},0.15)'
-                        fig_gex = go.Figure()
-                        cur_gex = cur_gex_vals.get(strike, 0)
-                        if has_gex_hist and gex_hist_df is not None and strike_col in gex_hist_df.columns:
-                            gex_series = gex_hist_df[strike_col]
-                            cur_gex = gex_series.iloc[-1]
-                            gex_vals = gex_series.dropna()
-                            max_abs = max(abs(gex_vals.max()), abs(gex_vals.min()), 15) if len(gex_vals) > 0 else 20
-                            fig_gex.add_trace(go.Scatter(
-                                x=gex_hist_df['time'],
-                                y=gex_series,
-                                mode='lines+markers',
-                                name='GEX (L)',
-                                line=dict(color=clr, width=2),
-                                marker=dict(size=3),
-                                fill='tozeroy',
-                                fillcolor=_fill,
-                            ))
-                            fig_gex.update_layout(yaxis=dict(
-                                range=[-max_abs * 1.1, max_abs * 1.1],
-                                zeroline=True, zerolinecolor='white', zerolinewidth=2,
-                            ))
-                        elif strike in cur_gex_vals:
-                            fig_gex.add_trace(go.Scatter(
-                                x=[datetime.now(pytz.timezone('Asia/Kolkata'))],
-                                y=[cur_gex],
-                                mode='markers+text',
-                                name='GEX (L)',
-                                marker=dict(size=14, color=clr, symbol='diamond'),
-                                text=[f'{cur_gex:+.1f}L'],
-                                textposition='top center',
-                                textfont=dict(size=10, color='white'),
-                            ))
-                        fig_gex.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.4)", line_width=1)
-                        fig_gex.add_hline(y=10, line_dash="dot", line_color="rgba(0,255,136,0.4)", line_width=1,
-                                          annotation_text="+10", annotation_position="right",
-                                          annotation_font_size=8, annotation_font_color="#00ff88")
-                        fig_gex.add_hline(y=-10, line_dash="dot", line_color="rgba(255,68,68,0.4)", line_width=1,
-                                          annotation_text="-10", annotation_position="right",
-                                          annotation_font_size=8, annotation_font_color="#ff4444")
-                        # Current value marker (present value shown in graph)
-                        if has_gex_hist and gex_hist_df is not None and strike_col in gex_hist_df.columns and len(gex_hist_df) > 0:
-                            fig_gex.add_trace(go.Scatter(
-                                x=[gex_hist_df['time'].iloc[-1]], y=[cur_gex],
-                                mode='markers+text', text=[f'{cur_gex:+.1f}L'],
-                                textposition='top right', textfont=dict(size=9, color=clr),
-                                marker=dict(size=9, color=clr, symbol='circle'),
-                                showlegend=False, hoverinfo='skip',
-                            ))
-                        fig_gex.update_layout(
-                            title=dict(text=f"{position_labels[i]}<br>₹{strike}<br>GEX: {cur_gex:+.1f}L",
-                                       font=dict(size=11)),
-                            template='plotly_dark',
-                            height=300,
-                            showlegend=False,
-                            margin=dict(l=5, r=10, t=70, b=30),
-                            xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                            yaxis=dict(title='GEX (L)',
-                                       title_font=dict(color=clr, size=9),
-                                       tickfont=dict(size=8)),
-                            plot_bgcolor='#1e1e1e',
-                            paper_bgcolor='#1e1e1e',
-                        )
-                        st.plotly_chart(fig_gex, use_container_width=True)
-                        gex_sig = "📍 Pin" if cur_gex > 10 else ("⚡ Accel" if cur_gex < -10 else "➡️ Ntrl")
-                        st.caption(f"GEX {cur_gex:+.1f}L {gex_sig}")
-
-                # ── Status & controls ──
-                col_info1, col_info2 = st.columns([3, 1])
-                with col_info1:
-                    status = "🟢 Live" if pcr_data_available else "🟡 Using cached history"
-                    st.caption(f"{status} | 📈 {len(st.session_state.pcr_history)} PCR pts · "
-                               f"{len(chgoi_hist)} ChgOI pts")
-                with col_info2:
-                    if st.button("🗑️ Clear History"):
-                        st.session_state.pcr_history = []
-                        st.session_state.pcr_last_valid_data = None
-                        st.session_state.pcr_chgoi_strike_history = []
-                        st.session_state.gex_history = []
-                        st.session_state.call_put_oi_ce_history = []
-                        st.session_state.call_put_oi_pe_history = []
-                        st.session_state.call_put_chgoi_ce_history = []
-                        st.session_state.call_put_chgoi_pe_history = []
-                        st.session_state.call_put_vol_ce_history = []
-                        st.session_state.call_put_vol_pe_history = []
-                        st.session_state.call_put_chgvol_ce_history = []
-                        st.session_state.call_put_chgvol_pe_history = []
-                        st.session_state.oi_positioning_history = []
-                        # Reset MDE price history
-                        _mde_inst = get_master_data()
-                        _mde_inst._price_history = []
-                        st.rerun()
-
-            except Exception as e:
-                st.warning(f"Error displaying comparison charts: {str(e)}")
+            finally:
+                _idx_swap_out('sx')
         else:
-            st.info("📊 History will build up as the app refreshes. Please wait for data collection…")
-
-        # ===== ATM ±2 STRIKE COMPARISON: CALL OI vs PUT OI / CE ΔOI vs PE ΔOI =====
-        st.markdown("---")
-        st.markdown("## 📊 ATM ±2 Strike Comparison — Call OI · Put OI")
-
-        _cp_ce_hist = st.session_state.call_put_oi_ce_history
-        _cp_pe_hist = st.session_state.call_put_oi_pe_history
-        _cp_ce_chg_hist = st.session_state.call_put_chgoi_ce_history
-        _cp_pe_chg_hist = st.session_state.call_put_chgoi_pe_history
-
-        if len(_cp_ce_hist) > 0 and len(_cp_pe_hist) > 0:
-            try:
-                _cp_ce_df = pd.DataFrame(_cp_ce_hist)
-                _cp_pe_df = pd.DataFrame(_cp_pe_hist)
-                _cp_ce_chg_df = pd.DataFrame(_cp_ce_chg_hist) if _cp_ce_chg_hist else None
-                _cp_pe_chg_df = pd.DataFrame(_cp_pe_chg_hist) if _cp_pe_chg_hist else None
-
-                _cp_strikes = sorted(getattr(st.session_state, 'call_put_oi_current_strikes', []))
-                if not _cp_strikes:
-                    _cp_strikes = sorted(getattr(st.session_state, 'pcr_current_strikes', []))
-
-                _cp_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
-
-                # ── Row 1: Call OI vs Put OI per strike ──
-                _cp_oi_cols = st.columns(5)
-                for _ci, _ccol in enumerate(_cp_oi_cols):
-                    with _ccol:
-                        if _ci >= len(_cp_strikes):
-                            st.info(f"{_cp_pos_labels[_ci]} N/A")
-                            continue
-
-                        _cp_strike = _cp_strikes[_ci]
-                        _cp_sc = str(_cp_strike)
-
-                        _cp_fig = go.Figure()
-
-                        # CE OI (solid red)
-                        if _cp_sc in _cp_ce_df.columns:
-                            _cp_fig.add_trace(go.Scatter(
-                                x=_cp_ce_df['time'], y=_cp_ce_df[_cp_sc],
-                                mode='lines+markers', name='Call OI',
-                                line=dict(color='#ff4444', width=2),
-                                marker=dict(size=3),
-                            ))
-                        # PE OI (dashed green)
-                        if _cp_sc in _cp_pe_df.columns:
-                            _cp_fig.add_trace(go.Scatter(
-                                x=_cp_pe_df['time'], y=_cp_pe_df[_cp_sc],
-                                mode='lines+markers', name='Put OI',
-                                line=dict(color='#00ff88', width=2, dash='dash'),
-                                marker=dict(size=3),
-                            ))
-
-                        # Dynamic Y range
-                        _cp_oi_vals = []
-                        if _cp_sc in _cp_ce_df.columns:
-                            _cp_oi_vals += _cp_ce_df[_cp_sc].dropna().tolist()
-                        if _cp_sc in _cp_pe_df.columns:
-                            _cp_oi_vals += _cp_pe_df[_cp_sc].dropna().tolist()
-                        if _cp_oi_vals:
-                            _cp_oi_ymin = max(0, min(_cp_oi_vals) * 0.9)
-                            _cp_oi_ymax = max(_cp_oi_vals) * 1.1
-                        else:
-                            _cp_oi_ymin, _cp_oi_ymax = 0, 100
-
-                        # Current value markers
-                        _cp_ce_cur = None
-                        _cp_pe_cur = None
-                        if _cp_sc in _cp_ce_df.columns and len(_cp_ce_df) > 0:
-                            _cp_ce_cur = _cp_ce_df[_cp_sc].iloc[-1]
-                            _cp_fig.add_trace(go.Scatter(
-                                x=[_cp_ce_df['time'].iloc[-1]], y=[_cp_ce_cur],
-                                mode='markers+text', text=[f'{_cp_ce_cur:,.0f}'],
-                                textposition='top right', textfont=dict(size=9, color='#ff4444'),
-                                marker=dict(size=9, color='#ff4444', symbol='circle'),
-                                showlegend=False, hoverinfo='skip',
-                            ))
-                        if _cp_sc in _cp_pe_df.columns and len(_cp_pe_df) > 0:
-                            _cp_pe_cur = _cp_pe_df[_cp_sc].iloc[-1]
-                            _cp_fig.add_trace(go.Scatter(
-                                x=[_cp_pe_df['time'].iloc[-1]], y=[_cp_pe_cur],
-                                mode='markers+text', text=[f'{_cp_pe_cur:,.0f}'],
-                                textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
-                                marker=dict(size=9, color='#00ff88', symbol='diamond'),
-                                showlegend=False, hoverinfo='skip',
-                            ))
-
-                        # Title with current values
-                        _cp_ce_str = f"CE: {_cp_ce_cur:,.0f}" if _cp_ce_cur is not None else "CE: --"
-                        _cp_pe_str = f"PE: {_cp_pe_cur:,.0f}" if _cp_pe_cur is not None else "PE: --"
-
-                        _cp_fig.update_layout(
-                            title=dict(text=f"{_cp_pos_labels[_ci]}<br>₹{_cp_strike}<br>{_cp_ce_str} | {_cp_pe_str}",
-                                       font=dict(size=11)),
-                            template='plotly_dark', height=300,
-                            showlegend=True,
-                            legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                                        xanchor='center', x=0.5, font=dict(size=8)),
-                            margin=dict(l=5, r=10, t=70, b=30),
-                            xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                            yaxis=dict(title='OI', range=[_cp_oi_ymin, _cp_oi_ymax]),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                        )
-                        st.plotly_chart(_cp_fig, use_container_width=True)
-
-                        # Signal: which side dominates
-                        if _cp_ce_cur is not None and _cp_pe_cur is not None and _cp_ce_cur > 0:
-                            _cp_pcr_v = _cp_pe_cur / _cp_ce_cur
-                            _cp_sig = "🟢 Bull" if _cp_pcr_v > 1.2 else ("🔴 Bear" if _cp_pcr_v < 0.7 else "🟡 Ntrl")
-                            st.caption(f"PE/CE {_cp_pcr_v:.2f} {_cp_sig}")
-                        else:
-                            st.caption("--")
-
-                # ── Row 2: CE ΔOI vs PE ΔOI per strike (Change in OI) ──
-                if _cp_ce_chg_df is not None and _cp_pe_chg_df is not None:
-                    st.markdown("### 📊 ATM ±2 Strike Comparison — CE ΔOI · PE ΔOI")
-                    _cp_chg_cols = st.columns(5)
-                    for _ci, _ccol in enumerate(_cp_chg_cols):
-                        with _ccol:
-                            if _ci >= len(_cp_strikes):
-                                st.info(f"{_cp_pos_labels[_ci]} N/A")
-                                continue
-
-                            _cp_strike = _cp_strikes[_ci]
-                            _cp_sc = str(_cp_strike)
-
-                            _chg_fig = go.Figure()
-
-                            # CE ΔOI (solid red)
-                            if _cp_sc in _cp_ce_chg_df.columns:
-                                _chg_fig.add_trace(go.Scatter(
-                                    x=_cp_ce_chg_df['time'], y=_cp_ce_chg_df[_cp_sc],
-                                    mode='lines+markers', name='CE ΔOI',
-                                    line=dict(color='#ff4444', width=2),
-                                    marker=dict(size=3),
-                                ))
-                            # PE ΔOI (dashed green)
-                            if _cp_sc in _cp_pe_chg_df.columns:
-                                _chg_fig.add_trace(go.Scatter(
-                                    x=_cp_pe_chg_df['time'], y=_cp_pe_chg_df[_cp_sc],
-                                    mode='lines+markers', name='PE ΔOI',
-                                    line=dict(color='#00ff88', width=2, dash='dash'),
-                                    marker=dict(size=3),
-                                ))
-
-                            # Zero reference line
-                            _chg_fig.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.4)", line_width=1)
-
-                            # Dynamic Y range
-                            _chg_vals = []
-                            if _cp_sc in _cp_ce_chg_df.columns:
-                                _chg_vals += _cp_ce_chg_df[_cp_sc].dropna().tolist()
-                            if _cp_sc in _cp_pe_chg_df.columns:
-                                _chg_vals += _cp_pe_chg_df[_cp_sc].dropna().tolist()
-                            if _chg_vals:
-                                _chg_max_abs = max(abs(min(_chg_vals)), abs(max(_chg_vals)), 1)
-                                _chg_ymin = -_chg_max_abs * 1.1
-                                _chg_ymax = _chg_max_abs * 1.1
-                            else:
-                                _chg_ymin, _chg_ymax = -100, 100
-
-                            # Current value markers
-                            _chg_ce_cur = None
-                            _chg_pe_cur = None
-                            if _cp_sc in _cp_ce_chg_df.columns and len(_cp_ce_chg_df) > 0:
-                                _chg_ce_cur = _cp_ce_chg_df[_cp_sc].iloc[-1]
-                                _chg_fig.add_trace(go.Scatter(
-                                    x=[_cp_ce_chg_df['time'].iloc[-1]], y=[_chg_ce_cur],
-                                    mode='markers+text', text=[f'{_chg_ce_cur:+,.0f}'],
-                                    textposition='top right', textfont=dict(size=9, color='#ff4444'),
-                                    marker=dict(size=9, color='#ff4444', symbol='circle'),
-                                    showlegend=False, hoverinfo='skip',
-                                ))
-                            if _cp_sc in _cp_pe_chg_df.columns and len(_cp_pe_chg_df) > 0:
-                                _chg_pe_cur = _cp_pe_chg_df[_cp_sc].iloc[-1]
-                                _chg_fig.add_trace(go.Scatter(
-                                    x=[_cp_pe_chg_df['time'].iloc[-1]], y=[_chg_pe_cur],
-                                    mode='markers+text', text=[f'{_chg_pe_cur:+,.0f}'],
-                                    textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
-                                    marker=dict(size=9, color='#00ff88', symbol='diamond'),
-                                    showlegend=False, hoverinfo='skip',
-                                ))
-
-                            _chg_ce_s = f"CE: {_chg_ce_cur:+,.0f}" if _chg_ce_cur is not None else "CE: --"
-                            _chg_pe_s = f"PE: {_chg_pe_cur:+,.0f}" if _chg_pe_cur is not None else "PE: --"
-
-                            _chg_fig.update_layout(
-                                title=dict(text=f"{_cp_pos_labels[_ci]}<br>₹{_cp_strike}<br>{_chg_ce_s} | {_chg_pe_s}",
-                                           font=dict(size=11)),
-                                template='plotly_dark', height=300,
-                                showlegend=True,
-                                legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                                            xanchor='center', x=0.5, font=dict(size=8)),
-                                margin=dict(l=5, r=10, t=70, b=30),
-                                xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                                yaxis=dict(title='ΔOI', range=[_chg_ymin, _chg_ymax],
-                                           zeroline=True, zerolinecolor='white', zerolinewidth=1),
-                                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                            )
-                            st.plotly_chart(_chg_fig, use_container_width=True)
-
-                            # Signal: net change direction
-                            if _chg_ce_cur is not None and _chg_pe_cur is not None:
-                                _net = _chg_pe_cur - _chg_ce_cur
-                                _chg_sig = "🟢 Bull" if _net > 0 else ("🔴 Bear" if _net < 0 else "🟡 Ntrl")
-                                st.caption(f"Net ΔOI {_net:+,.0f} {_chg_sig}")
-                            else:
-                                st.caption("--")
-
-                # ── Telegram: send Call OI vs Put OI chart every 5 minutes ──
-                _cp_now = datetime.now(pytz.timezone('Asia/Kolkata'))
-                _cp_last_sent = st.session_state.call_put_oi_telegram_last_sent
-                _cp_should_send = (_cp_last_sent is None or (_cp_now - _cp_last_sent).total_seconds() >= 300)
-                if _cp_should_send and _cp_strikes:
-                    try:
-                        from plotly.subplots import make_subplots as _cp_make_subplots
-                        _cp_n = len(_cp_strikes)
-                        # Combined OI + ΔOI in 2 rows
-                        _has_chg = _cp_ce_chg_df is not None and _cp_pe_chg_df is not None
-                        _cp_rows = 2 if _has_chg else 1
-                        _cp_subtitles = [f"{_cp_pos_labels[i]}<br>₹{_cp_strikes[i]}" for i in range(_cp_n)]
-                        if _has_chg:
-                            _cp_subtitles += [f"ΔOI ₹{_cp_strikes[i]}" for i in range(_cp_n)]
-                        _cp_tg_fig = _cp_make_subplots(
-                            rows=_cp_rows, cols=_cp_n,
-                            subplot_titles=_cp_subtitles,
-                        )
-                        for _ci, _cs in enumerate(_cp_strikes):
-                            _csc = str(_cs)
-                            _col_idx = _ci + 1
-                            if _csc in _cp_ce_df.columns:
-                                _cp_tg_fig.add_trace(go.Scatter(
-                                    x=_cp_ce_df['time'], y=_cp_ce_df[_csc],
-                                    mode='lines', name='Call OI',
-                                    line=dict(color='#ff4444', width=2),
-                                    showlegend=(_ci == 0),
-                                ), row=1, col=_col_idx)
-                            if _csc in _cp_pe_df.columns:
-                                _cp_tg_fig.add_trace(go.Scatter(
-                                    x=_cp_pe_df['time'], y=_cp_pe_df[_csc],
-                                    mode='lines', name='Put OI',
-                                    line=dict(color='#00ff88', width=2, dash='dash'),
-                                    showlegend=(_ci == 0),
-                                ), row=1, col=_col_idx)
-                            if _has_chg:
-                                if _csc in _cp_ce_chg_df.columns:
-                                    _cp_tg_fig.add_trace(go.Scatter(
-                                        x=_cp_ce_chg_df['time'], y=_cp_ce_chg_df[_csc],
-                                        mode='lines', name='CE ΔOI',
-                                        line=dict(color='#ff4444', width=2),
-                                        showlegend=(_ci == 0),
-                                    ), row=2, col=_col_idx)
-                                if _csc in _cp_pe_chg_df.columns:
-                                    _cp_tg_fig.add_trace(go.Scatter(
-                                        x=_cp_pe_chg_df['time'], y=_cp_pe_chg_df[_csc],
-                                        mode='lines', name='PE ΔOI',
-                                        line=dict(color='#00ff88', width=2, dash='dash'),
-                                        showlegend=(_ci == 0),
-                                    ), row=2, col=_col_idx)
-                        _cp_tg_fig.update_layout(
-                            title="ATM ±2 Strike Comparison — Call OI · Put OI · ΔOI",
-                            template='plotly_dark',
-                            height=350 * _cp_rows, width=1400,
-                            paper_bgcolor='#1e1e1e', plot_bgcolor='#1e1e1e',
-                            margin=dict(l=10, r=10, t=80, b=40),
-                            legend=dict(orientation='h', yanchor='bottom', y=1.06, xanchor='center', x=0.5),
-                        )
-                        _cp_tg_fig.update_xaxes(tickformat='%H:%M', tickfont=dict(size=8))
-                        _cp_tg_fig.update_yaxes(tickfont=dict(size=8))
-                        _cp_img = _cp_tg_fig.to_image(format="png", scale=2)
-                        _cp_caption = [f"<b>ATM ±2 Call OI · Put OI</b>  {_cp_now.strftime('%H:%M')}  Spot: ₹{underlying_price:.0f}"]
-                        for _ci, _cs in enumerate(_cp_strikes):
-                            _csc = str(_cs)
-                            _lbl = _cp_pos_labels[_ci].split(" ", 1)[-1]
-                            _ce_v = _cp_ce_df[_csc].iloc[-1] if _csc in _cp_ce_df.columns and len(_cp_ce_df) > 0 else None
-                            _pe_v = _cp_pe_df[_csc].iloc[-1] if _csc in _cp_pe_df.columns and len(_cp_pe_df) > 0 else None
-                            _ce_s = f"{_ce_v:,.0f}" if _ce_v is not None else "N/A"
-                            _pe_s = f"{_pe_v:,.0f}" if _pe_v is not None else "N/A"
-                            _sig = "🟢" if (_ce_v and _pe_v and _pe_v / _ce_v > 1.2) else (
-                                "🔴" if (_ce_v and _pe_v and _pe_v / _ce_v < 0.7) else "🟡")
-                            _cp_caption.append(f"{_sig} ₹{_cs} ({_lbl}): CE={_ce_s} | PE={_pe_s}")
-                        send_telegram_photo_sync(_cp_img, "\n".join(_cp_caption))
-                        st.session_state.call_put_oi_telegram_last_sent = _cp_now
-                    except Exception:
-                        pass  # silently skip if chart export fails
-
-                # ── Status ──
-                _cp_status = "🟢 Live" if pcr_data_available else "🟡 Using cached history"
-                st.caption(f"{_cp_status} | 📈 {len(_cp_ce_hist)} Call/Put OI pts")
-
-            except Exception as _cp_err:
-                st.warning(f"Error displaying Call/Put OI charts: {str(_cp_err)}")
-        else:
-            st.info("📊 Call/Put OI history will build up as the app refreshes. Please wait for data collection…")
-
-        # ===== ATM ±2 Strike Comparison — Call Volume · Put Volume =====
-        st.markdown("---")
-        st.markdown("## 📊 ATM ±2 Strike Comparison — Call Volume · Put Volume")
-
-        _cv_ce_hist = st.session_state.call_put_vol_ce_history
-        _cv_pe_hist = st.session_state.call_put_vol_pe_history
-        _cv_ce_chg_hist = st.session_state.call_put_chgvol_ce_history
-        _cv_pe_chg_hist = st.session_state.call_put_chgvol_pe_history
-
-        if len(_cv_ce_hist) > 0 and len(_cv_pe_hist) > 0:
-            try:
-                _cv_ce_df = pd.DataFrame(_cv_ce_hist)
-                _cv_pe_df = pd.DataFrame(_cv_pe_hist)
-                _cv_ce_chg_df = pd.DataFrame(_cv_ce_chg_hist) if _cv_ce_chg_hist else None
-                _cv_pe_chg_df = pd.DataFrame(_cv_pe_chg_hist) if _cv_pe_chg_hist else None
-
-                _cv_strikes = sorted(getattr(st.session_state, 'call_put_oi_current_strikes', []))
-                if not _cv_strikes:
-                    _cv_strikes = sorted(getattr(st.session_state, 'pcr_current_strikes', []))
-
-                _cv_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
-
-                # ── Row 1: Call Volume vs Put Volume per strike ──
-                _cv_vol_cols = st.columns(5)
-                for _vi, _vcol in enumerate(_cv_vol_cols):
-                    with _vcol:
-                        if _vi >= len(_cv_strikes):
-                            st.info(f"{_cv_pos_labels[_vi]} N/A")
-                            continue
-
-                        _cv_strike = _cv_strikes[_vi]
-                        _cv_sc = str(_cv_strike)
-
-                        _cv_fig = go.Figure()
-
-                        # CE Volume (solid red)
-                        if _cv_sc in _cv_ce_df.columns:
-                            _cv_fig.add_trace(go.Scatter(
-                                x=_cv_ce_df['time'], y=_cv_ce_df[_cv_sc],
-                                mode='lines+markers', name='Call Vol',
-                                line=dict(color='#ff4444', width=2),
-                                marker=dict(size=3),
-                            ))
-                        # PE Volume (solid green)
-                        if _cv_sc in _cv_pe_df.columns:
-                            _cv_fig.add_trace(go.Scatter(
-                                x=_cv_pe_df['time'], y=_cv_pe_df[_cv_sc],
-                                mode='lines+markers', name='Put Vol',
-                                line=dict(color='#00ff88', width=2, dash='dash'),
-                                marker=dict(size=3),
-                            ))
-
-                        # Dynamic Y range
-                        _cv_vals = []
-                        if _cv_sc in _cv_ce_df.columns:
-                            _cv_vals += _cv_ce_df[_cv_sc].dropna().tolist()
-                        if _cv_sc in _cv_pe_df.columns:
-                            _cv_vals += _cv_pe_df[_cv_sc].dropna().tolist()
-                        if _cv_vals:
-                            _cv_ymin = max(0, min(_cv_vals) * 0.9)
-                            _cv_ymax = max(_cv_vals) * 1.1
-                        else:
-                            _cv_ymin, _cv_ymax = 0, 100
-
-                        # Current value markers
-                        _cv_ce_cur = None
-                        _cv_pe_cur = None
-                        if _cv_sc in _cv_ce_df.columns and len(_cv_ce_df) > 0:
-                            _cv_ce_cur = _cv_ce_df[_cv_sc].iloc[-1]
-                            _cv_fig.add_trace(go.Scatter(
-                                x=[_cv_ce_df['time'].iloc[-1]], y=[_cv_ce_cur],
-                                mode='markers+text', text=[f'{_cv_ce_cur:,.0f}'],
-                                textposition='top right', textfont=dict(size=9, color='#ff4444'),
-                                marker=dict(size=9, color='#ff4444', symbol='circle'),
-                                showlegend=False, hoverinfo='skip',
-                            ))
-                        if _cv_sc in _cv_pe_df.columns and len(_cv_pe_df) > 0:
-                            _cv_pe_cur = _cv_pe_df[_cv_sc].iloc[-1]
-                            _cv_fig.add_trace(go.Scatter(
-                                x=[_cv_pe_df['time'].iloc[-1]], y=[_cv_pe_cur],
-                                mode='markers+text', text=[f'{_cv_pe_cur:,.0f}'],
-                                textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
-                                marker=dict(size=9, color='#00ff88', symbol='diamond'),
-                                showlegend=False, hoverinfo='skip',
-                            ))
-
-                        # Title with current values
-                        _cv_ce_str = f"CE: {_cv_ce_cur:,.0f}" if _cv_ce_cur is not None else "CE: --"
-                        _cv_pe_str = f"PE: {_cv_pe_cur:,.0f}" if _cv_pe_cur is not None else "PE: --"
-
-                        _cv_fig.update_layout(
-                            title=dict(text=f"{_cv_pos_labels[_vi]}<br>₹{_cv_strike}<br>{_cv_ce_str} | {_cv_pe_str}",
-                                       font=dict(size=11)),
-                            template='plotly_dark', height=300,
-                            showlegend=True,
-                            legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                                        xanchor='center', x=0.5, font=dict(size=8)),
-                            margin=dict(l=5, r=10, t=70, b=30),
-                            xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                            yaxis=dict(title='Volume', range=[_cv_ymin, _cv_ymax]),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                        )
-                        st.plotly_chart(_cv_fig, use_container_width=True)
-
-                        # Signal: which side dominates
-                        if _cv_ce_cur is not None and _cv_pe_cur is not None and _cv_ce_cur > 0:
-                            _cv_ratio = _cv_pe_cur / _cv_ce_cur
-                            _cv_sig = "🟢 Bull" if _cv_ratio > 1.2 else ("🔴 Bear" if _cv_ratio < 0.7 else "🟡 Ntrl")
-                            st.caption(f"PE/CE Vol {_cv_ratio:.2f} {_cv_sig}")
-                        else:
-                            st.caption("--")
-
-                # ── Row 2: CE ΔVol vs PE ΔVol per strike (Change in Volume) ──
-                if _cv_ce_chg_df is not None and _cv_pe_chg_df is not None and len(_cv_ce_chg_df) > 0:
-                    st.markdown("### 📊 ATM ±2 Strike Comparison — CE ΔVol · PE ΔVol")
-                    _cv_chg_cols = st.columns(5)
-                    for _vi, _vcol in enumerate(_cv_chg_cols):
-                        with _vcol:
-                            if _vi >= len(_cv_strikes):
-                                st.info(f"{_cv_pos_labels[_vi]} N/A")
-                                continue
-
-                            _cv_strike = _cv_strikes[_vi]
-                            _cv_sc = str(_cv_strike)
-
-                            _cvchg_fig = go.Figure()
-
-                            # CE ΔVol (solid red)
-                            if _cv_sc in _cv_ce_chg_df.columns:
-                                _cvchg_fig.add_trace(go.Scatter(
-                                    x=_cv_ce_chg_df['time'], y=_cv_ce_chg_df[_cv_sc],
-                                    mode='lines+markers', name='CE ΔVol',
-                                    line=dict(color='#ff4444', width=2),
-                                    marker=dict(size=3),
-                                ))
-                            # PE ΔVol (solid green)
-                            if _cv_sc in _cv_pe_chg_df.columns:
-                                _cvchg_fig.add_trace(go.Scatter(
-                                    x=_cv_pe_chg_df['time'], y=_cv_pe_chg_df[_cv_sc],
-                                    mode='lines+markers', name='PE ΔVol',
-                                    line=dict(color='#00ff88', width=2, dash='dash'),
-                                    marker=dict(size=3),
-                                ))
-
-                            # Zero reference line
-                            _cvchg_fig.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.4)", line_width=1)
-
-                            # Dynamic Y range
-                            _cvchg_vals = []
-                            if _cv_sc in _cv_ce_chg_df.columns:
-                                _cvchg_vals += _cv_ce_chg_df[_cv_sc].dropna().tolist()
-                            if _cv_sc in _cv_pe_chg_df.columns:
-                                _cvchg_vals += _cv_pe_chg_df[_cv_sc].dropna().tolist()
-                            if _cvchg_vals:
-                                _cvchg_max_abs = max(abs(min(_cvchg_vals)), abs(max(_cvchg_vals)), 1)
-                                _cvchg_ymin = -_cvchg_max_abs * 1.1
-                                _cvchg_ymax = _cvchg_max_abs * 1.1
-                            else:
-                                _cvchg_ymin, _cvchg_ymax = -100, 100
-
-                            # Current value markers
-                            _cvchg_ce_cur = None
-                            _cvchg_pe_cur = None
-                            if _cv_sc in _cv_ce_chg_df.columns and len(_cv_ce_chg_df) > 0:
-                                _cvchg_ce_cur = _cv_ce_chg_df[_cv_sc].iloc[-1]
-                                _cvchg_fig.add_trace(go.Scatter(
-                                    x=[_cv_ce_chg_df['time'].iloc[-1]], y=[_cvchg_ce_cur],
-                                    mode='markers+text', text=[f'{_cvchg_ce_cur:+,.0f}'],
-                                    textposition='top right', textfont=dict(size=9, color='#ff4444'),
-                                    marker=dict(size=9, color='#ff4444', symbol='circle'),
-                                    showlegend=False, hoverinfo='skip',
-                                ))
-                            if _cv_sc in _cv_pe_chg_df.columns and len(_cv_pe_chg_df) > 0:
-                                _cvchg_pe_cur = _cv_pe_chg_df[_cv_sc].iloc[-1]
-                                _cvchg_fig.add_trace(go.Scatter(
-                                    x=[_cv_pe_chg_df['time'].iloc[-1]], y=[_cvchg_pe_cur],
-                                    mode='markers+text', text=[f'{_cvchg_pe_cur:+,.0f}'],
-                                    textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
-                                    marker=dict(size=9, color='#00ff88', symbol='diamond'),
-                                    showlegend=False, hoverinfo='skip',
-                                ))
-
-                            _cvchg_ce_s = f"CE: {_cvchg_ce_cur:+,.0f}" if _cvchg_ce_cur is not None else "CE: --"
-                            _cvchg_pe_s = f"PE: {_cvchg_pe_cur:+,.0f}" if _cvchg_pe_cur is not None else "PE: --"
-
-                            _cvchg_fig.update_layout(
-                                title=dict(text=f"{_cv_pos_labels[_vi]}<br>₹{_cv_strike}<br>{_cvchg_ce_s} | {_cvchg_pe_s}",
-                                           font=dict(size=11)),
-                                template='plotly_dark', height=300,
-                                showlegend=True,
-                                legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                                            xanchor='center', x=0.5, font=dict(size=8)),
-                                margin=dict(l=5, r=10, t=70, b=30),
-                                xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                                yaxis=dict(title='ΔVol', range=[_cvchg_ymin, _cvchg_ymax],
-                                           zeroline=True, zerolinecolor='white', zerolinewidth=1),
-                                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                            )
-                            st.plotly_chart(_cvchg_fig, use_container_width=True)
-
-                            # Signal: net change direction
-                            if _cvchg_ce_cur is not None and _cvchg_pe_cur is not None:
-                                _cvnet = _cvchg_pe_cur - _cvchg_ce_cur
-                                _cvchg_sig = "🟢 Bull" if _cvnet > 0 else ("🔴 Bear" if _cvnet < 0 else "🟡 Ntrl")
-                                st.caption(f"Net ΔVol {_cvnet:+,.0f} {_cvchg_sig}")
-                            else:
-                                st.caption("--")
-
-                # ── Volume Status ──
-                _cv_status = "🟢 Live" if pcr_data_available else "🟡 Using cached history"
-                st.caption(f"{_cv_status} | 📈 {len(_cv_ce_hist)} Call/Put Volume pts")
-
-            except Exception as _cv_err:
-                st.warning(f"Error displaying Call/Put Volume charts: {str(_cv_err)}")
-        else:
-            st.info("📊 Call/Put Volume history will build up as the app refreshes. Please wait for data collection…")
-
-        # ===== NIFTY PRICE CHANGE % — INTRADAY TRACKER =====
-        st.markdown("---")
-        st.markdown("## 📈 NIFTY Price Change % — Intraday Tracker")
-        _ph = mde.val('price_history', [])
-        if _ph and len(_ph) > 0:
-            try:
-                _ph_df = pd.DataFrame(_ph)
-                _ph_fig = go.Figure()
-
-                # Price Change % line
-                _ph_fig.add_trace(go.Scatter(
-                    x=_ph_df['time'], y=_ph_df['change_pct'],
-                    mode='lines+markers', name='Price Chg %',
-                    line=dict(color='#00e676', width=2),
-                    marker=dict(size=3),
-                    fill='tozeroy',
-                    fillcolor='rgba(0,230,118,0.1)',
-                ))
-
-                # Zero line
-                _ph_fig.add_hline(y=0, line_dash="solid", line_color="white", line_width=1)
-
-                # Day High / Day Low markers
-                _ph_day_high = mde.val('day_high')
-                _ph_day_low = mde.val('day_low')
-                _ph_day_open = mde.val('day_open', 0)
-                _ph_vwap = mde.val('vwap', 0)
-                if _ph_day_open and _ph_day_open > 0:
-                    if _ph_day_high:
-                        _ph_high_pct = ((_ph_day_high - _ph_day_open) / _ph_day_open) * 100
-                        _ph_fig.add_hline(y=_ph_high_pct, line_dash="dot", line_color="#ff6600", line_width=1,
-                                          annotation_text=f"Day High {_ph_high_pct:+.2f}%", annotation_position="right",
-                                          annotation_font_size=9, annotation_font_color="#ff6600")
-                    if _ph_day_low:
-                        _ph_low_pct = ((_ph_day_low - _ph_day_open) / _ph_day_open) * 100
-                        _ph_fig.add_hline(y=_ph_low_pct, line_dash="dot", line_color="#ff4444", line_width=1,
-                                          annotation_text=f"Day Low {_ph_low_pct:+.2f}%", annotation_position="right",
-                                          annotation_font_size=9, annotation_font_color="#ff4444")
-                    if _ph_vwap and _ph_vwap > 0:
-                        _ph_vwap_pct = ((_ph_vwap - _ph_day_open) / _ph_day_open) * 100
-                        _ph_fig.add_hline(y=_ph_vwap_pct, line_dash="dash", line_color="#ffeb3b", line_width=1,
-                                          annotation_text=f"VWAP {_ph_vwap_pct:+.2f}%", annotation_position="left",
-                                          annotation_font_size=9, annotation_font_color="#ffeb3b")
-
-                # Current value marker
-                _ph_cur = _ph_df['change_pct'].iloc[-1]
-                _ph_fig.add_trace(go.Scatter(
-                    x=[_ph_df['time'].iloc[-1]], y=[_ph_cur],
-                    mode='markers+text', text=[f'{_ph_cur:+.2f}%'],
-                    textposition='top right', textfont=dict(size=12, color='#00e676'),
-                    marker=dict(size=12, color='#00e676', symbol='circle'),
-                    showlegend=False, hoverinfo='skip',
-                ))
-
-                _ph_vals = _ph_df['change_pct'].dropna().tolist()
-                _ph_extras = [0]
-                if _ph_day_open and _ph_day_open > 0:
-                    if _ph_day_high: _ph_extras.append((_ph_day_high - _ph_day_open) / _ph_day_open * 100)
-                    if _ph_day_low: _ph_extras.append((_ph_day_low - _ph_day_open) / _ph_day_open * 100)
-                _ph_all = _ph_vals + _ph_extras
-                _ph_max_abs = max(abs(min(_ph_all)), abs(max(_ph_all)), 0.1)
-
-                _ph_fig.update_layout(
-                    title=dict(text=f"Price Change: {_ph_cur:+.2f}% | Open: ₹{_ph_day_open:,.0f} | "
-                               f"Spot: ₹{mde.val('spot_price', 0):,.0f}",
-                               font=dict(size=13)),
-                    template='plotly_dark', height=350,
-                    showlegend=False,
-                    margin=dict(l=10, r=10, t=60, b=30),
-                    xaxis=dict(tickformat='%H:%M', title='Time'),
-                    yaxis=dict(title='Price Change %',
-                               range=[-_ph_max_abs * 1.2, _ph_max_abs * 1.2],
-                               zeroline=True, zerolinecolor='white', zerolinewidth=1),
-                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                )
-                st.plotly_chart(_ph_fig, use_container_width=True)
-
-                # Summary metrics
-                _ph_c1, _ph_c2, _ph_c3, _ph_c4 = st.columns(4)
-                _ph_c1.metric("Price Chg %", f"{_ph_cur:+.2f}%")
-                _ph_c2.metric("Day Open", f"₹{_ph_day_open:,.0f}" if _ph_day_open else "—")
-                _ph_c3.metric("Day Range", f"{(_ph_day_high or 0) - (_ph_day_low or 0):.0f} pts")
-                _ph_c4.metric("Data Points", f"{len(_ph)}")
-            except Exception as _ph_err:
-                st.warning(f"Price Change % error: {str(_ph_err)[:80]}")
-        else:
-            st.info("📈 Price history building up. Will show after first data point.")
-
-        # ===== OI POSITIONING TRACKER (ATM ±2) =====
-        st.markdown("---")
-        st.markdown("## 📊 OI Positioning Tracker — ATM ±2")
-        try:
-            _oi_df_summary = option_data.get('df_summary') if option_data else None
-            _oi_spot = underlying_price if 'underlying_price' in dir() and underlying_price else mde.val('spot_price', 0)
-            if _oi_df_summary is not None and 'Zone' in _oi_df_summary.columns and _oi_spot:
-                _oi_atm_idx = _oi_df_summary[_oi_df_summary['Zone'] == 'ATM'].index
-                if len(_oi_atm_idx) > 0:
-                    _oi_atm_pos = _oi_df_summary.index.get_loc(_oi_atm_idx[0])
-                    _oi_s = max(0, _oi_atm_pos - 2)
-                    _oi_e = min(len(_oi_df_summary), _oi_atm_pos + 3)
-                    _oi_slice = _oi_df_summary.iloc[_oi_s:_oi_e].copy()
-
-                    # Price direction
-                    _oi_prev_price = st.session_state.get('_oi_tracker_prev_price', _oi_spot)
-                    _oi_price_up = _oi_spot >= _oi_prev_price
-                    st.session_state['_oi_tracker_prev_price'] = _oi_spot
-
-                    # Collect positioning data
-                    ist = pytz.timezone('Asia/Kolkata')
-                    _oi_now = datetime.now(ist)
-                    _oi_entry = {'time': _oi_now, 'price': _oi_spot, 'price_up': _oi_price_up}
-                    _oi_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
-
-                    _oi_rows = []
-                    for _oi_i, (_, _oi_row) in enumerate(_oi_slice.iterrows()):
-                        strike = int(_oi_row['Strike'])
-                        ce_chg = _oi_row.get('changeinOpenInterest_CE', 0) or 0
-                        pe_chg = _oi_row.get('changeinOpenInterest_PE', 0) or 0
-                        ce_oi = _oi_row.get('openInterest_CE', 0) or 0
-                        pe_oi = _oi_row.get('openInterest_PE', 0) or 0
-
-                        ce_buildup = classify_oi_buildup(_oi_price_up, ce_chg)
-                        pe_buildup = classify_oi_buildup(_oi_price_up, pe_chg)
-
-                        zone = _oi_pos_labels[_oi_i] if _oi_i < len(_oi_pos_labels) else f"Strike"
-                        _oi_rows.append({
-                            'Strike': f"₹{strike}",
-                            'Zone': zone,
-                            'CE OI': f"{ce_oi:,.0f}",
-                            'CE ΔOI': f"{ce_chg:+,.0f}",
-                            'CE Build-up': ce_buildup,
-                            'PE OI': f"{pe_oi:,.0f}",
-                            'PE ΔOI': f"{pe_chg:+,.0f}",
-                            'PE Build-up': pe_buildup,
-                        })
-                        _oi_entry[f'ce_chg_{strike}'] = ce_chg
-                        _oi_entry[f'pe_chg_{strike}'] = pe_chg
-
-                    # Add to history
-                    _oi_should_add = True
-                    if st.session_state.oi_positioning_history:
-                        _oi_last = st.session_state.oi_positioning_history[-1]
-                        if (_oi_now - _to_ist(_oi_last['time'])).total_seconds() < 30:
-                            _oi_should_add = False
-                    if _oi_should_add:
-                        st.session_state.oi_positioning_history.append(_oi_entry)
-                        if len(st.session_state.oi_positioning_history) > 200:
-                            st.session_state.oi_positioning_history = st.session_state.oi_positioning_history[-200:]
-                        db.save_option_history('oi_positioning_history', _oi_entry)
-
-                    # Display table
-                    _oi_tbl = pd.DataFrame(_oi_rows)
-                    st.dataframe(_oi_tbl, use_container_width=True, hide_index=True)
-
-                    _oi_dir = "↑" if _oi_price_up else "↓"
-                    st.caption(f"Price {_oi_dir} ₹{_oi_spot:.0f} | "
-                               f"🟢 Long Build-up  🔴 Short Build-up  🟡 Short Covering  🟠 Long Unwinding")
-                else:
-                    st.info("ATM strike not found in current data.")
-            else:
-                st.info("Option data not available for OI positioning.")
-        except Exception as _oi_err:
-            st.warning(f"OI Positioning error: {str(_oi_err)[:80]}")
-
-        # ===== SMART MONEY TRAP DETECTION ENGINE =====
-        st.markdown("---")
-        st.markdown("## 🚨 Smart Money Trap Detection Engine")
-        try:
-            _traps = run_smart_money_trap_detection(mde)
-            if _traps:
-                for _trap in _traps:
-                    _trap_clr = '#ff4444' if _trap['probability'] > 70 else ('#ffaa00' if _trap['probability'] > 50 else '#00aaff')
-                    st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid {_trap_clr};margin-bottom:8px'>
-                    <div style='font-size:16px;font-weight:bold;color:{_trap_clr}'>{_trap['type']} — {_trap['probability']}% probability</div>
-                    <div style='color:#ccc;font-size:13px;margin-top:4px'>{_trap['detail']}</div>
-                    <div style='color:#888;font-size:11px;margin-top:2px'>Level: ₹{_trap['level']:,.0f}</div>
-                    </div>""", unsafe_allow_html=True)
-            else:
-                st.success("No active traps detected. Market appears clean.")
-        except Exception as _trap_err:
-            st.warning(f"Trap Detection error: {str(_trap_err)[:80]}")
-
-        # ===== MARKET REGIME DETECTION ENGINE =====
-        st.markdown("---")
-        st.markdown("## 📊 Market Regime Detection Engine")
-        try:
-            _regime = detect_market_regime(mde)
-            _reg_c1, _reg_c2, _reg_c3 = st.columns([2, 1, 1])
-            with _reg_c1:
-                st.markdown(f"""<div style='background:#1e1e1e;padding:16px;border-radius:8px;border-left:5px solid {_regime['color']}'>
-                <div style='color:#aaa;font-size:11px'>CURRENT REGIME</div>
-                <div style='font-size:26px;font-weight:bold;color:{_regime['color']}'>{_regime['regime']}</div>
-                <div style='color:#ccc;font-size:13px'>Confidence: {_regime['confidence']}%</div>
-                </div>""", unsafe_allow_html=True)
-            with _reg_c2:
-                st.markdown("**Factors:**")
-                for _rd in _regime.get('details', [])[:5]:
-                    st.caption(f"• {_rd}")
-            with _reg_c3:
-                _rsc = _regime.get('scores', {})
-                if _rsc:
-                    _rsc_sorted = sorted(_rsc.items(), key=lambda x: x[1], reverse=True)[:3]
-                    st.markdown("**Top Scores:**")
-                    for _rn, _rv in _rsc_sorted:
-                        st.caption(f"{_rn}: {_rv}")
-        except Exception as _reg_err:
-            st.warning(f"Regime Detection error: {str(_reg_err)[:80]}")
-
-        # ===== PRICE TARGET PROJECTION ENGINE =====
-        st.markdown("---")
-        st.markdown("## 🎯 Price Target Projection Engine — Intraday")
-        try:
-            _tgt = project_price_targets(mde)
-            _tgt_spot = mde.val('spot_price', 0) or 0
-            _tgt_cols = st.columns(5)
-            _tgt_items = [
-                ("🧲 Magnet", _tgt.get('magnet'), '#ffeb3b'),
-                ("🟢 Upside T1", _tgt.get('upside_t1'), '#00e676'),
-                ("🟢 Upside T2", _tgt.get('upside_t2'), '#00cc66'),
-                ("🔴 Downside T1", _tgt.get('downside_t1'), '#ff4444'),
-                ("🔴 Downside T2", _tgt.get('downside_t2'), '#ff6666'),
-            ]
-            for _tc, (_tl, _tv, _tclr) in zip(_tgt_cols, _tgt_items):
-                with _tc:
-                    if _tv:
-                        _tdist = ((_tv - _tgt_spot) / _tgt_spot * 100) if _tgt_spot else 0
-                        st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid {_tclr};text-align:center'>
-                        <div style='color:#aaa;font-size:10px'>{_tl}</div>
-                        <div style='font-size:22px;font-weight:bold;color:{_tclr}'>₹{_tv:,.0f}</div>
-                        <div style='color:#ccc;font-size:11px'>{_tdist:+.2f}%</div>
-                        </div>""", unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;text-align:center'>
-                        <div style='color:#aaa;font-size:10px'>{_tl}</div>
-                        <div style='font-size:22px;color:#555'>—</div>
-                        </div>""", unsafe_allow_html=True)
-            # Acceleration zones
-            _acc_up = _tgt.get('acceleration_up')
-            _acc_dn = _tgt.get('acceleration_down')
-            if _acc_up or _acc_dn:
-                _acc_parts = []
-                if _acc_up: _acc_parts.append(f"⚡ Acceleration UP above ₹{_acc_up:,.0f}")
-                if _acc_dn: _acc_parts.append(f"⚡ Acceleration DOWN below ₹{_acc_dn:,.0f}")
-                st.caption(" | ".join(_acc_parts))
-            for _td in _tgt.get('details', []):
-                st.caption(f"• {_td}")
-        except Exception as _tgt_err:
-            st.warning(f"Price Target error: {str(_tgt_err)[:80]}")
-
-        # ===== SUPPORT/RESISTANCE REACTION ENGINE =====
-        st.markdown("---")
-        st.markdown("## ⚡ Support / Resistance Reaction Engine")
-        try:
-            _sr_reactions = detect_sr_reactions(mde)
-            if _sr_reactions:
-                _sr_rows = []
-                for _sr in _sr_reactions:
-                    _sr_emoji = "🟢" if _sr['reaction'] == 'Bounce' else "🔴"
-                    _sr_rows.append({
-                        'Level': f"₹{_sr['level']:,.0f}",
-                        'Type': _sr['type'],
-                        'Source': _sr['source'],
-                        'Distance': f"{_sr['distance_pct']:+.3f}%",
-                        'Bounce %': f"{_sr['bounce_prob']}%",
-                        'Breakdown %': f"{_sr['breakdown_prob']}%",
-                        'Reaction': f"{_sr_emoji} {_sr['reaction']}",
-                    })
-                st.dataframe(pd.DataFrame(_sr_rows), use_container_width=True, hide_index=True)
-            else:
-                st.info("No S/R levels within proximity (0.3%). Price is in open space.")
-        except Exception as _sr_err:
-            st.warning(f"S/R Reaction error: {str(_sr_err)[:80]}")
-
-        # ===== DEALER HEDGING PRESSURE MAP =====
-        st.markdown("---")
-        st.markdown("## 📊 Dealer Hedging Pressure Map")
-        try:
-            _dhm = compute_dealer_hedging_map(mde)
-            _dhm_c1, _dhm_c2, _dhm_c3 = st.columns(3)
-            with _dhm_c1:
-                _pin = _dhm.get('pin_zone')
-                st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid #ffeb3b;text-align:center'>
-                <div style='color:#aaa;font-size:10px'>📍 PIN ZONE (Max GEX Magnet)</div>
-                <div style='font-size:22px;font-weight:bold;color:#ffeb3b'>{"₹" + f"{_pin:,.0f}" if _pin else "—"}</div>
-                </div>""", unsafe_allow_html=True)
-            with _dhm_c2:
-                _gf = _dhm.get('gamma_flip')
-                st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid #ff44ff;text-align:center'>
-                <div style='color:#aaa;font-size:10px'>⚡ GAMMA FLIP LEVEL</div>
-                <div style='font-size:22px;font-weight:bold;color:#ff44ff'>{"₹" + f"{_gf:,.0f}" if _gf else "—"}</div>
-                </div>""", unsafe_allow_html=True)
-            with _dhm_c3:
-                _ctrl_count = len(_dhm.get('control_zone', []))
-                _accel_count = len(_dhm.get('acceleration_zone', []))
-                st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;border-left:4px solid #00aaff;text-align:center'>
-                <div style='color:#aaa;font-size:10px'>ZONE COUNT</div>
-                <div style='font-size:16px;color:#00aaff'>🟢 Control: {_ctrl_count} strikes</div>
-                <div style='font-size:16px;color:#ff6600'>🔴 Accel: {_accel_count} strikes</div>
-                </div>""", unsafe_allow_html=True)
-
-            # Show top control and acceleration zones
-            _dhm_c4, _dhm_c5 = st.columns(2)
-            with _dhm_c4:
-                _ctrl = sorted(_dhm.get('control_zone', []), key=lambda x: x['gex'], reverse=True)[:5]
-                if _ctrl:
-                    st.markdown("**🟢 Dealer Control Zones (Price Pin)**")
-                    for _z in _ctrl:
-                        st.caption(f"₹{_z['strike']:,} — GEX: {_z['gex']:+,.0f}")
-            with _dhm_c5:
-                _accel = sorted(_dhm.get('acceleration_zone', []), key=lambda x: x['gex'])[:5]
-                if _accel:
-                    st.markdown("**🔴 Acceleration Zones (Volatile)**")
-                    for _z in _accel:
-                        st.caption(f"₹{_z['strike']:,} — GEX: {_z['gex']:+,.0f}")
-        except Exception as _dhm_err:
-            st.warning(f"Dealer Hedging Map error: {str(_dhm_err)[:80]}")
-
-        # ===== SPOT OI PRESSURE ANALYSIS ENGINE =====
-        st.markdown("---")
-        st.markdown("## 🎯 Spot OI Pressure Analysis")
-        try:
-            _sop = compute_spot_oi_pressure(mde)
-            _sop_LOT = 100000
-            if _sop.get('from_history'):
-                st.caption("Using last known data from Supabase history (live data unavailable)")
-
-            # Row 1 — Market Control + OI Shift + Breakout Probability
-            _sop_c1, _sop_c2, _sop_c3 = st.columns(3)
-
-            _mc_score = _sop['market_control_score']
-            _mc_clr = '#00ff88' if _mc_score > 20 else ('#ff4444' if _mc_score < -20 else '#FFD700')
-            with _sop_c1:
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_mc_clr}'>
-                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>MARKET CONTROL</span><br>
-                <span style='font-size:1.1em;font-weight:bold;color:{_mc_clr}'>{_sop['market_control']}</span><br>
-                <span style='font-size:0.8em;color:#666'>Score: {int(_mc_score):+d} | Bias: {_sop['spot_oi_bias']/_sop_LOT:+.2f}L</span>
-                </div>""", unsafe_allow_html=True)
-
-            _shift_clr_map = {'Long Build-up': '#00ff88', 'Short Build-up': '#ff4444',
-                              'Short Covering': '#FFD700', 'Long Unwinding': '#ff8800'}
-            _shift_clr = _shift_clr_map.get(_sop['oi_shift'], '#888')
-            _shift_emoji = {'Long Build-up': '🟢', 'Short Build-up': '🔴',
-                            'Short Covering': '🟡', 'Long Unwinding': '🟠'}.get(_sop['oi_shift'], '⚪')
-            with _sop_c2:
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_shift_clr}'>
-                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>OI POSITION SHIFT</span><br>
-                <span style='font-size:1.1em;font-weight:bold;color:{_shift_clr}'>{_shift_emoji} {_sop['oi_shift']}</span><br>
-                <span style='font-size:0.8em;color:#666'>{_sop['oi_shift_detail']}</span>
-                </div>""", unsafe_allow_html=True)
-
-            _bo_prob = _sop['breakout_probability']
-            _bo_clr = '#ff4444' if _bo_prob >= 60 else ('#FFD700' if _bo_prob >= 30 else '#00aaff')
-            _bo_dir = _sop['breakout_direction']
-            _bo_arrow = '⬆️' if _bo_dir == 'Upside' else ('⬇️' if _bo_dir == 'Downside' else '↔️')
-            with _sop_c3:
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_bo_clr}'>
-                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>BREAKOUT PROBABILITY</span><br>
-                <span style='font-size:1.1em;font-weight:bold;color:{_bo_clr}'>{_bo_prob}% {_bo_arrow} {_bo_dir}</span><br>
-                <span style='font-size:0.8em;color:#666'>{"High alert!" if _bo_prob >= 60 else "Moderate" if _bo_prob >= 30 else "Low probability"}</span>
-                </div>""", unsafe_allow_html=True)
-
-            st.markdown("")
-
-            # Row 2 — Spot Zone OI Summary
-            _sop_r2c1, _sop_r2c2 = st.columns(2)
-            with _sop_r2c1:
-                st.markdown("#### 🟢 Spot Support Strength")
-                st.progress(min(_sop['support_strength'] / 10.0, 1.0),
-                            text=f"Score: {_sop['support_strength']}/10")
-                st.caption(f"Spot PE OI: {_sop['spot_put_oi']/_sop_LOT:.2f}L | "
-                           f"PE ΔOI: {_sop['spot_put_change']/_sop_LOT:+.2f}L")
-            with _sop_r2c2:
-                st.markdown("#### 🔴 Spot Resistance Strength")
-                st.progress(min(_sop['resistance_strength'] / 10.0, 1.0),
-                            text=f"Score: {_sop['resistance_strength']}/10")
-                st.caption(f"Spot CE OI: {_sop['spot_call_oi']/_sop_LOT:.2f}L | "
-                           f"CE ΔOI: {_sop['spot_call_change']/_sop_LOT:+.2f}L")
-
-            # Row 3 — Spot OI Trend Graph (bar chart)
-            _sop_trend = _sop.get('spot_oi_trend', [])
-            if _sop_trend:
-                st.markdown("#### 📊 Spot Zone OI Distribution (ATM ± 2)")
-                _sop_trend_df = pd.DataFrame(_sop_trend)
-                _sop_trend_df['Strike'] = _sop_trend_df['Strike'].astype(str)
-
-                _sop_fig = go.Figure()
-                _sop_fig.add_trace(go.Bar(
-                    x=_sop_trend_df['Strike'], y=_sop_trend_df['CE_OI'],
-                    name='CE OI (L)', marker_color='#ff4444', opacity=0.7))
-                _sop_fig.add_trace(go.Bar(
-                    x=_sop_trend_df['Strike'], y=_sop_trend_df['PE_OI'],
-                    name='PE OI (L)', marker_color='#00ff88', opacity=0.7))
-                _sop_fig.add_trace(go.Bar(
-                    x=_sop_trend_df['Strike'], y=_sop_trend_df['CE_Change'],
-                    name='CE ΔOI (L)', marker_color='#ff8888', opacity=0.5))
-                _sop_fig.add_trace(go.Bar(
-                    x=_sop_trend_df['Strike'], y=_sop_trend_df['PE_Change'],
-                    name='PE ΔOI (L)', marker_color='#88ffaa', opacity=0.5))
-                _sop_fig.update_layout(
-                    barmode='group', height=320,
-                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                    font=dict(color='#ccc'),
-                    legend=dict(orientation='h', y=-0.15),
-                    margin=dict(l=40, r=20, t=30, b=40),
-                    xaxis_title='Strike', yaxis_title='OI (Lakhs)')
-                st.plotly_chart(_sop_fig, use_container_width=True)
-
-            # Row 4 — Institutional Activity + Smart Money Entries
-            _sop_r4c1, _sop_r4c2 = st.columns(2)
-            with _sop_r4c1:
-                st.markdown("#### 🏦 Institutional Activity")
-                _ia_score = _sop['institutional_activity_score']
-                _ia_clr = '#00ff88' if _ia_score > 2 else ('#ff4444' if _ia_score < -2 else '#FFD700')
-                st.markdown(f"**Bias:** <span style='color:{_ia_clr}'>{_sop['institutional_bias']}</span> "
-                            f"(Score: {int(_ia_score):+d})", unsafe_allow_html=True)
-                for _sig in _sop.get('institutional_signals', [])[:5]:
-                    st.caption(f"• {_sig}")
-                if not _sop.get('institutional_signals'):
-                    st.caption("• No significant institutional activity detected")
-
-            with _sop_r4c2:
-                st.markdown("#### 💰 Smart Money Entries")
-                _sm_entries = _sop.get('smart_money_entries', [])
-                if _sm_entries:
-                    for _sm in _sm_entries[:5]:
-                        _sm_clr = '#00ff88' if _sm['signal'] == 'Bullish' else '#ff4444'
-                        _sm_emoji = '🟢' if _sm['signal'] == 'Bullish' else '🔴'
-                        st.markdown(f"<div style='background:#1a1a2e;padding:6px 10px;border-radius:4px;margin-bottom:4px;"
-                                    f"border-left:3px solid {_sm_clr};font-size:0.85em'>"
-                                    f"{_sm_emoji} <b>{_sm['action']}</b> ({_sm['signal']})<br>"
-                                    f"<span style='color:#999'>{_sm['detail']}</span></div>",
-                                    unsafe_allow_html=True)
-                else:
-                    st.caption("• No smart money entries detected in spot zone")
-
-            # Row 5 — Gamma Wall + Liquidity Traps + Expiry Manipulation
-            _sop_r5c1, _sop_r5c2, _sop_r5c3 = st.columns(3)
-            with _sop_r5c1:
-                st.markdown("#### ⚡ Spot Gamma Wall")
-                _gw = _sop.get('gamma_wall')
-                if _gw:
-                    _gw_clr = '#ffeb3b' if 'Pin' in _sop['gamma_wall_type'] else '#ff6600'
-                    st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
-                    border-left:3px solid {_gw_clr};text-align:center'>
-                    <div style='font-size:22px;font-weight:bold;color:{_gw_clr}'>₹{_gw:,}</div>
-                    <div style='font-size:0.8em;color:#aaa'>{_sop['gamma_wall_type']}</div>
-                    </div>""", unsafe_allow_html=True)
-                else:
-                    st.caption("No dominant gamma wall in spot zone")
-
-            with _sop_r5c2:
-                st.markdown("#### 🪤 Liquidity Traps")
-                _lt = _sop.get('liquidity_traps', [])
-                if _lt:
-                    for _trap in _lt:
-                        _lt_clr = '#ff4444' if _trap['severity'] == 'High' else '#FFD700'
-                        st.markdown(f"<div style='border-left:3px solid {_lt_clr};padding:4px 8px;margin-bottom:4px'>"
-                                    f"<b style='color:{_lt_clr}'>{_trap['type']}</b><br>"
-                                    f"<span style='color:#999;font-size:0.8em'>{_trap['detail']}</span></div>",
-                                    unsafe_allow_html=True)
-                else:
-                    st.caption("No liquidity traps detected")
-
-            with _sop_r5c3:
-                st.markdown("#### 📅 Expiry Manipulation")
-                _em = _sop.get('expiry_manipulation', {})
-                if _em.get('detected'):
-                    st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
-                    border-left:3px solid #ff44ff'>
-                    <div style='font-size:14px;font-weight:bold;color:#ff44ff'>⚠️ Detected</div>
-                    <div style='font-size:0.8em;color:#ccc;margin-top:4px'>{_em['details']}</div>
-                    </div>""", unsafe_allow_html=True)
-                else:
-                    st.caption("No expiry manipulation signals")
-
-            # Row 6 — OI Cluster Shift Detection
-            _ocs = _sop.get('oi_cluster_shift', {})
-            if _ocs.get('detected'):
-                _ocs_clr = '#00ff88' if 'STRONG TREND' in _ocs.get('detail', '') else '#FFD700'
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;
-                border-left:4px solid {_ocs_clr};margin-top:8px'>
-                <span style='font-size:0.85em;color:#aaa'>🔄 OI CLUSTER SHIFT — {_ocs['direction']}</span><br>
-                <span style='font-size:0.95em;color:{_ocs_clr}'>{_ocs['detail']}</span>
-                </div>""", unsafe_allow_html=True)
-
-            # Breakout signals detail
-            _bo_sigs = _sop.get('breakout_signals', [])
-            if _bo_sigs:
-                with st.expander("📈 Breakout Signal Details"):
-                    for _bs in _bo_sigs:
-                        st.caption(f"• {_bs}")
-
-        except Exception as _sop_err:
-            st.warning(f"Spot OI Pressure error: {str(_sop_err)[:80]}")
-
-        # ===== OI / DEPTH HISTORICAL TIMELINE =====
-        st.markdown("---")
-        st.markdown("## 📅 OI Timeline — Building vs Breaking (5m → 3h)")
-        try:
-            _tl = compute_oi_depth_timeline(mde)
-            _tl_wins = _tl.get('windows', [])
-            _tl_available = [w for w in _tl_wins if w.get('available')]
-
-            if _tl_available:
-                # Trend Summary
-                _tl_dir = _tl.get('trend_direction', 'Neutral')
-                _tl_clr = '#00ff88' if _tl_dir == 'Bullish' else ('#ff4444' if _tl_dir == 'Bearish' else '#FFD700')
-                _tl_emoji = '🟢' if _tl_dir == 'Bullish' else ('🔴' if _tl_dir == 'Bearish' else '⚪')
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_tl_clr};margin-bottom:12px'>
-                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>TREND ACROSS TIMEFRAMES</span><br>
-                <span style='font-size:1.2em;font-weight:bold;color:{_tl_clr}'>{_tl_emoji} {_tl['trend_summary']}</span>
-                </div>""", unsafe_allow_html=True)
-
-                # Timeline table
-                _tl_rows = []
-                LOT = 100000
-                for w in _tl_wins:
-                    if w.get('available'):
-                        _w_clr_map = {'Bullish': '🟢', 'Bearish': '🔴', 'Neutral': '⚪'}
-                        _tl_rows.append({
-                            'Window': w['window'],
-                            'CE OI Δ': f"{w['ce_oi_change']/LOT:+.2f}L",
-                            'CE %': f"{w['ce_oi_pct']:+.1f}%",
-                            'PE OI Δ': f"{w['pe_oi_change']/LOT:+.2f}L",
-                            'PE %': f"{w['pe_oi_pct']:+.1f}%",
-                            'Signal': f"{_w_clr_map.get(w.get('type', ''), '⚪')} {w['signal']}",
-                        })
-                    else:
-                        _tl_rows.append({
-                            'Window': w['window'],
-                            'CE OI Δ': '—', 'CE %': '—',
-                            'PE OI Δ': '—', 'PE %': '—',
-                            'Signal': '⏳ No data yet',
-                        })
-
-                st.dataframe(pd.DataFrame(_tl_rows), use_container_width=True, hide_index=True)
-                st.caption("Compares current ATM ± 2 OI with historical snapshots. "
-                           "Data accumulates over the session — more windows become available over time.")
-            else:
-                st.info("📊 Timeline data accumulates over the session. "
-                        "5m, 15m, 30m, 1h, 2h, 3h comparisons will appear as data builds up.")
-
-        except Exception as _tl_err:
-            st.warning(f"OI Timeline error: {str(_tl_err)[:80]}")
-
-        # ===== MARKET DEPTH SPOT PRESSURE ANALYSIS =====
-        st.markdown("---")
-        st.markdown("## 📊 Market Depth Spot Pressure — Call vs Put")
-        try:
-            _mdp = compute_market_depth_spot_pressure(mde)
-            _mdp_has_data = (_mdp['call_liquidity_total'] + _mdp['put_liquidity_total']) > 0
-            if _mdp.get('from_history'):
-                st.caption("Using last known depth data from Supabase history (live data unavailable)")
-
-            if _mdp_has_data:
-                # Row 1 — Liquidity Control + Depth Bias + Liquidity Shift
-                _mdp_c1, _mdp_c2, _mdp_c3 = st.columns(3)
-
-                _lc = _mdp['liquidity_control']
-                _lc_clr = '#00ff88' if 'Bullish' in _lc else ('#ff4444' if 'Bearish' in _lc else '#FFD700')
-                with _mdp_c1:
-                    st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_lc_clr}'>
-                    <span style='font-size:0.75em;color:#888;text-transform:uppercase'>LIQUIDITY CONTROL</span><br>
-                    <span style='font-size:1.1em;font-weight:bold;color:{_lc_clr}'>{_lc}</span><br>
-                    <span style='font-size:0.8em;color:#666'>Pressure Score: {int(_mdp['depth_pressure_score']):+d}</span>
-                    </div>""", unsafe_allow_html=True)
-
-                _db_lbl = _mdp['depth_bias_label']
-                _db_clr = '#00ff88' if 'Bullish' in _db_lbl else ('#ff4444' if 'Bearish' in _db_lbl else '#FFD700')
-                with _mdp_c2:
-                    st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_db_clr}'>
-                    <span style='font-size:0.75em;color:#888;text-transform:uppercase'>DEPTH BIAS (PUT − CALL)</span><br>
-                    <span style='font-size:1.1em;font-weight:bold;color:{_db_clr}'>{_db_lbl}</span><br>
-                    <span style='font-size:0.8em;color:#666'>CE: {_mdp['call_liquidity_total']:,.0f} | PE: {_mdp['put_liquidity_total']:,.0f}</span>
-                    </div>""", unsafe_allow_html=True)
-
-                _ls = _mdp['liquidity_shift']
-                _ls_clr = '#00ff88' if 'Bullish' in _ls else ('#ff4444' if 'Bearish' in _ls else '#ff8800')
-                _ls_emoji = '✅' if 'Confirmation' in _ls else '⚠️'
-                with _mdp_c3:
-                    st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_ls_clr}'>
-                    <span style='font-size:0.75em;color:#888;text-transform:uppercase'>LIQUIDITY SHIFT</span><br>
-                    <span style='font-size:1.1em;font-weight:bold;color:{_ls_clr}'>{_ls_emoji} {_ls}</span><br>
-                    <span style='font-size:0.8em;color:#666'>{_mdp['liquidity_shift_detail']}</span>
-                    </div>""", unsafe_allow_html=True)
-
-                st.markdown("")
-
-                # Row 2 — Support / Resistance Strength
-                _mdp_r2c1, _mdp_r2c2 = st.columns(2)
-                with _mdp_r2c1:
-                    st.markdown("#### 🟢 Depth Support Strength")
-                    st.progress(min(_mdp['support_strength'] / 10.0, 1.0),
-                                text=f"Score: {_mdp['support_strength']}/10")
-                    st.caption(f"PE Bid: {_mdp['spot_put_bid']:,.0f} | PE Ask: {_mdp['spot_put_ask']:,.0f} | "
-                               f"CE Bid: {_mdp['spot_call_bid']:,.0f}")
-                with _mdp_r2c2:
-                    st.markdown("#### 🔴 Depth Resistance Strength")
-                    st.progress(min(_mdp['resistance_strength'] / 10.0, 1.0),
-                                text=f"Score: {_mdp['resistance_strength']}/10")
-                    st.caption(f"CE Ask: {_mdp['spot_call_ask']:,.0f} | CE Bid: {_mdp['spot_call_bid']:,.0f} | "
-                               f"PE Ask: {_mdp['spot_put_ask']:,.0f}")
-
-                # Row 3 — Market Depth Heatmap (Bid/Ask bar chart)
-                _mdp_depth = _mdp.get('spot_depth_data', [])
-                if _mdp_depth:
-                    st.markdown("#### 🗺️ Market Depth Heatmap (ATM ± 2)")
-                    _mdp_df = pd.DataFrame(_mdp_depth)
-                    _mdp_df['Strike'] = _mdp_df['Strike'].astype(str)
-
-                    _mdp_fig = go.Figure()
-                    _mdp_fig.add_trace(go.Bar(
-                        x=_mdp_df['Strike'], y=_mdp_df['CE_Bid'],
-                        name='CE Bid', marker_color='#ff8888', opacity=0.6))
-                    _mdp_fig.add_trace(go.Bar(
-                        x=_mdp_df['Strike'], y=_mdp_df['CE_Ask'],
-                        name='CE Ask', marker_color='#ff4444', opacity=0.8))
-                    _mdp_fig.add_trace(go.Bar(
-                        x=_mdp_df['Strike'], y=_mdp_df['PE_Bid'],
-                        name='PE Bid', marker_color='#88ffaa', opacity=0.6))
-                    _mdp_fig.add_trace(go.Bar(
-                        x=_mdp_df['Strike'], y=_mdp_df['PE_Ask'],
-                        name='PE Ask', marker_color='#00ff88', opacity=0.8))
-                    _mdp_fig.update_layout(
-                        barmode='group', height=320,
-                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                        font=dict(color='#ccc'),
-                        legend=dict(orientation='h', y=-0.15),
-                        margin=dict(l=40, r=20, t=30, b=40),
-                        xaxis_title='Strike', yaxis_title='Quantity')
-                    st.plotly_chart(_mdp_fig, use_container_width=True)
-
-                # Row 4 — Institutional Walls + Institutional Control
-                _mdp_r4c1, _mdp_r4c2, _mdp_r4c3 = st.columns(3)
-                with _mdp_r4c1:
-                    st.markdown("#### 🧱 Support Wall")
-                    _sw = _mdp.get('support_wall')
-                    if _sw:
-                        _sw_clr = '#00ff88' if _sw['strength'] == 'Strong' else '#00cc66'
-                        st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
-                        border-left:3px solid {_sw_clr};text-align:center'>
-                        <div style='font-size:20px;font-weight:bold;color:{_sw_clr}'>₹{_sw['strike']:,}</div>
-                        <div style='font-size:0.8em;color:#aaa'>PE Bid: {_sw['qty']:,.0f} ({_sw['strength']})</div>
-                        </div>""", unsafe_allow_html=True)
-                    else:
-                        st.caption("No significant bid wall detected")
-
-                with _mdp_r4c2:
-                    st.markdown("#### 🧱 Resistance Wall")
-                    _rw = _mdp.get('resistance_wall')
-                    if _rw:
-                        _rw_clr = '#ff4444' if _rw['strength'] == 'Strong' else '#ff6666'
-                        st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
-                        border-left:3px solid {_rw_clr};text-align:center'>
-                        <div style='font-size:20px;font-weight:bold;color:{_rw_clr}'>₹{_rw['strike']:,}</div>
-                        <div style='font-size:0.8em;color:#aaa'>CE Ask: {_rw['qty']:,.0f} ({_rw['strength']})</div>
-                        </div>""", unsafe_allow_html=True)
-                    else:
-                        st.caption("No significant ask wall detected")
-
-                with _mdp_r4c3:
-                    st.markdown("#### 🏛️ Institutional Control")
-                    _ic = _mdp['institutional_control']
-                    _ic_clr = '#00ff88' if 'Bullish' in _ic else ('#ff4444' if 'Bearish' in _ic else '#888')
-                    st.markdown(f"""<div style='background:#1e1e1e;padding:10px;border-radius:6px;
-                    border-left:3px solid {_ic_clr};text-align:center'>
-                    <div style='font-size:14px;font-weight:bold;color:{_ic_clr}'>{_ic}</div>
-                    <div style='font-size:0.8em;color:#aaa;margin-top:4px'>Wall Score: {_mdp['wall_score']}</div>
-                    </div>""", unsafe_allow_html=True)
-
-                # Row 5 — Spoofing Alerts
-                _spoof = _mdp.get('spoofing_alerts', [])
-                if _spoof:
-                    st.markdown("#### ⚠️ Spoofing / Fake Liquidity Alerts")
-                    for _sa in _spoof:
-                        _sa_clr = '#ff4444' if _sa['severity'] == 'High' else '#FFD700'
-                        st.markdown(f"""<div style='background:#1a1a2e;padding:8px 12px;border-radius:4px;
-                        border-left:3px solid {_sa_clr};margin-bottom:4px'>
-                        <span style='color:{_sa_clr};font-weight:bold'>⚠️ {_sa['side']}</span> — {_sa['detail']}
-                        </div>""", unsafe_allow_html=True)
-
-                # Row 6 — OI + Depth Confluence (most powerful signals)
-                _conf = _mdp.get('oi_depth_confluence', [])
-                if _conf:
-                    st.markdown("#### 🔗 OI + Depth Confluence (High-Confidence Signals)")
-                    for _cf in _conf:
-                        _cf_clr = '#00ff88' if _cf['type'] == 'Bullish' else ('#ff4444' if _cf['type'] == 'Bearish' else '#FFD700')
-                        _cf_emoji = '🟢' if _cf['type'] == 'Bullish' else ('🔴' if _cf['type'] == 'Bearish' else '🟡')
-                        st.markdown(f"""<div style='background:#111827;padding:12px;border-radius:8px;
-                        border-left:4px solid {_cf_clr};margin-bottom:6px'>
-                        <div style='font-size:15px;font-weight:bold;color:{_cf_clr}'>{_cf_emoji} {_cf['signal']}</div>
-                        <div style='font-size:0.85em;color:#ccc;margin-top:4px'>{_cf['detail']}</div>
-                        </div>""", unsafe_allow_html=True)
-
-                # Liquidity signals detail
-                _liq_sigs = _mdp.get('liquidity_signals', [])
-                if _liq_sigs:
-                    with st.expander("📋 Liquidity Signal Details"):
-                        for _ls_item in _liq_sigs:
-                            st.caption(f"• {_ls_item}")
-            else:
-                st.info("Bid/Ask depth data not available in current option chain.")
-
-        except Exception as _mdp_err:
-            st.warning(f"Market Depth Spot Pressure error: {str(_mdp_err)[:80]}")
-
-        # ===== TRIPLE CONFLUENCE: OI + DEPTH + MONEY FLOW =====
-        st.markdown("---")
-        st.markdown("## 🔗 Triple Confluence — OI · Depth · Money Flow")
-        try:
-            # Gather results from previous engines (use empty defaults if they failed)
-            _tc_sop = _sop if '_sop' in dir() else compute_spot_oi_pressure(mde)
-            _tc_mdp = _mdp if '_mdp' in dir() else compute_market_depth_spot_pressure(mde)
-            _tc_df_today = _df_today if '_df_today' in dir() else None
-
-            _tc = compute_triple_confluence(mde, _tc_sop, _tc_mdp, _tc_df_today)
-
-            # Row 1 — Main Verdict with confidence
-            _tc_conf = _tc['confidence']
-            _tc_vclr = _tc['verdict_color']
-            _tc_align = _tc['alignment']
-            _align_bar = '🟢' * _tc_align + '⚪' * (3 - _tc_align)
-
-            st.markdown(f"""<div style='background:#111827;padding:18px;border-radius:10px;
-            border-left:5px solid {_tc_vclr};margin-bottom:12px'>
-            <div style='font-size:0.8em;color:#888;text-transform:uppercase'>TRIPLE CONFLUENCE VERDICT</div>
-            <div style='font-size:1.4em;font-weight:bold;color:{_tc_vclr};margin:6px 0'>{_tc['verdict']}</div>
-            <div style='font-size:0.9em;color:#ccc'>Confidence: {_tc_conf}% | Alignment: {_align_bar} ({_tc_align}/3 layers agree)</div>
-            </div>""", unsafe_allow_html=True)
-
-            # Row 2 — Three layer cards
-            _tc_l1, _tc_l2, _tc_l3 = st.columns(3)
-            for _tc_col, _sig in zip([_tc_l1, _tc_l2, _tc_l3], _tc.get('signals', [])):
-                _b = _sig.get('bias', 'N/A')
-                _b_clr = '#00ff88' if _b == 'Bullish' else ('#ff4444' if _b == 'Bearish' else '#FFD700')
-                _b_emoji = '🟢' if _b == 'Bullish' else ('🔴' if _b == 'Bearish' else '⚪')
-                with _tc_col:
-                    st.markdown(f"""<div style='background:#1e1e1e;padding:12px;border-radius:8px;
-                    border-left:4px solid {_b_clr}'>
-                    <div style='font-size:0.75em;color:#888;text-transform:uppercase'>{_sig['layer']}</div>
-                    <div style='font-size:1.05em;font-weight:bold;color:{_b_clr}'>{_b_emoji} {_b}</div>
-                    <div style='font-size:0.8em;color:#999;margin-top:4px'>{_sig['detail']}</div>
-                    </div>""", unsafe_allow_html=True)
-
-            # Row 3 — Per-strike triple analysis table
-            _tc_strikes = _tc.get('strike_analysis', [])
-            if _tc_strikes:
-                st.markdown("#### 📋 Per-Strike Triple Analysis (ATM ± 2)")
-                _tc_rows = []
-                LOT = 100000
-                for _s in _tc_strikes:
-                    _v = _s['Verdict']
-                    _v_emoji = '🟢' if 'Support' in _v else ('🔴' if 'Resistance' in _v else '⚪')
-                    _v_bold = '**' if 'STRONG' in _v else ''
-                    _oi_e = '🟢' if _s['OI'] == 'Bullish' else ('🔴' if _s['OI'] == 'Bearish' else '⚪')
-                    _d_e = '🟢' if _s['Depth'] == 'Bullish' else ('🔴' if _s['Depth'] == 'Bearish' else '⚪')
-                    _vol_e = '🟢' if _s['Volume'] == 'Bullish' else ('🔴' if _s['Volume'] == 'Bearish' else '⚪')
-                    _tc_rows.append({
-                        'Strike': f"₹{_s['Strike']:,}",
-                        'CE OI': f"{_s['CE_OI']/LOT:.2f}L",
-                        'PE OI': f"{_s['PE_OI']/LOT:.2f}L",
-                        'OI': f"{_oi_e} {_s['OI']}",
-                        'Depth': f"{_d_e} {_s['Depth']}",
-                        'Volume': f"{_vol_e} {_s['Volume']}",
-                        'Verdict': f"{_v_emoji} {_v}",
-                    })
-                st.dataframe(pd.DataFrame(_tc_rows), use_container_width=True, hide_index=True)
-
-                st.caption("OI = Put OI vs Call OI | Depth = Put Ask (writers) vs Call Ask | "
-                           "Volume = Put Volume vs Call Volume | "
-                           "All 3 align = STRONG signal")
-
-            # OI+Depth confluence from depth engine (if available)
-            _tc_oi_depth = _tc_mdp.get('oi_depth_confluence', []) if '_tc_mdp' in dir() else []
-            if _tc_oi_depth:
-                st.markdown("#### 🔗 OI + Depth Confluence Signals")
-                for _cf in _tc_oi_depth:
-                    _cf_clr = '#00ff88' if _cf['type'] == 'Bullish' else ('#ff4444' if _cf['type'] == 'Bearish' else '#FFD700')
-                    _cf_emoji = '🟢' if _cf['type'] == 'Bullish' else ('🔴' if _cf['type'] == 'Bearish' else '🟡')
-                    st.markdown(f"""<div style='background:#111827;padding:10px;border-radius:6px;
-                    border-left:3px solid {_cf_clr};margin-bottom:4px'>
-                    <span style='color:{_cf_clr};font-weight:bold'>{_cf_emoji} {_cf['signal']}</span>
-                    <span style='color:#999;font-size:0.85em'> — {_cf['detail']}</span>
-                    </div>""", unsafe_allow_html=True)
-
-        except Exception as _tc_err:
-            st.warning(f"Triple Confluence error: {str(_tc_err)[:80]}")
-
-        # ===== STRIKE ZONE CLASSIFICATION ENGINE =====
-        st.markdown("---")
-        st.markdown("## 🗺️ Dynamic Support & Resistance Zones")
-        try:
-            _zone = compute_strike_zone_classification(mde)
-
-            # ── Append to history + save to Supabase ─────────────────
-            _zone_now = datetime.now(pytz.timezone('Asia/Kolkata'))
-            _zone_should_add = True
-            if st.session_state.zone_history:
-                _last_zone = st.session_state.zone_history[-1]
-                if (_zone_now - _to_ist(_last_zone['time'])).total_seconds() < 30:
-                    _zone_should_add = False
-
-            # Build saveable entry (strip non-serializable strike_details)
-            _zone_save = {k: v for k, v in _zone.items() if k != 'strike_details'}
-            if _zone_should_add and _zone['spot_price'] > 0:
-                st.session_state.zone_history.append(_zone_save)
-                if len(st.session_state.zone_history) > 200:
-                    st.session_state.zone_history = st.session_state.zone_history[-200:]
-                db.save_option_history('zone_history', _zone_save)
-
-            if _zone.get('from_history'):
-                st.caption("Using last known data from Supabase history (live data unavailable)")
-
-            # ── Status Cards Row ─────────────────────────────────────
-            _zc1, _zc2, _zc3, _zc4 = st.columns(4)
-
-            _sup_clr_map = {'GREEN': '#00ff88', 'YELLOW': '#FFD700', 'RED': '#ff4444'}
-            _res_clr_map = {'RED': '#ff4444', 'YELLOW': '#FFD700', 'GREEN': '#00ff88'}
-            _sup_clr = _sup_clr_map.get(_zone['support_color'], '#888')
-            _res_clr = _res_clr_map.get(_zone['resistance_color'], '#888')
-            _bias_clr = {'BULLISH': '#00ff88', 'BEARISH': '#ff4444', 'RANGE': '#FFD700', 'TRAP': '#ff8800'}
-            _bias_emoji = {'BULLISH': '🟢', 'BEARISH': '🔴', 'RANGE': '🟡', 'TRAP': '⚠️'}
-
-            with _zc1:
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_sup_clr}'>
-                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>SUPPORT ZONE</span><br>
-                <span style='font-size:1.3em;font-weight:bold;color:{_sup_clr}'>₹{_zone['support_zone']:,}</span><br>
-                <span style='font-size:0.85em;color:{_sup_clr}'>{_zone['support_status']}</span>
-                <span style='font-size:0.8em;color:#666'> | Score: {_zone['support_score']}/100</span>
-                </div>""", unsafe_allow_html=True)
-
-            with _zc2:
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_res_clr}'>
-                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>RESISTANCE ZONE</span><br>
-                <span style='font-size:1.3em;font-weight:bold;color:{_res_clr}'>₹{_zone['resistance_zone']:,}</span><br>
-                <span style='font-size:0.85em;color:{_res_clr}'>{_zone['resistance_status']}</span>
-                <span style='font-size:0.8em;color:#666'> | Score: {_zone['resistance_score']}/100</span>
-                </div>""", unsafe_allow_html=True)
-
-            _mb = _zone['market_bias']
-            _mb_c = _bias_clr.get(_mb, '#888')
-            _mb_e = _bias_emoji.get(_mb, '⚪')
-            with _zc3:
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_mb_c}'>
-                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>MARKET BIAS</span><br>
-                <span style='font-size:1.3em;font-weight:bold;color:{_mb_c}'>{_mb_e} {_mb}</span><br>
-                <span style='font-size:0.8em;color:#666'>Zone Shift: {_zone['zone_shift']} | Breakout: {_zone['breakout_probability']}</span>
-                </div>""", unsafe_allow_html=True)
-
-            _sig = _zone['signal']
-            _sig_clr = '#00ff88' if _sig == 'BREAKOUT' else ('#ff4444' if _sig == 'BREAKDOWN' else '#888')
-            _sig_emoji = '🚀' if _sig == 'BREAKOUT' else ('💥' if _sig == 'BREAKDOWN' else '⏳')
-            with _zc4:
-                st.markdown(f"""<div style='background:#111827;padding:14px;border-radius:8px;border-left:4px solid {_sig_clr}'>
-                <span style='font-size:0.75em;color:#888;text-transform:uppercase'>SIGNAL</span><br>
-                <span style='font-size:1.3em;font-weight:bold;color:{_sig_clr}'>{_sig_emoji} {_sig}</span><br>
-                <span style='font-size:0.8em;color:#666'>Confidence: {_zone['confidence_score']}%</span>
-                </div>""", unsafe_allow_html=True)
-
-            # ── Per-Strike Classification Table ──────────────────────
-            if _zone.get('strike_details'):
-                st.markdown("#### 🔍 Per-Strike Zone Classification")
-                _sd_rows = []
-                for _sd in _zone['strike_details']:
-                    _sc = _sd['scenario']
-                    _zt = _sd['zone_type']
-                    _emoji = {'support': '🟢', 'resistance': '🔴', 'neutral': '⚪'}.get(_zt, '⚪')
-                    _sd_rows.append({
-                        'Strike': f"₹{_sd['strike']:,}",
-                        'Zone': f"{_emoji} {_zt.upper()}",
-                        'Scenario': _sc,
-                        'Strength': f"{_sd['strength']}/100",
-                        'CE OI': f"{_sd['ce_oi']/100000:.2f}L",
-                        'PE OI': f"{_sd['pe_oi']/100000:.2f}L",
-                        'CE ΔOI': f"{_sd['ce_chg']/100000:+.2f}L",
-                        'PE ΔOI': f"{_sd['pe_chg']/100000:+.2f}L",
-                        'CE Bid|Ask': f"{_sd['ce_bid']:.0f}|{_sd['ce_ask']:.0f}",
-                        'PE Bid|Ask': f"{_sd['pe_bid']:.0f}|{_sd['pe_ask']:.0f}",
-                        'Vol Δ CE': f"{_sd['vol_delta_ce']:+,.0f}",
-                        'Vol Δ PE': f"{_sd['vol_delta_pe']:+,.0f}",
-                    })
-                if _sd_rows:
-                    _sd_df = pd.DataFrame(_sd_rows)
-                    st.dataframe(_sd_df, use_container_width=True, hide_index=True)
-
-            # ── Time-Series Chart: Spot + Support Zone + Resistance Zone ─
-            st.markdown("#### 📈 Zone Tracker — Spot vs Support vs Resistance")
-            if len(st.session_state.zone_history) >= 2:
-
-                _zh = st.session_state.zone_history
-                _zh_df = pd.DataFrame(_zh)
-
-                _fig_zone = go.Figure()
-
-                # Spot price line
-                _fig_zone.add_trace(go.Scatter(
-                    x=_zh_df['time'], y=_zh_df['spot_price'],
-                    name='Spot Price', mode='lines',
-                    line=dict(color='#00BFFF', width=2.5),
-                ))
-
-                # Support zone — color by status
-                _sup_colors = []
-                for _, _r in _zh_df.iterrows():
-                    _sc = _r.get('support_color', 'YELLOW')
-                    _sup_colors.append(_sup_clr_map.get(_sc, '#FFD700'))
-
-                _fig_zone.add_trace(go.Scatter(
-                    x=_zh_df['time'], y=_zh_df['support_zone'],
-                    name='Support Zone', mode='lines+markers',
-                    line=dict(color='#00ff88', width=2, dash='dot'),
-                    marker=dict(
-                        size=8, color=_sup_colors,
-                        line=dict(width=1, color='white')
-                    ),
-                ))
-
-                # Resistance zone — color by status
-                _res_colors = []
-                for _, _r in _zh_df.iterrows():
-                    _rc = _r.get('resistance_color', 'YELLOW')
-                    _res_colors.append(_res_clr_map.get(_rc, '#FFD700'))
-
-                _fig_zone.add_trace(go.Scatter(
-                    x=_zh_df['time'], y=_zh_df['resistance_zone'],
-                    name='Resistance Zone', mode='lines+markers',
-                    line=dict(color='#ff4444', width=2, dash='dot'),
-                    marker=dict(
-                        size=8, color=_res_colors,
-                        line=dict(width=1, color='white')
-                    ),
-                ))
-
-                # Fill between support and resistance
-                _fig_zone.add_trace(go.Scatter(
-                    x=list(_zh_df['time']) + list(_zh_df['time'][::-1]),
-                    y=list(_zh_df['resistance_zone']) + list(_zh_df['support_zone'][::-1]),
-                    fill='toself', fillcolor='rgba(255,215,0,0.08)',
-                    line=dict(width=0), showlegend=False, name='Range',
-                ))
-
-                # Mark BREAKOUT/BREAKDOWN signals
-                _sig_df = _zh_df[_zh_df['signal'].isin(['BREAKOUT', 'BREAKDOWN'])]
-                if not _sig_df.empty:
-                    _fig_zone.add_trace(go.Scatter(
-                        x=_sig_df['time'], y=_sig_df['spot_price'],
-                        name='Signal', mode='markers',
-                        marker=dict(
-                            size=14, symbol='star',
-                            color=['#00ff88' if s == 'BREAKOUT' else '#ff4444' for s in _sig_df['signal']],
-                            line=dict(width=2, color='white')
-                        ),
-                    ))
-
-                _fig_zone.update_layout(
-                    template='plotly_dark',
-                    height=450,
-                    margin=dict(l=10, r=10, t=30, b=10),
-                    legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
-                    xaxis=dict(title='Time', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-                    yaxis=dict(title='Price', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-                    hovermode='x unified',
-                )
-
-                st.plotly_chart(_fig_zone, use_container_width=True, key="zone_tracker_chart")
-
-                # ── Support & Resistance Score Chart ─────────────────
-                st.markdown("#### 📊 Zone Strength Over Time")
-                _fig_score = go.Figure()
-                _fig_score.add_trace(go.Scatter(
-                    x=_zh_df['time'], y=_zh_df['support_score'],
-                    name='Support Strength', mode='lines',
-                    line=dict(color='#00ff88', width=2),
-                    fill='tozeroy', fillcolor='rgba(0,255,136,0.1)',
-                ))
-                _fig_score.add_trace(go.Scatter(
-                    x=_zh_df['time'], y=_zh_df['resistance_score'],
-                    name='Resistance Strength', mode='lines',
-                    line=dict(color='#ff4444', width=2),
-                    fill='tozeroy', fillcolor='rgba(255,68,68,0.1)',
-                ))
-                _fig_score.update_layout(
-                    template='plotly_dark', height=300,
-                    margin=dict(l=10, r=10, t=30, b=10),
-                    legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
-                    xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-                    yaxis=dict(title='Score (0-100)', range=[0, 100],
-                               showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-                    hovermode='x unified',
-                )
-                st.plotly_chart(_fig_score, use_container_width=True, key="zone_score_chart")
-
-                # ── Confidence + Market Bias timeline ────────────────
-                st.markdown("#### 🎯 Confidence & Bias Timeline")
-                _bias_map = {'BULLISH': 1, 'BEARISH': -1, 'RANGE': 0, 'TRAP': 0.5}
-                _zh_df['_bias_val'] = _zh_df['market_bias'].map(_bias_map).fillna(0)
-
-                _fig_conf = go.Figure()
-                _fig_conf.add_trace(go.Scatter(
-                    x=_zh_df['time'], y=_zh_df['confidence_score'],
-                    name='Confidence %', mode='lines',
-                    line=dict(color='#FFD700', width=2),
-                ))
-                _fig_conf.add_trace(go.Bar(
-                    x=_zh_df['time'], y=_zh_df['_bias_val'] * 50,
-                    name='Bias (Bull +50 / Bear -50)',
-                    marker_color=['#00ff88' if v > 0 else '#ff4444' if v < 0 else '#FFD700'
-                                  for v in _zh_df['_bias_val']],
-                    opacity=0.4,
-                ))
-                _fig_conf.update_layout(
-                    template='plotly_dark', height=280,
-                    margin=dict(l=10, r=10, t=30, b=10),
-                    legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
-                    xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-                    yaxis=dict(title='Score', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-                    hovermode='x unified',
-                    barmode='overlay',
-                )
-                st.plotly_chart(_fig_conf, use_container_width=True, key="zone_confidence_chart")
-            else:
-                st.info("Zone history accumulating... charts appear after 2+ snapshots (every 30s).")
-
-        except Exception as _zone_err:
-            st.warning(f"Strike Zone Classification error: {str(_zone_err)[:100]}")
-
-        # ===== VOLUME PCR + STRADDLE + COMBINED SIGNAL (ATM ± 2) =====
-        st.markdown("---")
-        st.markdown("## 📊 Volume PCR · Straddle · Combined Signal (ATM ± 2)")
-
-        # ── Collect Volume PCR + Straddle data ──
-        _vp_df_src = option_data.get('df_summary') if option_data else None
-        _vp_data_ok = False
-        if (_vp_df_src is not None and 'Zone' in _vp_df_src.columns
-                and 'totalTradedVolume_CE' in _vp_df_src.columns
-                and 'totalTradedVolume_PE' in _vp_df_src.columns
-                and 'lastPrice_CE' in _vp_df_src.columns
-                and 'lastPrice_PE' in _vp_df_src.columns):
-            try:
-                _vp_atm = _vp_df_src[_vp_df_src['Zone'] == 'ATM'].index
-                if len(_vp_atm) > 0:
-                    _vp_atm_pos = _vp_df_src.index.get_loc(_vp_atm[0])
-                    _vp_start = max(0, _vp_atm_pos - 2)
-                    _vp_end   = min(len(_vp_df_src), _vp_atm_pos + 3)
-                    _vp_slice = _vp_df_src.iloc[_vp_start:_vp_end].copy()
-
-                    _ist_vp = pytz.timezone('Asia/Kolkata')
-                    _vp_now = datetime.now(_ist_vp)
-
-                    # Per-strike Volume PCR entry
-                    _vp_entry = {'time': _vp_now}
-                    for _, _vrow in _vp_slice.iterrows():
-                        _sk = str(int(_vrow['Strike']))
-                        _ce_vol = _vrow.get('totalTradedVolume_CE', 0) or 0
-                        _pe_vol = _vrow.get('totalTradedVolume_PE', 0) or 0
-                        _vp_entry[_sk] = round(_pe_vol / _ce_vol, 3) if _ce_vol > 0 else 0.0
-                    st.session_state.vol_pcr_current_strikes = sorted([int(_r['Strike']) for _, _r in _vp_slice.iterrows()])
-
-                    # Straddle entry for all ATM±2 strikes (CE LTP + PE LTP per strike)
-                    _st_entry = {'time': _vp_now}
-                    for _, _srow in _vp_slice.iterrows():
-                        _sk_int = int(_srow['Strike'])
-                        _ce_ltp = float(_srow.get('lastPrice_CE', 0) or 0)
-                        _pe_ltp = float(_srow.get('lastPrice_PE', 0) or 0)
-                        _st_entry[f'straddle_{_sk_int}'] = round(_ce_ltp + _pe_ltp, 2)
-                        _st_entry[f'ce_{_sk_int}']       = round(_ce_ltp, 2)
-                        _st_entry[f'pe_{_sk_int}']       = round(_pe_ltp, 2)
-                    # Keep ATM straddle as 'straddle' for Combined Signal
-                    _atm_row = _vp_slice[_vp_slice['Zone'] == 'ATM']
-                    if len(_atm_row) > 0:
-                        _atm_sk = int(_atm_row.iloc[0]['Strike'])
-                        _st_entry['straddle']   = _st_entry.get(f'straddle_{_atm_sk}', 0)
-                        _st_entry['atm_strike'] = _atm_sk
-
-                    # Avoid duplicates within 30 seconds
-                    _vp_add = True
-                    if st.session_state.vol_pcr_history:
-                        if (_vp_now - _to_ist(st.session_state.vol_pcr_history[-1]['time'])).total_seconds() < 30:
-                            _vp_add = False
-                    if _vp_add:
-                        st.session_state.vol_pcr_history.append(_vp_entry)
-                        if len(st.session_state.vol_pcr_history) > 200:
-                            st.session_state.vol_pcr_history = st.session_state.vol_pcr_history[-200:]
-                        db.save_option_history('vol_pcr_history', _vp_entry)
-                        if len(_st_entry) > 1:
-                            st.session_state.straddle_history.append(_st_entry)
-                            if len(st.session_state.straddle_history) > 200:
-                                st.session_state.straddle_history = st.session_state.straddle_history[-200:]
-                            db.save_option_history('straddle_history', _st_entry)
-                    _vp_data_ok = True
-            except Exception as _vp_exc:
-                st.caption(f"⚠️ Vol PCR fetch: {str(_vp_exc)[:60]}")
-
-        # ── Panel 1: Volume PCR per strike ──
-        st.markdown("### 📈 Volume PCR per Strike (ATM ± 2)")
-        _vp_hist = st.session_state.vol_pcr_history
-        _vp_strikes = sorted(getattr(st.session_state, 'vol_pcr_current_strikes', []))
-        _pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
-        _pos_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
-
-        if _vp_hist:
-            _vp_hist_df = pd.DataFrame(_vp_hist)
-            _vp_cols = st.columns(5)
-            for _vi, _vcol in enumerate(_vp_cols):
-                with _vcol:
-                    if _vi >= len(_vp_strikes):
-                        st.info(f"{_pos_labels[_vi]} N/A")
-                        continue
-                    _vstrike = _vp_strikes[_vi]
-                    _vscol = str(_vstrike)
-                    _vclr = _pos_colors[_vi]
-                    _vrgb = tuple(int(_vclr.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
-                    _vfill = f'rgba({_vrgb[0]},{_vrgb[1]},{_vrgb[2]},0.12)'
-                    if _vscol not in _vp_hist_df.columns:
-                        st.info(f"₹{_vstrike} — building…")
-                        continue
-                    _vcur = _vp_hist_df[_vscol].iloc[-1]
-                    _vfig = go.Figure()
-                    _vfig.add_trace(go.Scatter(
-                        x=_vp_hist_df['time'], y=_vp_hist_df[_vscol],
-                        mode='lines+markers', name='Vol PCR',
-                        line=dict(color=_vclr, width=2),
-                        marker=dict(size=3),
-                        fill='tozeroy', fillcolor=_vfill,
-                        hovertemplate='Vol PCR: %{y:.2f}<br>%{x|%H:%M}<extra></extra>',
-                    ))
-                    _vfig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.5)", line_width=1,
-                                    annotation_text="Bull 1.2", annotation_position="right",
-                                    annotation_font_size=8, annotation_font_color="#00ff88")
-                    _vfig.add_hline(y=0.7, line_dash="dot", line_color="rgba(255,68,68,0.5)", line_width=1,
-                                    annotation_text="Bear 0.7", annotation_position="right",
-                                    annotation_font_size=8, annotation_font_color="#ff4444")
-                    _vfig.add_hline(y=1.0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
-                    # Dynamic Y range: data + thresholds always visible
-                    _vp_raw = _vp_hist_df[_vscol].dropna().tolist()
-                    _vp_all = _vp_raw + [0.7, 1.2]
-                    _vp_ymin = max(0.0, min(_vp_all) * 0.9)
-                    _vp_ymax = max(_vp_all) * 1.1
-                    _vfig.update_layout(
-                        title=dict(text=f"{_pos_labels[_vi]}<br>₹{_vstrike}<br>Vol PCR: {_vcur:.2f}", font=dict(size=11)),
-                        template='plotly_dark', height=280, showlegend=False,
-                        margin=dict(l=5, r=10, t=70, b=30),
-                        xaxis=dict(tickformat='%H:%M', title=''),
-                        yaxis=dict(title='Vol PCR', range=[_vp_ymin, _vp_ymax]),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                    )
-                    st.plotly_chart(_vfig, use_container_width=True)
-                    _vsig = "🟢 Bull" if _vcur > 1.2 else ("🔴 Bear" if _vcur < 0.7 else "🟡 Ntrl")
-                    st.caption(f"Vol PCR {_vcur:.2f} {_vsig}")
-        else:
-            st.info("📊 Volume PCR history building… wait for a few refreshes.")
-
-        # ── Panel 2: Straddle per strike (ATM±2) ──
-        st.markdown("---")
-        st.markdown("### 🎯 Straddle (CE LTP + PE LTP) — Movement Intensity (ATM ± 2)")
-        _st_hist = st.session_state.straddle_history
-        _st_strikes = sorted(getattr(st.session_state, 'vol_pcr_current_strikes', []))
-        _st_color_map = {'rising': '#ff9944', 'falling': '#44aaff', 'flat': '#888888'}
-        if _st_hist and _st_strikes:
-            _st_df = pd.DataFrame(_st_hist)
-            _st_cols = st.columns(5)
-            for _si, _scol in enumerate(_st_cols):
-                with _scol:
-                    if _si >= len(_st_strikes):
-                        st.info(f"{_pos_labels[_si]} N/A")
-                        continue
-                    _sstrike = _st_strikes[_si]
-                    _skey = f'straddle_{_sstrike}'
-                    _cekey = f'ce_{_sstrike}'
-                    _pekey = f'pe_{_sstrike}'
-                    if _skey not in _st_df.columns:
-                        st.info(f"₹{_sstrike} — building…")
-                        continue
-                    _st_vals = _st_df[_skey].dropna().tolist()
-                    _st_cur  = _st_vals[-1] if _st_vals else 0
-                    if len(_st_vals) >= 3:
-                        _st_delta = _st_vals[-1] - _st_vals[-3]
-                        _st_dir = "rising" if _st_delta > 0.5 else ("falling" if _st_delta < -0.5 else "flat")
-                    else:
-                        _st_delta, _st_dir = 0, "flat"
-                    _st_clr = _st_color_map[_st_dir]
-                    _st_rgb = tuple(int(_st_clr.lstrip('#')[j:j+2], 16) for j in (0, 2, 4))
-                    _st_icon = "📈" if _st_dir == "rising" else ("📉" if _st_dir == "falling" else "➡️")
-
-                    _sfig = go.Figure()
-                    _sfig.add_trace(go.Scatter(
-                        x=_st_df['time'], y=_st_df[_skey],
-                        mode='lines+markers', name='Straddle',
-                        line=dict(color=_st_clr, width=2), marker=dict(size=3),
-                        fill='tozeroy', fillcolor=f'rgba({_st_rgb[0]},{_st_rgb[1]},{_st_rgb[2]},0.15)',
-                        hovertemplate='Straddle: ₹%{y:.2f}<br>%{x|%H:%M}<extra></extra>',
-                    ))
-                    if _cekey in _st_df.columns:
-                        _sfig.add_trace(go.Scatter(
-                            x=_st_df['time'], y=_st_df[_cekey],
-                            mode='lines', name='CE',
-                            line=dict(color='#ff4444', width=1, dash='dot'),
-                            hovertemplate='CE: ₹%{y:.2f}<br>%{x|%H:%M}<extra></extra>',
-                        ))
-                    if _pekey in _st_df.columns:
-                        _sfig.add_trace(go.Scatter(
-                            x=_st_df['time'], y=_st_df[_pekey],
-                            mode='lines', name='PE',
-                            line=dict(color='#00cc66', width=1, dash='dot'),
-                            hovertemplate='PE: ₹%{y:.2f}<br>%{x|%H:%M}<extra></extra>',
-                        ))
-                    # Dynamic Y range: all 3 traces (Straddle, CE, PE) combined
-                    _sy_vals = _st_df[_skey].dropna().tolist()
-                    if _cekey in _st_df.columns:
-                        _sy_vals += _st_df[_cekey].dropna().tolist()
-                    if _pekey in _st_df.columns:
-                        _sy_vals += _st_df[_pekey].dropna().tolist()
-                    _sy_min = max(0.0, min(_sy_vals) * 0.9) if _sy_vals else 0
-                    _sy_max = max(_sy_vals) * 1.1 if _sy_vals else 10
-                    _sfig.update_layout(
-                        title=dict(text=f"{_pos_labels[_si]}<br>₹{_sstrike}<br>{_st_icon} ₹{_st_cur:.1f} (Δ{_st_delta:+.1f})",
-                                   font=dict(size=11)),
-                        template='plotly_dark', height=300,
-                        showlegend=True,
-                        legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                                    xanchor='center', x=0.5, font=dict(size=8)),
-                        margin=dict(l=5, r=10, t=75, b=30),
-                        xaxis=dict(tickformat='%H:%M', title=''),
-                        yaxis=dict(title='Premium (₹)', range=[_sy_min, _sy_max]),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                    )
-                    st.plotly_chart(_sfig, use_container_width=True)
-                    _move_lbl = "💥 Explosive" if _st_dir == "rising" else ("🐌 Grinding" if _st_dir == "falling" else "⬛ Range")
-                    st.caption(f"₹{_st_cur:.1f} → {_move_lbl}")
-        else:
-            st.info("📊 Straddle history building… wait for a few refreshes.")
-
-        # ── Panel 3: Combined Trend / Strength / Move Type Signal ──
-        st.markdown("---")
-        st.markdown("### 🧠 Combined Signal — Trend · Strength · Move Type · Confidence")
-        try:
-            _cs_oi_hist   = st.session_state.pcr_history
-            _cs_vol_hist  = st.session_state.vol_pcr_history
-            _cs_gex_hist  = st.session_state.gex_history
-            _cs_st_hist   = st.session_state.straddle_history
-            _cs_strikes   = sorted(getattr(st.session_state, 'vol_pcr_current_strikes', []))
-
-            _cs_ready = (_cs_oi_hist and _cs_vol_hist and len(_cs_strikes) > 0)
-            if _cs_ready:
-                _cs_oi_df  = pd.DataFrame(_cs_oi_hist)
-                _cs_vol_df = pd.DataFrame(_cs_vol_hist)
-
-                # ── Avg OI PCR + Vol PCR across ATM±2 ──
-                _cs_oi_vals  = [_cs_oi_df[str(s)].iloc[-1]  for s in _cs_strikes if str(s) in _cs_oi_df.columns]
-                _cs_vol_vals = [_cs_vol_df[str(s)].iloc[-1] for s in _cs_strikes if str(s) in _cs_vol_df.columns]
-                _avg_oi_pcr  = sum(_cs_oi_vals)  / len(_cs_oi_vals)  if _cs_oi_vals  else 1.0
-                _avg_vol_pcr = sum(_cs_vol_vals) / len(_cs_vol_vals) if _cs_vol_vals else 1.0
-                _oi_sig  = "bull" if _avg_oi_pcr  > 1.2 else ("bear" if _avg_oi_pcr  < 0.7 else "neut")
-                _vol_sig = "bull" if _avg_vol_pcr > 1.2 else ("bear" if _avg_vol_pcr < 0.7 else "neut")
-
-                # ── Trap Detector ──
-                if _oi_sig == "bull" and _vol_sig == "bear":
-                    _trap = "🚨 BULL TRAP"
-                    _trap_clr = "#ff6600"
-                    _trap_sub = "OI bull but Vol bear — smart money exiting"
-                elif _oi_sig == "bear" and _vol_sig == "bull":
-                    _trap = "🚨 BEAR TRAP"
-                    _trap_clr = "#ffcc00"
-                    _trap_sub = "OI bear but Vol bull — absorption / reversal watch"
-                else:
-                    _trap = "✅ Clean Signal"
-                    _trap_clr = "#44cc88"
-                    _trap_sub = "OI PCR & Vol PCR aligned"
-
-                # ── Trend ──
-                if _oi_sig == "bull" and _vol_sig == "bull":
-                    _trend = "🟢 Strong Bull"
-                    _trend_clr = "#00ff88"
-                elif _oi_sig == "bear" and _vol_sig == "bear":
-                    _trend = "🔴 Strong Bear"
-                    _trend_clr = "#ff4444"
-                elif _oi_sig == "bull":
-                    _trend = "🟢 Bull (positioning)"
-                    _trend_clr = "#00cc88"
-                elif _oi_sig == "bear":
-                    _trend = "🔴 Bear (positioning)"
-                    _trend_clr = "#dd4444"
-                else:
-                    _trend = "⚪ Neutral"
-                    _trend_clr = "#888888"
-
-                # ── Strength from GEX ──
-                _cs_gex_df = pd.DataFrame(_cs_gex_hist) if _cs_gex_hist else None
-                _cs_gex_cols = [str(s) for s in _cs_strikes if _cs_gex_df is not None and str(s) in _cs_gex_df.columns]
-                _total_gex = sum(_cs_gex_df[c].iloc[-1] for c in _cs_gex_cols) if _cs_gex_cols and _cs_gex_df is not None else 0
-                if _total_gex < -10:
-                    _strength = "⚡ Strong (Neg GEX)"
-                    _strength_clr = "#ff9900"
-                    _gex_mode = "trending"
-                elif _total_gex > 10:
-                    _strength = "📍 Capped (Pos GEX)"
-                    _strength_clr = "#aaaaaa"
-                    _gex_mode = "pinning"
-                else:
-                    _strength = "➡️ Normal"
-                    _strength_clr = "#cccccc"
-                    _gex_mode = "neutral"
-
-                # ── Move Type: avg straddle delta across ALL 5 strikes ──
-                _cs_st_df = pd.DataFrame(_cs_st_hist) if _cs_st_hist else None
-                _st_deltas = []
-                _strike_dirs = {}    # per-strike direction for pattern detection
-                _strike_cur  = {}    # per-strike current straddle value
-                if _cs_st_df is not None:
-                    for _s in _cs_strikes:
-                        _sk = f'straddle_{_s}'
-                        if _sk in _cs_st_df.columns:
-                            _sv = _cs_st_df[_sk].dropna().tolist()
-                            _strike_cur[_s] = _sv[-1] if _sv else 0
-                            if len(_sv) >= 3:
-                                _d = _sv[-1] - _sv[-3]
-                                _st_deltas.append(_d)
-                                _strike_dirs[_s] = "rising" if _d > 0.5 else ("falling" if _d < -0.5 else "flat")
-                            else:
-                                _strike_dirs[_s] = "flat"
-
-                _avg_st_delta = sum(_st_deltas) / len(_st_deltas) if _st_deltas else 0
-                _cs_st_dir = "rising" if _avg_st_delta > 0.5 else ("falling" if _avg_st_delta < -0.5 else "flat")
-                _move_map = {'rising': "💥 Explosive", 'falling': "🐌 Grinding", 'flat': "⬛ Range"}
-                _move_type_s = _move_map[_cs_st_dir]
-                _move_clr = '#ff9944' if _cs_st_dir == 'rising' else ('#44aaff' if _cs_st_dir == 'falling' else '#888888')
-
-                # ── Straddle Pattern (case 1-4) ──
-                _n_rising  = sum(1 for d in _strike_dirs.values() if d == "rising")
-                _n_falling = sum(1 for d in _strike_dirs.values() if d == "falling")
-                _itm_s = _cs_strikes[:2]
-                _otm_s = _cs_strikes[3:]
-                _atm_s = _cs_strikes[2] if len(_cs_strikes) > 2 else None
-                _itm_rising = all(_strike_dirs.get(s, "flat") == "rising" for s in _itm_s)
-                _otm_flat   = all(_strike_dirs.get(s, "flat") in ("flat", "falling") for s in _otm_s)
-                _atm_rising = _strike_dirs.get(_atm_s, "flat") == "rising" if _atm_s else False
-                _atm_only   = _atm_rising and all(_strike_dirs.get(s, "flat") != "rising" for s in _cs_strikes if s != _atm_s)
-
-                if _n_rising >= 4:
-                    _pattern = "🔥 All Rising"
-                    _pattern_desc = "BIG MOVE COMING"
-                    _pattern_clr = "#ff4444"
-                elif _atm_only:
-                    _pattern = "⚠️ ATM Only Rising"
-                    _pattern_desc = "Fake / noise — wait"
-                    _pattern_clr = "#ff9900"
-                elif _itm_rising and _otm_flat:
-                    _pattern = "📐 ITM ↑ / OTM Flat"
-                    _pattern_desc = "Directional move starting"
-                    _pattern_clr = "#00ccff"
-                elif _n_falling >= 4:
-                    _pattern = "💤 All Falling"
-                    _pattern_desc = "Sideways / premium decay"
-                    _pattern_clr = "#44aaff"
-                else:
-                    _pattern = "🔀 Mixed"
-                    _pattern_desc = f"{_n_rising}↑ {_n_falling}↓"
-                    _pattern_clr = "#cccccc"
-
-                # ── Straddle Spread: OTM avg − ITM avg ──
-                _itm_cur = [_strike_cur.get(s, 0) for s in _itm_s if s in _strike_cur]
-                _otm_cur = [_strike_cur.get(s, 0) for s in _otm_s if s in _strike_cur]
-                _itm_avg = sum(_itm_cur) / len(_itm_cur) if _itm_cur else 0
-                _otm_avg = sum(_otm_cur) / len(_otm_cur) if _otm_cur else 0
-                _spread  = _otm_avg - _itm_avg
-                if _spread > 5:
-                    _spread_sig = "⬆️ Upside Expansion"
-                    _spread_clr = "#00ff88"
-                elif _spread < -5:
-                    _spread_sig = "⬇️ Downside Pressure"
-                    _spread_clr = "#ff4444"
-                else:
-                    _spread_sig = "↔️ Balanced"
-                    _spread_clr = "#888888"
-
-                # ── Direction Confidence Score ──
-                _conf = 0
-                # PCR alignment (max 3)
-                if _oi_sig == _vol_sig and _oi_sig != "neut":
-                    _conf += 3
-                elif _oi_sig != "neut" and _vol_sig != "neut":
-                    _conf += 1
-                # GEX alignment with trend (max 2)
-                if (("bull" in _oi_sig or "bull" in _vol_sig) and _gex_mode == "trending") or \
-                   (("bear" in _oi_sig or "bear" in _vol_sig) and _gex_mode == "trending"):
-                    _conf += 2
-                elif _gex_mode == "pinning":
-                    _conf += 0
-                else:
-                    _conf += 1
-                # Straddle confirmation (max 2)
-                if (_cs_st_dir == "rising" and "bull" in _oi_sig) or (_cs_st_dir == "falling" and "bear" in _oi_sig):
-                    _conf += 2
-                elif _cs_st_dir == "flat":
-                    _conf += 0
-                # Spread confirmation (max 1)
-                if (_spread > 5 and "bull" in _oi_sig) or (_spread < -5 and "bear" in _oi_sig):
-                    _conf += 1
-                # No trap bonus (max 1)
-                if _trap.startswith("✅"):
-                    _conf += 1
-                _conf_pct = min(int((_conf / 9) * 100), 100)
-                _conf_clr = "#00ff88" if _conf_pct >= 65 else ("#ff9900" if _conf_pct >= 35 else "#ff4444")
-
-                # ── Verdict ──
-                if "Trap" in _trap:
-                    _interp = "⚠️ CAUTION / TRAP"
-                    _interp_clr = "#ff6600"
-                elif "Bull" in _trend and "Explosive" in _move_type_s and _gex_mode == "trending":
-                    _interp = "🚀 BREAKOUT UP"
-                    _interp_clr = "#00ff88"
-                elif "Bear" in _trend and "Explosive" in _move_type_s and _gex_mode == "trending":
-                    _interp = "💥 BREAKDOWN"
-                    _interp_clr = "#ff4444"
-                elif "Bull" in _trend and "Grinding" in _move_type_s:
-                    _interp = "📈 SLOW GRIND UP"
-                    _interp_clr = "#88ff88"
-                elif "Bear" in _trend and "Grinding" in _move_type_s:
-                    _interp = "📉 SLOW GRIND DOWN"
-                    _interp_clr = "#ff8888"
-                elif _gex_mode == "pinning" or _cs_st_dir == "flat":
-                    _interp = "⬛ RANGE BOUND"
-                    _interp_clr = "#888888"
-                else:
-                    _interp = "➡️ WAIT / UNCLEAR"
-                    _interp_clr = "#aaaaaa"
-
-                # ── Row 1: 5 signal cards ──
-                _sig_c1, _sig_c2, _sig_c3, _sig_c4, _sig_c5 = st.columns(5)
-                def _card(clr, label, value, sub):
-                    return f"""<div style="background:#1e1e1e;border:1.5px solid {clr};border-radius:8px;padding:14px;text-align:center;min-height:110px">
-                        <div style="color:#888;font-size:10px;margin-bottom:4px;letter-spacing:1px">{label}</div>
-                        <div style="color:{clr};font-size:15px;font-weight:bold;line-height:1.3">{value}</div>
-                        <div style="color:#999;font-size:10px;margin-top:6px">{sub}</div>
-                    </div>"""
-                with _sig_c1:
-                    st.markdown(_card(_trap_clr, "🚨 TRAP DETECTOR", _trap, _trap_sub), unsafe_allow_html=True)
-                with _sig_c2:
-                    st.markdown(_card(_trend_clr, "📊 TREND", _trend, f"OI {_avg_oi_pcr:.2f} · Vol {_avg_vol_pcr:.2f}"), unsafe_allow_html=True)
-                with _sig_c3:
-                    st.markdown(_card(_strength_clr, "⚙️ STRENGTH", _strength, f"GEX {_total_gex:+.1f}L"), unsafe_allow_html=True)
-                with _sig_c4:
-                    st.markdown(_card(_move_clr, "🎯 MOVE TYPE", _move_type_s, f"5-strike avg Δ {_avg_st_delta:+.1f}"), unsafe_allow_html=True)
-                with _sig_c5:
-                    st.markdown(_card(_interp_clr, "🏆 VERDICT", _interp, "OI+Vol+GEX+Straddle"), unsafe_allow_html=True)
-
-                # ── Row 2: Straddle Pattern | Spread | Confidence ──
-                st.markdown("<div style='margin-top:10px'></div>", unsafe_allow_html=True)
-                _row2_c1, _row2_c2, _row2_c3 = st.columns(3)
-                with _row2_c1:
-                    st.markdown(_card(_pattern_clr, "🧩 STRADDLE PATTERN", _pattern, _pattern_desc), unsafe_allow_html=True)
-                with _row2_c2:
-                    st.markdown(_card(_spread_clr, "📐 STRADDLE SPREAD", f"₹{_spread:+.1f}",
-                                      f"{_spread_sig} | OTM {_otm_avg:.1f} vs ITM {_itm_avg:.1f}"), unsafe_allow_html=True)
-                with _row2_c3:
-                    _bar_filled = int(_conf_pct / 10)
-                    _bar = "█" * _bar_filled + "░" * (10 - _bar_filled)
-                    st.markdown(_card(_conf_clr, "🎯 CONFIDENCE", f"{_conf_pct}%", f"{_bar}"), unsafe_allow_html=True)
-
-            else:
-                st.info("📊 Combined signal will appear once history builds for Volume PCR. Wait a few refreshes.")
-        except Exception as _cs_exc:
-            st.warning(f"Combined signal error: {str(_cs_exc)[:80]}")
-
-        # ── Clear buttons ──
-        _vp_c1, _vp_c2 = st.columns([3, 1])
-        with _vp_c1:
-            _vp_status = "🟢 Live" if _vp_data_ok else "🟡 Cached"
-            st.caption(f"{_vp_status} | Vol PCR: {len(_vp_hist)} pts · Straddle: {len(_st_hist)} pts")
-        with _vp_c2:
-            if st.button("🗑️ Clear Vol/Straddle History"):
-                st.session_state.vol_pcr_history = []
-                st.session_state.straddle_history = []
-                st.rerun()
-
-        # ===== GEX (GAMMA EXPOSURE) ANALYSIS SECTION =====
-        st.markdown("---")
-        st.markdown("## 📊 Gamma Exposure (GEX) Analysis - Dealer Hedging Flow")
-
-        gex_data = gex_data_pre  # already computed above; avoids duplicate API/calculation
-        try:
-            underlying_price = option_data.get('underlying')
-
-            if gex_data:
-                # nesting preserved from original structure
-                if True:
-                    gex_df = gex_data['gex_df']
-
-                    # ===== GEX Summary Cards =====
-                    gex_col1, gex_col2, gex_col3, gex_col4 = st.columns(4)
-
-                    with gex_col1:
-                        gex_color = gex_data['gex_color']
-                        st.markdown(f"""
-                        <div style="background-color: {gex_color}20; padding: 15px; border-radius: 10px; border: 2px solid {gex_color};">
-                            <h4 style="color: {gex_color}; margin: 0;">Net GEX</h4>
-                            <h2 style="color: {gex_color}; margin: 5px 0;">{gex_data['total_gex']:+.2f}L</h2>
-                            <p style="color: white; margin: 0; font-size: 12px;">{gex_data['gex_signal']}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    with gex_col2:
-                        if gex_data['gamma_flip_level']:
-                            flip_color = "#00ff88" if underlying_price > gex_data['gamma_flip_level'] else "#ff4444"
-                            st.markdown(f"""
-                            <div style="background-color: {flip_color}20; padding: 15px; border-radius: 10px; border: 2px solid {flip_color};">
-                                <h4 style="color: {flip_color}; margin: 0;">Gamma Flip</h4>
-                                <h2 style="color: {flip_color}; margin: 5px 0;">₹{gex_data['gamma_flip_level']:.0f}</h2>
-                                <p style="color: white; margin: 0; font-size: 12px;">{gex_data['spot_vs_flip']}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.markdown("""
-                            <div style="background-color: #33333380; padding: 15px; border-radius: 10px; border: 2px solid #666;">
-                                <h4 style="color: #999; margin: 0;">Gamma Flip</h4>
-                                <h2 style="color: #999; margin: 5px 0;">N/A</h2>
-                                <p style="color: #666; margin: 0; font-size: 12px;">No flip detected</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                    with gex_col3:
-                        if gex_data['gex_magnet']:
-                            st.markdown(f"""
-                            <div style="background-color: #00ff8820; padding: 15px; border-radius: 10px; border: 2px solid #00ff88;">
-                                <h4 style="color: #00ff88; margin: 0;">GEX Magnet</h4>
-                                <h2 style="color: #00ff88; margin: 5px 0;">₹{gex_data['gex_magnet']:.0f}</h2>
-                                <p style="color: white; margin: 0; font-size: 12px;">Price attracted here</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.markdown("""
-                            <div style="background-color: #33333380; padding: 15px; border-radius: 10px; border: 2px solid #666;">
-                                <h4 style="color: #999; margin: 0;">GEX Magnet</h4>
-                                <h2 style="color: #999; margin: 5px 0;">N/A</h2>
-                                <p style="color: #666; margin: 0; font-size: 12px;">No magnet</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                    with gex_col4:
-                        if gex_data['gex_repeller']:
-                            st.markdown(f"""
-                            <div style="background-color: #ff444420; padding: 15px; border-radius: 10px; border: 2px solid #ff4444;">
-                                <h4 style="color: #ff4444; margin: 0;">GEX Repeller</h4>
-                                <h2 style="color: #ff4444; margin: 5px 0;">₹{gex_data['gex_repeller']:.0f}</h2>
-                                <p style="color: white; margin: 0; font-size: 12px;">Price accelerates here</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.markdown("""
-                            <div style="background-color: #33333380; padding: 15px; border-radius: 10px; border: 2px solid #666;">
-                                <h4 style="color: #999; margin: 0;">GEX Repeller</h4>
-                                <h2 style="color: #999; margin: 5px 0;">N/A</h2>
-                                <p style="color: #666; margin: 0; font-size: 12px;">No repeller</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                    # ===== GEX Interpretation Box =====
-                    st.markdown(f"""
-                    <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 4px solid {gex_data['gex_color']}; margin: 10px 0;">
-                        <b style="color: {gex_data['gex_color']};">Market Regime:</b> {gex_data['gex_interpretation']}
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    # ===== PCR × GEX Confluence Badge =====
-                    st.markdown("### 🎯 PCR × GEX Confluence")
-
-                    # Get ATM PCR for confluence
-                    atm_data = df_summary[df_summary['Zone'] == 'ATM']
-                    if not atm_data.empty:
-                        atm_pcr = atm_data.iloc[0].get('PCR', 1.0)
-                        confluence_badge, confluence_signal, confluence_strength = calculate_pcr_gex_confluence(atm_pcr, gex_data)
-
-                        conf_col1, conf_col2 = st.columns([1, 3])
-                        with conf_col1:
-                            # Color based on signal
-                            if "BULL" in confluence_badge:
-                                badge_color = "#00ff88"
-                            elif "BEAR" in confluence_badge:
-                                badge_color = "#ff4444"
-                            else:
-                                badge_color = "#FFD700"
-
-                            st.markdown(f"""
-                            <div style="background-color: {badge_color}30; padding: 20px; border-radius: 15px; border: 3px solid {badge_color}; text-align: center;">
-                                <h2 style="color: {badge_color}; margin: 0; font-size: 24px;">{confluence_badge}</h2>
-                                <p style="color: white; margin: 5px 0; font-size: 14px;">{confluence_signal}</p>
-                                <p style="color: #888; margin: 0; font-size: 12px;">Strength: {'★' * confluence_strength}{'☆' * (3 - confluence_strength)}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-                        with conf_col2:
-                            st.markdown("""
-                            **Confluence Matrix:**
-                            - 🟢🔥 **STRONG BULL**: Bullish PCR + Negative GEX = Violent upside potential
-                            - 🔴🔥 **STRONG BEAR**: Bearish PCR + Positive GEX = Strong rejection/pin down
-                            - 🟢📍 **BULL RANGE**: Bullish PCR + Positive GEX = Support with chop
-                            - 🔴⚡ **BEAR TREND**: Bearish PCR + Negative GEX = Downside acceleration
-                            """)
-
-                    # ===== Net GEX Histogram =====
-                    st.markdown("### 📊 Net GEX by Strike (Dealer Hedging Pressure)")
-
-                    fig_gex = go.Figure()
-
-                    # Add bars for Net GEX
-                    colors = ['#00ff88' if x >= 0 else '#ff4444' for x in gex_df['Net_GEX']]
-
-                    fig_gex.add_trace(go.Bar(
-                        x=gex_df['Strike'],
-                        y=gex_df['Net_GEX'],
-                        marker_color=colors,
-                        name='Net GEX',
-                        text=[f"{x:.1f}L" for x in gex_df['Net_GEX']],
-                        textposition='outside',
-                        textfont=dict(size=10)
-                    ))
-
-                    # Add zero line
-                    fig_gex.add_hline(y=0, line_dash="dash", line_color="white", line_width=2)
-
-                    # Add gamma flip line if exists
-                    if gex_data['gamma_flip_level']:
-                        fig_gex.add_vline(
-                            x=gex_data['gamma_flip_level'],
-                            line_dash="dot",
-                            line_color="#FFD700",
-                            line_width=2,
-                            annotation_text=f"Gamma Flip: ₹{gex_data['gamma_flip_level']:.0f}",
-                            annotation_position="top"
-                        )
-
-                    # Add spot price line
-                    fig_gex.add_vline(
-                        x=underlying_price,
-                        line_dash="solid",
-                        line_color="#00aaff",
-                        line_width=3,
-                        annotation_text=f"Spot: ₹{underlying_price:.0f}",
-                        annotation_position="bottom"
-                    )
-
-                    fig_gex.update_layout(
-                        title=f"Net GEX by Strike | Total: {gex_data['total_gex']:+.2f}L",
-                        template='plotly_dark',
-                        height=400,
-                        showlegend=False,
-                        xaxis_title="Strike Price",
-                        yaxis_title="Net GEX (Lakhs)",
-                        plot_bgcolor='#1e1e1e',
-                        paper_bgcolor='#1e1e1e',
-                        margin=dict(l=50, r=50, t=60, b=50)
-                    )
-
-                    st.plotly_chart(fig_gex, use_container_width=True)
-
-                    # ===== GEX Breakdown Table =====
-                    with st.expander("📋 GEX Breakdown by Strike"):
-                        gex_display = gex_df.copy()
-                        gex_display['Strike'] = gex_display['Strike'].apply(lambda x: f"₹{x:.0f}")
-
-                        # Style the dataframe
-                        def color_gex(val):
-                            try:
-                                v = float(val)
-                                if v > 10:
-                                    return 'background-color: #00ff8840; color: white'
-                                elif v > 0:
-                                    return 'background-color: #00ff8820; color: white'
-                                elif v < -10:
-                                    return 'background-color: #ff444440; color: white'
-                                elif v < 0:
-                                    return 'background-color: #ff444420; color: white'
-                                else:
-                                    return ''
-                            except:
-                                return ''
-
-                        styled_gex = gex_display.style.map(color_gex, subset=['Call_GEX', 'Put_GEX', 'Net_GEX'])
-                        st.dataframe(styled_gex, use_container_width=True, hide_index=True)
-
-                        st.markdown("""
-                        **GEX Interpretation:**
-                        - **Positive Net GEX (Green)**: Dealers LONG gamma → Price tends to PIN/REVERT
-                        - **Negative Net GEX (Red)**: Dealers SHORT gamma → Price tends to ACCELERATE
-                        - **GEX Magnet**: Strike with highest positive GEX (price attracted)
-                        - **GEX Repeller**: Strike with most negative GEX (price accelerates away)
-                        - **Gamma Flip**: Level where dealers switch from long to short gamma
-                        """)
-
-                    # ===== GEX PER-STRIKE TABLE (time-series charts shown in comparison view above) =====
-                    try:
-                        # Show current GEX data table
-                        st.markdown("### Current GEX Values")
-                        gex_display = gex_df[['Strike', 'Zone', 'Call_GEX', 'Put_GEX', 'Net_GEX']].copy()
-                        gex_display['Strike'] = gex_display['Strike'].apply(lambda x: f"₹{x:.0f}")
-
-                        # Color coding for table
-                        def style_gex_val(val):
-                            try:
-                                v = float(val)
-                                if v > 10:
-                                    return 'background-color: #00ff8840; color: white'
-                                elif v > 0:
-                                    return 'background-color: #00ff8820; color: white'
-                                elif v < -10:
-                                    return 'background-color: #ff444440; color: white'
-                                elif v < 0:
-                                    return 'background-color: #ff444420; color: white'
-                                return ''
-                            except:
-                                return ''
-
-                        styled_gex_table = gex_display.style.map(style_gex_val, subset=['Call_GEX', 'Put_GEX', 'Net_GEX'])
-                        st.dataframe(styled_gex_table, use_container_width=True, hide_index=True)
-
-                        st.caption("GEX > 10 = Pin Zone | GEX < -10 = Acceleration Zone | "
-                                   "Time-series charts shown in comparison view above")
-
-                    except Exception as e:
-                        st.warning(f"Error displaying GEX charts: {str(e)}")
-
-                else:
-                    st.warning("Unable to calculate GEX. Check option chain data.")
-
-        except Exception as e:
-            st.warning(f"GEX analysis unavailable: {str(e)}")
-
-        # ===== PCR OF TOTAL CHANGE IN OI - TIME SERIES GRAPH =====
-        st.markdown("---")
-        st.markdown("## 📊 PCR of Total Change in OI - Time Series")
-
-        try:
-            df_summary_pcr = option_data.get('df_summary') if option_data else None
-            if df_summary_pcr is not None and 'changeinOpenInterest_CE' in df_summary_pcr.columns and 'changeinOpenInterest_PE' in df_summary_pcr.columns:
-                total_ce_chgoi = df_summary_pcr['changeinOpenInterest_CE'].sum()
-                total_pe_chgoi = df_summary_pcr['changeinOpenInterest_PE'].sum()
-
-                # PCR = Total PE ChgOI / Total CE ChgOI
-                if total_ce_chgoi != 0:
-                    pcr_chgoi = abs(total_pe_chgoi / total_ce_chgoi)
-                else:
-                    pcr_chgoi = 0
-
-                pcr_chgoi = round(pcr_chgoi, 3)
-
-                # Cache in session state
-                ist = pytz.timezone('Asia/Kolkata')
-                current_time = datetime.now(ist)
-
-                st.session_state.pcr_chgoi_last_valid = {
-                    'pcr': pcr_chgoi,
-                    'ce_chgoi': total_ce_chgoi,
-                    'pe_chgoi': total_pe_chgoi,
-                    'time': current_time
-                }
-
-                # Add to history (avoid duplicates within 30 seconds)
-                should_add = True
-                if st.session_state.pcr_chgoi_history:
-                    last_entry = st.session_state.pcr_chgoi_history[-1]
-                    time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
-                    if time_diff < 30:
-                        should_add = False
-
-                if should_add:
-                    _chgoi_hist_entry = {
-                        'time': current_time,
-                        'pcr': pcr_chgoi,
-                        'ce_chgoi': total_ce_chgoi,
-                        'pe_chgoi': total_pe_chgoi
-                    }
-                    st.session_state.pcr_chgoi_history.append(_chgoi_hist_entry)
-                    if len(st.session_state.pcr_chgoi_history) > 200:
-                        st.session_state.pcr_chgoi_history = st.session_state.pcr_chgoi_history[-200:]
-                    db.save_option_history('pcr_chgoi_history', _chgoi_hist_entry)
-
-            # Display graph from cached history
-            if len(st.session_state.pcr_chgoi_history) > 0:
-                pcr_chgoi_df = pd.DataFrame(st.session_state.pcr_chgoi_history)
-
-                # Summary cards
-                latest = st.session_state.pcr_chgoi_last_valid or {}
-                curr_pcr = latest.get('pcr', 0)
-                curr_ce = latest.get('ce_chgoi', 0)
-                curr_pe = latest.get('pe_chgoi', 0)
-
-                pcr_card1, pcr_card2, pcr_card3 = st.columns(3)
-                with pcr_card1:
-                    pcr_color = "#00ff88" if curr_pcr > 1.2 else "#ff4444" if curr_pcr < 0.7 else "#FFD700"
-                    pcr_label = "Bullish" if curr_pcr > 1.2 else "Bearish" if curr_pcr < 0.7 else "Neutral"
-                    st.markdown(f"""
-                    <div style="background-color: {pcr_color}20; padding: 15px; border-radius: 10px; border: 2px solid {pcr_color};">
-                        <h4 style="color: {pcr_color}; margin: 0;">PCR (ΔOI)</h4>
-                        <h2 style="color: {pcr_color}; margin: 5px 0;">{curr_pcr:.3f}</h2>
-                        <p style="color: white; margin: 0; font-size: 12px;">{pcr_label}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                with pcr_card2:
-                    ce_color = "#ff4444" if curr_ce > 0 else "#00ff88"
-                    st.markdown(f"""
-                    <div style="background-color: {ce_color}20; padding: 15px; border-radius: 10px; border: 2px solid {ce_color};">
-                        <h4 style="color: {ce_color}; margin: 0;">Total CE ΔOI</h4>
-                        <h2 style="color: {ce_color}; margin: 5px 0;">{curr_ce/100000:+.2f}L</h2>
-                        <p style="color: white; margin: 0; font-size: 12px;">{'Call Writing ↑' if curr_ce > 0 else 'Call Unwinding ↓'}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                with pcr_card3:
-                    pe_color = "#00ff88" if curr_pe > 0 else "#ff4444"
-                    st.markdown(f"""
-                    <div style="background-color: {pe_color}20; padding: 15px; border-radius: 10px; border: 2px solid {pe_color};">
-                        <h4 style="color: {pe_color}; margin: 0;">Total PE ΔOI</h4>
-                        <h2 style="color: {pe_color}; margin: 5px 0;">{curr_pe/100000:+.2f}L</h2>
-                        <p style="color: white; margin: 0; font-size: 12px;">{'Put Writing ↑' if curr_pe > 0 else 'Put Unwinding ↓'}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                # PCR of ChgOI Time-Series Chart
-                fig_pcr_chgoi = go.Figure()
-
-                # Color the line based on PCR zones
-                fig_pcr_chgoi.add_trace(go.Scatter(
-                    x=pcr_chgoi_df['time'],
-                    y=pcr_chgoi_df['pcr'],
-                    mode='lines+markers',
-                    name='PCR (ΔOI)',
-                    line=dict(color='#00aaff', width=3),
-                    marker=dict(size=6, color=[
-                        '#00ff88' if v > 1.2 else '#ff4444' if v < 0.7 else '#FFD700'
-                        for v in pcr_chgoi_df['pcr']
-                    ]),
-                    fill='tozeroy',
-                    fillcolor='rgba(0, 170, 255, 0.1)'
-                ))
-
-                # Reference zones
-                fig_pcr_chgoi.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1,
-                                        annotation_text="1.0 (Neutral)", annotation_position="right")
-                fig_pcr_chgoi.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1,
-                                        annotation_text="1.2 (Bullish)", annotation_position="right")
-                fig_pcr_chgoi.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1,
-                                        annotation_text="0.7 (Bearish)", annotation_position="right")
-
-                # Dynamic Y range: data + reference thresholds always in view
-                _ov_raw = pcr_chgoi_df['pcr'].dropna().tolist()
-                _ov_all = _ov_raw + [0.7, 1.0, 1.2]
-                _ov_ymin = max(0.0, min(_ov_all) * 0.9)
-                _ov_ymax = max(_ov_all) * 1.1
-
-                # Add green/red shading zones
-                fig_pcr_chgoi.add_hrect(y0=1.2, y1=_ov_ymax, fillcolor="rgba(0,255,136,0.06)", line_width=0)
-                fig_pcr_chgoi.add_hrect(y0=_ov_ymin, y1=0.7, fillcolor="rgba(255,68,68,0.06)", line_width=0)
-
-                fig_pcr_chgoi.update_layout(
-                    title=f"PCR of Total Change in OI | Current: {curr_pcr:.3f} ({pcr_label})",
-                    template='plotly_dark',
-                    height=400,
-                    showlegend=False,
-                    xaxis=dict(tickformat='%H:%M', title='Time'),
-                    yaxis=dict(title='PCR (Total PE ΔOI / Total CE ΔOI)', range=[_ov_ymin, _ov_ymax]),
-                    plot_bgcolor='#1e1e1e',
-                    paper_bgcolor='#1e1e1e',
-                    margin=dict(l=50, r=50, t=60, b=50)
-                )
-
-                st.plotly_chart(fig_pcr_chgoi, use_container_width=True)
-
-                # Status bar
-                pcr_info1, pcr_info2 = st.columns([3, 1])
-                with pcr_info1:
-                    st.caption(f"🟢 Live | 📈 {len(st.session_state.pcr_chgoi_history)} data points | PCR > 1.2 = Bullish | PCR < 0.7 = Bearish")
-                with pcr_info2:
-                    if st.button("🗑️ Clear PCR ΔOI History"):
-                        st.session_state.pcr_chgoi_history = []
-                        st.session_state.pcr_chgoi_last_valid = None
-                        st.rerun()
-            else:
-                st.info("📊 PCR (ΔOI) history will build up as the app refreshes. Please wait for data collection...")
-
-        except Exception as e:
-            st.warning(f"PCR of ΔOI analysis unavailable: {str(e)}")
-
-        # ===== PCR OF CHANGE IN OI - TIME SERIES PER ATM ± 2 STRIKES =====
-        st.markdown("---")
-        st.markdown("## 📊 PCR of Change in OI - Time Series (ATM ± 2)")
-
-        # Helper function to create per-strike ChgOI PCR chart
-        def create_pcr_chgoi_strike_chart(history_df, col_name, color, title_prefix):
-            """Helper to create individual PCR of Change in OI chart per strike"""
-            if col_name and col_name in history_df.columns:
-                strike_val = col_name
-
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=history_df['time'],
-                    y=history_df[col_name],
-                    mode='lines+markers',
-                    name=f'₹{strike_val}',
-                    line=dict(color=color, width=2),
-                    marker=dict(size=4),
-                    fill='tozeroy',
-                    fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.1])}'
-                ))
-
-                # Reference lines
-                fig.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
-                fig.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
-                fig.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
-
-                # Get current value
-                current_val = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
-
-                # Dynamic Y range: data + reference thresholds always in view
-                _chgoi_raw = history_df[col_name].dropna().tolist()
-                _chgoi_all = _chgoi_raw + [0.7, 1.2]
-                _chgoi_ymin = max(0.0, min(_chgoi_all) * 0.9)
-                _chgoi_ymax = max(_chgoi_all) * 1.1
-
-                fig.update_layout(
-                    title=f"{title_prefix}<br>₹{strike_val}<br>PCR(ΔOI): {current_val:.2f}",
-                    template='plotly_dark',
-                    height=280,
-                    showlegend=False,
-                    margin=dict(l=10, r=10, t=70, b=30),
-                    xaxis=dict(tickformat='%H:%M', title=''),
-                    yaxis=dict(title='PCR (ΔOI)', range=[_chgoi_ymin, _chgoi_ymax]),
-                    plot_bgcolor='#1e1e1e',
-                    paper_bgcolor='#1e1e1e'
-                )
-                return fig, current_val
-            return None, 0
-
-        # Try to get new data and add to history
-        pcr_chgoi_strike_available = False
-        pcr_chgoi_strike_df = None
-
-        df_summary_chgoi = option_data.get('df_summary') if option_data else None
-        if df_summary_chgoi is not None and 'Zone' in df_summary_chgoi.columns and 'changeinOpenInterest_CE' in df_summary_chgoi.columns and 'changeinOpenInterest_PE' in df_summary_chgoi.columns:
-            try:
-                # Find ATM index
-                atm_idx_chgoi = df_summary_chgoi[df_summary_chgoi['Zone'] == 'ATM'].index
-                if len(atm_idx_chgoi) > 0:
-                    atm_pos_chgoi = df_summary_chgoi.index.get_loc(atm_idx_chgoi[0])
-
-                    # Get ATM ± 2 strikes (5 strikes total)
-                    start_idx_chgoi = max(0, atm_pos_chgoi - 2)
-                    end_idx_chgoi = min(len(df_summary_chgoi), atm_pos_chgoi + 3)
-
-                    pcr_chgoi_strike_df = df_summary_chgoi.iloc[start_idx_chgoi:end_idx_chgoi][['Strike', 'Zone',
-                                                                   'changeinOpenInterest_CE', 'changeinOpenInterest_PE']].copy()
-
-                    # Calculate PCR of Change in OI per strike
-                    pcr_chgoi_strike_df['PCR_ChgOI'] = pcr_chgoi_strike_df.apply(
-                        lambda row: abs(row['changeinOpenInterest_PE'] / row['changeinOpenInterest_CE'])
-                        if row['changeinOpenInterest_CE'] != 0 else 0, axis=1
-                    )
-                    pcr_chgoi_strike_df['PCR_ChgOI'] = pcr_chgoi_strike_df['PCR_ChgOI'].round(3)
-                    pcr_chgoi_strike_df['PCR_ChgOI_Signal'] = np.where(
-                        pcr_chgoi_strike_df['PCR_ChgOI'] > 1.2, "Bullish",
-                        np.where(pcr_chgoi_strike_df['PCR_ChgOI'] < 0.7, "Bearish", "Neutral")
-                    )
-
-                    if not pcr_chgoi_strike_df.empty:
-                        pcr_chgoi_strike_available = True
-                        st.session_state.pcr_chgoi_strike_last_valid = pcr_chgoi_strike_df.copy()
-
-                        ist = pytz.timezone('Asia/Kolkata')
-                        current_time = datetime.now(ist)
-
-                        # Build history entry keyed by strike price
-                        chgoi_entry = {'time': current_time}
-                        for _, row in pcr_chgoi_strike_df.iterrows():
-                            strike_label = str(int(row['Strike']))
-                            chgoi_entry[strike_label] = row['PCR_ChgOI']
-
-                        # Store current strikes
-                        current_chgoi_strikes = pcr_chgoi_strike_df['Strike'].tolist()
-                        st.session_state.pcr_chgoi_strike_current_strikes = [int(s) for s in current_chgoi_strikes]
-
-                        # Deduplicate within 30 seconds
-                        should_add = True
-                        if st.session_state.pcr_chgoi_strike_history:
-                            last_entry = st.session_state.pcr_chgoi_strike_history[-1]
-                            time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
-                            if time_diff < 30:
-                                should_add = False
-
-                        if should_add:
-                            st.session_state.pcr_chgoi_strike_history.append(chgoi_entry)
-                            if len(st.session_state.pcr_chgoi_strike_history) > 200:
-                                st.session_state.pcr_chgoi_strike_history = st.session_state.pcr_chgoi_strike_history[-200:]
-                            db.save_option_history('pcr_chgoi_strike_history', chgoi_entry)
-
-            except Exception as e:
-                st.caption(f"⚠️ Current fetch issue: {str(e)[:50]}...")
-
-        # ALWAYS try to display graph if we have history
-        if len(st.session_state.pcr_chgoi_strike_history) > 0:
-            try:
-                chgoi_history_df = pd.DataFrame(st.session_state.pcr_chgoi_strike_history)
-
-                current_chgoi_strikes = getattr(st.session_state, 'pcr_chgoi_strike_current_strikes', [])
-
-                if not current_chgoi_strikes and st.session_state.pcr_chgoi_strike_last_valid is not None:
-                    current_chgoi_strikes = [int(s) for s in st.session_state.pcr_chgoi_strike_last_valid['Strike'].tolist()]
-
-                current_chgoi_strikes = sorted(current_chgoi_strikes)
-
-                # 5 columns for side-by-side display
-                chgoi_col1, chgoi_col2, chgoi_col3, chgoi_col4, chgoi_col5 = st.columns(5)
-
-                def display_pcr_chgoi_with_signal(container, fig, pcr_val):
-                    if fig:
-                        container.plotly_chart(fig, use_container_width=True)
-                        if pcr_val > 1.2:
-                            container.success("Bullish")
-                        elif pcr_val < 0.7:
-                            container.error("Bearish")
-                        else:
-                            container.warning("Neutral")
-
-                # Get zone info
-                chgoi_zone_info = {}
-                chgoi_zone_df = pcr_chgoi_strike_df if pcr_chgoi_strike_df is not None else st.session_state.pcr_chgoi_strike_last_valid
-                if chgoi_zone_df is not None:
-                    for _, row in chgoi_zone_df.iterrows():
-                        chgoi_zone_info[int(row['Strike'])] = row['Zone']
-
-                position_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
-                position_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
-                chgoi_columns = [chgoi_col1, chgoi_col2, chgoi_col3, chgoi_col4, chgoi_col5]
-
-                for i, col in enumerate(chgoi_columns):
-                    with col:
-                        if i < len(current_chgoi_strikes):
-                            strike = current_chgoi_strikes[i]
-                            strike_col = str(strike)
-                            zone = chgoi_zone_info.get(strike, position_labels[i].split()[-1])
-
-                            if strike_col in chgoi_history_df.columns:
-                                fig, pcr_val = create_pcr_chgoi_strike_chart(chgoi_history_df, strike_col, position_colors[i], f'{position_labels[i]}')
-                                display_pcr_chgoi_with_signal(st, fig, pcr_val)
-                            else:
-                                st.info(f"₹{strike} - Building history...")
-                        else:
-                            st.info(f"{position_labels[i]} N/A")
-
-                # Show current data table
-                st.markdown("### Current PCR of Change in OI Values")
-                display_chgoi_df = pcr_chgoi_strike_df if pcr_chgoi_strike_df is not None else st.session_state.pcr_chgoi_strike_last_valid
-                if display_chgoi_df is not None:
-                    chgoi_display = display_chgoi_df[['Strike', 'Zone', 'PCR_ChgOI', 'PCR_ChgOI_Signal']].copy()
-                    chgoi_display['CE ΔOI (L)'] = (display_chgoi_df['changeinOpenInterest_CE'] / 100000).round(2)
-                    chgoi_display['PE ΔOI (L)'] = (display_chgoi_df['changeinOpenInterest_PE'] / 100000).round(2)
-                    chgoi_display.rename(columns={'PCR_ChgOI': 'PCR (ΔOI)', 'PCR_ChgOI_Signal': 'Signal'}, inplace=True)
-                    st.dataframe(chgoi_display, use_container_width=True, hide_index=True)
-
-                # Status bar and clear button
-                chgoi_info1, chgoi_info2 = st.columns([3, 1])
-                with chgoi_info1:
-                    status = "🟢 Live" if pcr_chgoi_strike_available else "🟡 Using cached history"
-                    st.caption(f"{status} | 📈 {len(st.session_state.pcr_chgoi_strike_history)} data points | History preserved on refresh failures")
-                with chgoi_info2:
-                    if st.button("🗑️ Clear ΔOI Strike History"):
-                        st.session_state.pcr_chgoi_strike_history = []
-                        st.session_state.pcr_chgoi_strike_last_valid = None
-                        st.rerun()
-
-            except Exception as e:
-                st.warning(f"Error displaying PCR ΔOI strike charts: {str(e)}")
-        else:
-            st.info("📊 PCR of ΔOI per strike history will build up as the app refreshes. Please wait for data collection...")
-
-        # ===== COMPOSITE DIRECTION SIGNAL — now merged into Unified Sentiment Engine above =====
-        # Computation runs inside Unified Options Flow Sentiment Engine; session state is shared.
-        # Displaying the verdict & per-strike charts here for historical time-series view.
-        st.markdown("---")
-        st.markdown("## 🧭 Composite Direction Signal — Time Series (ATM ± 2)")
-
-        try:
-            # Computation runs inside Unified Options Flow Sentiment Engine (above).
-            # This section shows the composite time-series history from session state.
-            last_valid = st.session_state.composite_signal_last_valid
-            if last_valid:
-                _cv2_verdict = last_valid['verdict']
-                _cv2_icon    = last_valid['verdict_icon']
-                _cv2_color   = last_valid['verdict_color']
-                _cv2_desc    = last_valid['verdict_desc']
-                _cv2_score   = last_valid['score_pct']
-                _cv2_gex     = last_valid['total_net_gex']
-                _cv2_pcr     = last_valid['avg_pcr']
-                _cv2_chgoi   = last_valid['avg_chgoi']
-                _cv2_max     = 14.0
-                _cv2_gtrend  = _cv2_gex < -10
-                _cv2_gpin    = _cv2_gex > 10
-                strike_details = last_valid.get('strike_details', [])
-
-                # Verdict card
-                st.markdown(f"""
-                <div style="background:linear-gradient(135deg,{_cv2_color}15,{_cv2_color}30);
-                            padding:20px;border-radius:12px;border:3px solid {_cv2_color};
-                            text-align:center;margin-bottom:14px;">
-                    <h1 style="color:{_cv2_color};margin:0;font-size:42px;">{_cv2_icon} {_cv2_verdict}</h1>
-                    <p style="color:#ccc;margin:8px 0 0 0;font-size:15px;">{_cv2_desc}</p>
-                    <p style="color:{_cv2_color};margin:5px 0 0 0;font-size:13px;">
-                        Score: {_cv2_score:+.0f}% | GEX: {_cv2_gex:.1f}L
-                        ({'Trending' if _cv2_gtrend else 'Pinning' if _cv2_gpin else 'Neutral'})
-                    </p>
-                </div>""", unsafe_allow_html=True)
-
-                # 3 metric cards
-                _cm1x, _cm2x, _cm3x = st.columns(3)
-                with _cm1x:
-                    _pc2 = "#00ff88" if _cv2_pcr > 1.2 else "#ff4444" if _cv2_pcr < 0.7 else "#FFD700"
-                    st.markdown(f'''<div style="background:{_pc2}20;padding:12px;border-radius:8px;
-                        border:2px solid {_pc2};text-align:center;">
-                        <h4 style="color:{_pc2};margin:0;">Avg PCR (OI)</h4>
-                        <h2 style="color:{_pc2};margin:5px 0;">{_cv2_pcr:.2f}</h2>
-                        <p style="color:white;margin:0;font-size:12px;">
-                            {'Bullish' if _cv2_pcr > 1.2 else 'Bearish' if _cv2_pcr < 0.7 else 'Neutral'}
-                        </p></div>''', unsafe_allow_html=True)
-                with _cm2x:
-                    _cc2 = "#00ff88" if _cv2_chgoi > 1.2 else "#ff4444" if _cv2_chgoi < 0.7 else "#FFD700"
-                    st.markdown(f'''<div style="background:{_cc2}20;padding:12px;border-radius:8px;
-                        border:2px solid {_cc2};text-align:center;">
-                        <h4 style="color:{_cc2};margin:0;">Avg PCR (ΔOI)</h4>
-                        <h2 style="color:{_cc2};margin:5px 0;">{_cv2_chgoi:.2f}</h2>
-                        <p style="color:white;margin:0;font-size:12px;">
-                            {'Bullish' if _cv2_chgoi > 1.2 else 'Bearish' if _cv2_chgoi < 0.7 else 'Neutral'}
-                        </p></div>''', unsafe_allow_html=True)
-                with _cm3x:
-                    _gc2 = "#00ff88" if _cv2_gex > 10 else "#ff4444" if _cv2_gex < -10 else "#FFD700"
-                    st.markdown(f'''<div style="background:{_gc2}20;padding:12px;border-radius:8px;
-                        border:2px solid {_gc2};text-align:center;">
-                        <h4 style="color:{_gc2};margin:0;">Total GEX (ATM±2)</h4>
-                        <h2 style="color:{_gc2};margin:5px 0;">{_cv2_gex:.1f}L</h2>
-                        <p style="color:white;margin:0;font-size:12px;">
-                            {'Pin/Chop' if _cv2_gex > 10 else 'Trend/Accel' if _cv2_gex < -10 else 'Neutral'}
-                        </p></div>''', unsafe_allow_html=True)
-
-            # Time-series charts from shared session state
-            if len(st.session_state.composite_signal_history) > 0:
-                comp_hist_df = pd.DataFrame(st.session_state.composite_signal_history)
-
-                # Chart 1: Composite Score over time
-                fig_score = go.Figure()
-                _mkr_colors2 = []
-                for _, _hrow2 in comp_hist_df.iterrows():
-                    _vn2 = _hrow2.get('verdict_numeric', 0)
-                    _mkr_colors2.append(
-                        '#00ff88' if _vn2 >= 2 else '#90EE90' if _vn2 == 1 else
-                        '#ff4444' if _vn2 <= -2 else '#FFB6C1' if _vn2 == -1 else '#FFD700')
-                fig_score.add_trace(go.Scatter(
-                    x=comp_hist_df['time'], y=comp_hist_df['score_pct'],
-                    mode='lines+markers', name='Score %',
-                    line=dict(color='#00aaff', width=3),
-                    marker=dict(size=8, color=_mkr_colors2),
-                    fill='tozeroy', fillcolor='rgba(0,170,255,0.08)'))
-                fig_score.add_hline(y=0, line_dash='dash', line_color='white', line_width=1.5,
-                    annotation_text='Neutral (0%)', annotation_position='right')
-                fig_score.add_hline(y=15, line_dash='dot', line_color='#00ff88', line_width=1,
-                    annotation_text='Bullish Zone', annotation_position='right')
-                fig_score.add_hline(y=-15, line_dash='dot', line_color='#ff4444', line_width=1,
-                    annotation_text='Bearish Zone', annotation_position='right')
-                _ymax2 = max(abs(comp_hist_df['score_pct'].max()), abs(comp_hist_df['score_pct'].min()), 30) * 1.2
-                fig_score.add_hrect(y0=15, y1=_ymax2, fillcolor='rgba(0,255,136,0.06)', line_width=0)
-                fig_score.add_hrect(y0=-_ymax2, y1=-15, fillcolor='rgba(255,68,68,0.06)', line_width=0)
-                _cv2_s_now = last_valid['score_pct'] if last_valid else 0
-                _cv2_v_now = last_valid['verdict']    if last_valid else 'NEUTRAL'
-                fig_score.update_layout(
-                    title=f"Composite Direction Score | Current: {_cv2_s_now:+.0f}% ({_cv2_v_now})",
-                    template='plotly_dark', height=380, showlegend=False,
-                    xaxis=dict(tickformat='%H:%M', title='Time'),
-                    yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
-                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                    margin=dict(l=50, r=50, t=60, b=50))
-                st.plotly_chart(fig_score, use_container_width=True)
-
-                # Charts: PCR components + GEX (2 col)
-                ind_col1, ind_col2 = st.columns(2)
-                with ind_col1:
-                    fig_pcr_ts = go.Figure()
-                    fig_pcr_ts.add_trace(go.Scatter(
-                        x=comp_hist_df['time'], y=comp_hist_df['avg_pcr'],
-                        mode='lines+markers', name='Avg PCR (OI)',
-                        line=dict(color='#00aaff', width=2), marker=dict(size=4)))
-                    fig_pcr_ts.add_trace(go.Scatter(
-                        x=comp_hist_df['time'], y=comp_hist_df['avg_chgoi'],
-                        mode='lines+markers', name='Avg PCR (ΔOI)',
-                        line=dict(color='#ff44ff', width=2), marker=dict(size=4)))
-                    fig_pcr_ts.add_hline(y=1.2, line_dash='dot', line_color='#00ff88', line_width=1)
-                    fig_pcr_ts.add_hline(y=1.0, line_dash='dash', line_color='white', line_width=1)
-                    fig_pcr_ts.add_hline(y=0.7, line_dash='dot', line_color='#ff4444', line_width=1)
-                    _all_pcr = (comp_hist_df['avg_pcr'].dropna().tolist() +
-                                comp_hist_df['avg_chgoi'].dropna().tolist() + [0.7, 1.0, 1.2])
-                    fig_pcr_ts.update_layout(
-                        title='Avg PCR (OI) vs Avg PCR (ΔOI)',
-                        template='plotly_dark', height=300, showlegend=True,
-                        legend=dict(orientation="h", y=-0.3, font=dict(size=9)),
-                        xaxis=dict(tickformat='%H:%M'),
-                        yaxis=dict(title='PCR',
-                                   range=[max(0, min(_all_pcr)*0.9), max(_all_pcr)*1.1]),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                        margin=dict(l=40, r=10, t=50, b=30))
-                    st.plotly_chart(fig_pcr_ts, use_container_width=True)
-                with ind_col2:
-                    fig_gex_ts = go.Figure()
-                    _gex_c2 = ['#00ff88' if g > 10 else '#ff4444' if g < -10 else '#FFD700'
-                               for g in comp_hist_df['total_gex']]
-                    fig_gex_ts.add_trace(go.Scatter(
-                        x=comp_hist_df['time'], y=comp_hist_df['total_gex'],
-                        mode='lines+markers', name='Total GEX',
-                        line=dict(color='#FFD700', width=2),
-                        marker=dict(size=5, color=_gex_c2),
-                        fill='tozeroy', fillcolor='rgba(255,215,0,0.08)'))
-                    fig_gex_ts.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
-                    fig_gex_ts.add_hline(y=10, line_dash='dot', line_color='#00ff88', line_width=1,
-                        annotation_text='Pin Zone', annotation_position='right')
-                    fig_gex_ts.add_hline(y=-10, line_dash='dot', line_color='#ff4444', line_width=1,
-                        annotation_text='Accel Zone', annotation_position='right')
-                    fig_gex_ts.update_layout(
-                        title='Total GEX (ATM±2) Over Time',
-                        template='plotly_dark', height=300, showlegend=False,
-                        xaxis=dict(tickformat='%H:%M'),
-                        yaxis=dict(title='GEX (Lakhs)', zeroline=True, zerolinecolor='white'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                        margin=dict(l=40, r=50, t=50, b=30))
-                    st.plotly_chart(fig_gex_ts, use_container_width=True)
-
-                # Per-strike score time series
-                score_cols = [c for c in comp_hist_df.columns if c.startswith('score_')]
-                if score_cols:
-                    fig_strike_ts = go.Figure()
-                    _cs_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
-                    _plbls = ['ITM-2', 'ITM-1', 'ATM', 'OTM+1', 'OTM+2']
-                    for _idx_s, _sc2 in enumerate(sorted(score_cols)):
-                        _sn = _sc2.replace('score_', '')
-                        _slbl3 = _plbls[_idx_s] if _idx_s < len(_plbls) else _sn
-                        fig_strike_ts.add_trace(go.Scatter(
-                            x=comp_hist_df['time'], y=comp_hist_df[_sc2],
-                            mode='lines+markers',
-                            name=f'{_slbl3} (₹{_sn})',
-                            line=dict(color=_cs_colors[_idx_s % len(_cs_colors)], width=2),
-                            marker=dict(size=3)))
-                    fig_strike_ts.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
-                    fig_strike_ts.update_layout(
-                        title='Per-Strike Weighted Score Over Time',
-                        template='plotly_dark', height=320, showlegend=True,
-                        legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
-                        xaxis=dict(tickformat='%H:%M'),
-                        yaxis=dict(title='Weighted Score', zeroline=True, zerolinecolor='white'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                        margin=dict(l=50, r=20, t=50, b=40))
-                    st.plotly_chart(fig_strike_ts, use_container_width=True)
-
-                # Per-strike breakdown table
-                if last_valid and last_valid.get('strike_details'):
-                    st.markdown("### Per-Strike Breakdown")
-                    st.dataframe(pd.DataFrame(last_valid['strike_details']),
-                                 use_container_width=True, hide_index=True)
-
-                # Status / clear
-                comp_info1, comp_info2 = st.columns([3, 1])
-                with comp_info1:
-                    st.caption(f"📈 {len(st.session_state.composite_signal_history)} pts · "
-                               f"Computed inside Unified Sentiment Engine · Updates every ~30s")
-                with comp_info2:
-                    if st.button("🗑️ Clear Composite History", key="clr_comp_ts"):
-                        st.session_state.composite_signal_history = []
-                        st.session_state.composite_signal_last_valid = None
-                        st.rerun()
-
-            elif not st.session_state.composite_signal_last_valid:
-                st.info("📊 Composite signal history will build up as the app refreshes.")
-
-        except Exception as e:
-            st.warning(f"Composite direction signal unavailable: {str(e)}")
-
-        # ===== TOTAL GEX TIME-SERIES GRAPH =====
-        st.markdown("---")
-        st.markdown("## 📊 Total GEX (Gamma Exposure) - Time Series")
-
-        try:
-            df_summary_gex = option_data.get('df_summary') if option_data else None
-            underlying_price_gex = option_data.get('underlying') if option_data else None
-
-            if df_summary_gex is not None and underlying_price_gex:
-                gex_calc = calculate_dealer_gex(df_summary_gex, underlying_price_gex)
-                if gex_calc:
-                    total_gex_val = gex_calc['total_gex']
-                    gex_signal_val = gex_calc['gex_signal']
-                    gex_color_val = gex_calc['gex_color']
-                    gex_interp_val = gex_calc['gex_interpretation']
-                    flip_level = gex_calc.get('gamma_flip_level')
-
-                    # Cache in session state
-                    ist = pytz.timezone('Asia/Kolkata')
-                    current_time = datetime.now(ist)
-
-                    st.session_state.total_gex_last_valid = {
-                        'total_gex': total_gex_val,
-                        'signal': gex_signal_val,
-                        'color': gex_color_val,
-                        'interpretation': gex_interp_val,
-                        'flip_level': flip_level,
-                        'time': current_time
-                    }
-
-                    # Add to history
-                    should_add = True
-                    if st.session_state.total_gex_history:
-                        last_entry = st.session_state.total_gex_history[-1]
-                        time_diff = (current_time - _to_ist(last_entry['time'])).total_seconds()
-                        if time_diff < 30:
-                            should_add = False
-
-                    if should_add:
-                        _gex_hist_entry = {
-                            'time': current_time,
-                            'total_gex': total_gex_val,
-                            'signal': gex_signal_val,
-                            'flip_level': flip_level
-                        }
-                        st.session_state.total_gex_history.append(_gex_hist_entry)
-                        if len(st.session_state.total_gex_history) > 200:
-                            st.session_state.total_gex_history = st.session_state.total_gex_history[-200:]
-                        db.save_option_history('total_gex_history', _gex_hist_entry)
-
-            # Display graph from cached history
-            if len(st.session_state.total_gex_history) > 0:
-                gex_ts_df = pd.DataFrame(st.session_state.total_gex_history)
-
-                latest_gex = st.session_state.total_gex_last_valid or {}
-                curr_gex = latest_gex.get('total_gex', 0)
-                curr_signal = latest_gex.get('signal', 'N/A')
-                curr_gex_color = latest_gex.get('color', '#FFD700')
-                curr_interp = latest_gex.get('interpretation', 'N/A')
-
-                # Total GEX Time-Series Chart
-                fig_total_gex = go.Figure()
-
-                # Color markers based on positive/negative
-                marker_colors = ['#00ff88' if v >= 0 else '#ff4444' for v in gex_ts_df['total_gex']]
-
-                fig_total_gex.add_trace(go.Scatter(
-                    x=gex_ts_df['time'],
-                    y=gex_ts_df['total_gex'],
-                    mode='lines+markers',
-                    name='Total GEX',
-                    line=dict(color=curr_gex_color, width=3),
-                    marker=dict(size=6, color=marker_colors),
-                    fill='tozeroy',
-                    fillcolor='rgba(0,255,136,0.08)' if curr_gex >= 0 else 'rgba(255,68,68,0.08)'
-                ))
-
-                # Zero reference line (critical flip boundary)
-                fig_total_gex.add_hline(y=0, line_dash="solid", line_color="white", line_width=2,
-                                        annotation_text="0 (Gamma Flip)", annotation_position="right")
-
-                # Threshold lines
-                fig_total_gex.add_hline(y=50, line_dash="dot", line_color="#00ff88", line_width=1,
-                                        annotation_text="+50 (Strong Pin)", annotation_position="right")
-                fig_total_gex.add_hline(y=-50, line_dash="dot", line_color="#ff4444", line_width=1,
-                                        annotation_text="-50 (Strong Trend)", annotation_position="right")
-
-                # Shading zones
-                y_max_gex = max(abs(gex_ts_df['total_gex'].max()), abs(gex_ts_df['total_gex'].min()), 60) * 1.2
-                fig_total_gex.add_hrect(y0=50, y1=y_max_gex, fillcolor="rgba(0,255,136,0.06)", line_width=0)
-                fig_total_gex.add_hrect(y0=-y_max_gex, y1=-50, fillcolor="rgba(255,68,68,0.06)", line_width=0)
-
-                fig_total_gex.update_layout(
-                    title=f"Total Net GEX | Current: {curr_gex:+.2f}L ({curr_signal})",
-                    template='plotly_dark',
-                    height=400,
-                    showlegend=False,
-                    xaxis=dict(tickformat='%H:%M', title='Time'),
-                    yaxis=dict(
-                        title='Total Net GEX (Lakhs)',
-                        zeroline=True,
-                        zerolinecolor='white',
-                        zerolinewidth=2
-                    ),
-                    plot_bgcolor='#1e1e1e',
-                    paper_bgcolor='#1e1e1e',
-                    margin=dict(l=50, r=50, t=60, b=50)
-                )
-
-                st.plotly_chart(fig_total_gex, use_container_width=True)
-
-                # Interpretation box
-                st.markdown(f"""
-                <div style="background-color: #1e1e1e; padding: 15px; border-radius: 10px; border-left: 4px solid {curr_gex_color}; margin: 10px 0;">
-                    <b style="color: {curr_gex_color};">Current Regime:</b> {curr_interp}
-                </div>
-                """, unsafe_allow_html=True)
-
-                # Status bar
-                gex_ts_info1, gex_ts_info2 = st.columns([3, 1])
-                with gex_ts_info1:
-                    st.caption(f"🟢 Live | 📈 {len(st.session_state.total_gex_history)} data points | +GEX = Pin/Chop | -GEX = Trend/Breakout")
-                with gex_ts_info2:
-                    if st.button("🗑️ Clear Total GEX History"):
-                        st.session_state.total_gex_history = []
-                        st.session_state.total_gex_last_valid = None
-                        st.rerun()
-            else:
-                st.info("📊 Total GEX history will build up as the app refreshes. Please wait for data collection...")
-
-        except Exception as e:
-            st.warning(f"Total GEX time-series unavailable: {str(e)}")
-
-        # ===== GAMMA SEQUENCE ANALYSIS =====
-        st.markdown("---")
-        st.markdown("## 📊 Gamma Sequence Analysis")
-
-        try:
-            df_summary_gs = option_data.get('df_summary') if option_data else None
-            underlying_price_gs = option_data.get('underlying') if option_data else None
-
-            if df_summary_gs is not None and underlying_price_gs:
-                gamma_seq = calculate_gamma_sequence(df_summary_gs, underlying_price_gs)
-
-                if gamma_seq:
-                    gs_df = gamma_seq['gamma_seq_df']
-
-                    # Summary cards
-                    gs_col1, gs_col2, gs_col3 = st.columns(3)
-                    with gs_col1:
-                        pcolor = gamma_seq['profile_color']
-                        st.markdown(f"""
-                        <div style="background-color: {pcolor}20; padding: 15px; border-radius: 10px; border: 2px solid {pcolor};">
-                            <h4 style="color: {pcolor}; margin: 0;">Gamma Profile</h4>
-                            <h2 style="color: {pcolor}; margin: 5px 0; font-size: 16px;">{gamma_seq['gamma_profile']}</h2>
-                            <p style="color: white; margin: 0; font-size: 12px;">Above: {gamma_seq['above_pct']}% | Below: {gamma_seq['below_pct']}%</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with gs_col2:
-                        st.markdown(f"""
-                        <div style="background-color: #FFD70020; padding: 15px; border-radius: 10px; border: 2px solid #FFD700;">
-                            <h4 style="color: #FFD700; margin: 0;">Peak Gamma</h4>
-                            <h2 style="color: #FFD700; margin: 5px 0;">₹{gamma_seq['peak_gamma_strike']:.0f}</h2>
-                            <p style="color: white; margin: 0; font-size: 12px;">Highest total gamma exposure</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with gs_col3:
-                        st.markdown(f"""
-                        <div style="background-color: #00aaff20; padding: 15px; border-radius: 10px; border: 2px solid #00aaff;">
-                            <h4 style="color: #00aaff; margin: 0;">Total Gamma</h4>
-                            <h2 style="color: #00aaff; margin: 5px 0;">{gamma_seq['total_gamma']:.2f}L</h2>
-                            <p style="color: white; margin: 0; font-size: 12px;">Sum of all strike gamma</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    # Gamma Sequence Chart - Stacked bar (CE vs PE gamma per strike)
-                    fig_gs = make_subplots(
-                        rows=2, cols=1,
-                        shared_xaxes=True,
-                        vertical_spacing=0.08,
-                        subplot_titles=('CE vs PE Gamma Exposure by Strike', 'Cumulative Net Gamma Sequence'),
-                        row_heights=[0.5, 0.5]
-                    )
-
-                    # Top: CE vs PE gamma bars
-                    fig_gs.add_trace(go.Bar(
-                        x=gs_df['Strike'],
-                        y=gs_df['CE_Gamma_Exp'],
-                        name='CE Gamma',
-                        marker_color='#ff4444',
-                        text=[f"{v:.1f}" for v in gs_df['CE_Gamma_Exp']],
-                        textposition='outside',
-                        textfont=dict(size=9)
-                    ), row=1, col=1)
-
-                    fig_gs.add_trace(go.Bar(
-                        x=gs_df['Strike'],
-                        y=gs_df['PE_Gamma_Exp'],
-                        name='PE Gamma',
-                        marker_color='#00ff88',
-                        text=[f"{v:.1f}" for v in gs_df['PE_Gamma_Exp']],
-                        textposition='outside',
-                        textfont=dict(size=9)
-                    ), row=1, col=1)
-
-                    # Bottom: Cumulative net gamma line
-                    fig_gs.add_trace(go.Scatter(
-                        x=gs_df['Strike'],
-                        y=gs_df['Cumul_Net_Gamma'],
-                        mode='lines+markers',
-                        name='Cumul Net Gamma',
-                        line=dict(color='#00aaff', width=3),
-                        marker=dict(size=8, color=[
-                            '#00ff88' if v >= 0 else '#ff4444' for v in gs_df['Cumul_Net_Gamma']
-                        ]),
-                        fill='tozeroy',
-                        fillcolor='rgba(0, 170, 255, 0.1)'
-                    ), row=2, col=1)
-
-                    fig_gs.add_hline(y=0, line_dash="dash", line_color="white", line_width=1, row=2, col=1)
-
-                    # Spot price vertical line on both subplots
-                    fig_gs.add_vline(
-                        x=underlying_price_gs,
-                        line_dash="solid",
-                        line_color="#FFD700",
-                        line_width=2,
-                        annotation_text=f"Spot: ₹{underlying_price_gs:.0f}",
-                        annotation_position="top",
-                        row=1, col=1
-                    )
-                    fig_gs.add_vline(
-                        x=underlying_price_gs,
-                        line_dash="solid",
-                        line_color="#FFD700",
-                        line_width=2,
-                        row=2, col=1
-                    )
-
-                    fig_gs.update_layout(
-                        template='plotly_dark',
-                        height=600,
-                        showlegend=True,
-                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                        plot_bgcolor='#1e1e1e',
-                        paper_bgcolor='#1e1e1e',
-                        margin=dict(l=50, r=50, t=80, b=50),
-                        barmode='group'
-                    )
-
-                    fig_gs.update_yaxes(title_text="Gamma Exp (L)", row=1, col=1)
-                    fig_gs.update_yaxes(title_text="Cumul Net Gamma (L)", row=2, col=1)
-                    fig_gs.update_xaxes(title_text="Strike Price", row=2, col=1)
-
-                    st.plotly_chart(fig_gs, use_container_width=True)
-
-                    # Gamma sequence table
-                    with st.expander("📋 Gamma Sequence Data"):
-                        gs_display = gs_df[['Strike', 'Zone', 'CE_Gamma_Exp', 'PE_Gamma_Exp', 'Net_Gamma',
-                                            'Cumul_Net_Gamma', 'Gamma_Accel']].copy()
-                        gs_display['Strike'] = gs_display['Strike'].apply(lambda x: f"₹{x:.0f}")
-                        st.dataframe(gs_display, use_container_width=True, hide_index=True)
-
-                        st.markdown("""
-                        **Gamma Sequence Interpretation:**
-                        - **CE Gamma (Red)**: Call gamma exposure per strike - higher = stronger resistance
-                        - **PE Gamma (Green)**: Put gamma exposure per strike - higher = stronger support
-                        - **Cumul Net Gamma**: Running sum of net gamma from lowest strike upward
-                        - **Gamma Accel**: Rate of change in cumulative gamma - spikes show gamma walls
-                        - **Peak Gamma**: Strike with highest total gamma - strongest hedging activity
-                        """)
-                else:
-                    st.warning("Unable to calculate gamma sequence. Check option chain data.")
-            else:
-                st.info("Gamma sequence requires option chain data.")
-
-        except Exception as e:
-            st.warning(f"Gamma sequence unavailable: {str(e)}")
-
-        # ===== IV SKEW & OPTIONS PRESSURE SIGNALS =====
-        st.markdown("---")
-        st.markdown("## 📡 IV Skew & Options Pressure Signals (ATM ± 2)")
-
-        try:
-            _ivp_df = option_data.get('df_summary') if option_data else None
-            _ivp_underlying = option_data.get('underlying') if option_data else None
-
-            # Ensure optional bid/ask columns exist (may be absent if Dhan didn't return them)
-            if _ivp_df is not None:
-                for _col in ['impliedVolatility_CE', 'impliedVolatility_PE',
-                             'bidQty_CE', 'bidQty_PE', 'askQty_CE', 'askQty_PE']:
-                    if _col not in _ivp_df.columns:
-                        _ivp_df[_col] = 0.0
-
-            if (_ivp_df is not None and _ivp_underlying and 'Zone' in _ivp_df.columns):
-
-                # --- ATM ± 2 slice ---
-                _ivp_atm_idx = _ivp_df[_ivp_df['Zone'] == 'ATM'].index
-                if len(_ivp_atm_idx) > 0:
-                    _ivp_atm_pos = _ivp_df.index.get_loc(_ivp_atm_idx[0])
-                    _ivp_start = max(0, _ivp_atm_pos - 2)
-                    _ivp_end = min(len(_ivp_df), _ivp_atm_pos + 3)
-                    _ivp_slice = _ivp_df.iloc[_ivp_start:_ivp_end].copy()
-
-                    # --- Strike label function for IV section ---
-                    _ivp_strikes_sorted = sorted(_ivp_slice['Strike'].unique())
-                    _ivp_step = int(_ivp_strikes_sorted[1] - _ivp_strikes_sorted[0]) if len(_ivp_strikes_sorted) >= 2 else 50
-                    _ivp_atm_val = float(_ivp_df[_ivp_df['Zone'] == 'ATM']['Strike'].values[0])
-                    def _ivp_label(s):
-                        diff = int(round((s - _ivp_atm_val) / _ivp_step))
-                        if diff == 0:  return "ATM"
-                        if diff > 0:   return f"ATM+{diff}"
-                        return f"ATM{diff}"
-
-                    # --- Per-strike IV (CE and PE) ---
-                    _ivp_per_iv_ce = {}
-                    _ivp_per_iv_pe = {}
-                    for _, _ivr in _ivp_slice.iterrows():
-                        _ivs = _ivr['Strike']
-                        _ivlbl = _ivp_label(_ivs)
-                        _ivp_per_iv_ce[_ivlbl] = float(_ivr.get('impliedVolatility_CE', 0) or 0)
-                        _ivp_per_iv_pe[_ivlbl] = float(_ivr.get('impliedVolatility_PE', 0) or 0)
-
-                    # --- IV SKEW ---
-                    _iv_ce_vals = _ivp_slice['impliedVolatility_CE'].fillna(0).tolist()
-                    _iv_pe_vals = _ivp_slice['impliedVolatility_PE'].fillna(0).tolist()
-                    _avg_iv_ce = sum(_iv_ce_vals) / len(_iv_ce_vals) if _iv_ce_vals else 0
-                    _avg_iv_pe = sum(_iv_pe_vals) / len(_iv_pe_vals) if _iv_pe_vals else 0
-                    _iv_skew = _avg_iv_pe / (_avg_iv_ce + 1e-6)
-
-                    if _iv_skew < 0.90:
-                        _iv_signal = "🟢 Bullish Expectation"
-                        _iv_signal_color = "#00C853"
-                    elif _iv_skew > 1.10:
-                        _iv_signal = "🔴 Bearish Expectation"
-                        _iv_signal_color = "#FF5252"
-                    else:
-                        _iv_signal = "🟡 Neutral"
-                        _iv_signal_color = "#FFD740"
-
-                    # IV Skew momentum (vs last saved)
-                    _prev_iv_skew = st.session_state.iv_skew_history[-1]['iv_skew'] if st.session_state.iv_skew_history else _iv_skew
-                    _iv_skew_change = _iv_skew - _prev_iv_skew
-                    if _iv_skew_change < -0.02:
-                        _iv_momentum = "⬆️ Bullish Building"
-                    elif _iv_skew_change > 0.02:
-                        _iv_momentum = "⬇️ Bearish Building"
-                    else:
-                        _iv_momentum = "➡️ Stable"
-
-                    # --- CALL & PUT PRESSURE ---
-                    _call_pres = {}
-                    _put_pres = {}
-                    _ivp_per_net_pres = {}  # per-strike net pressure
-                    for _, _row in _ivp_slice.iterrows():
-                        _s = _row['Strike']
-                        _slbl = _ivp_label(_s)
-                        _bc = float(_row.get('bidQty_CE', 0) or 0)
-                        _ac = float(_row.get('askQty_CE', 0) or 0)
-                        _bp = float(_row.get('bidQty_PE', 0) or 0)
-                        _ap = float(_row.get('askQty_PE', 0) or 0)
-                        _cp = (_bc - _ac) / (_bc + _ac + 1e-6)
-                        _pp = (_bp - _ap) / (_bp + _ap + 1e-6)
-                        _call_pres[_s] = _cp
-                        _put_pres[_s]  = _pp
-                        _ivp_per_net_pres[_slbl] = round(_cp - _pp, 4)
-
-                    _avg_call_pres = sum(_call_pres.values()) / len(_call_pres) if _call_pres else 0
-                    _avg_put_pres  = sum(_put_pres.values())  / len(_put_pres)  if _put_pres  else 0
-                    _net_pressure  = _avg_call_pres - _avg_put_pres
-
-                    if _net_pressure > 0.15:
-                        _net_signal = "🟢 Bullish Pressure"
-                        _net_color = "#00C853"
-                    elif _net_pressure < -0.15:
-                        _net_signal = "🔴 Bearish Pressure"
-                        _net_color = "#FF5252"
-                    else:
-                        _net_signal = "🟡 Neutral"
-                        _net_color = "#FFD740"
-
-                    if _avg_call_pres > 0.2 and _avg_put_pres < -0.1:
-                        _pressure_signal = "🚀 Strong Bullish"
-                    elif _avg_put_pres > 0.2 and _avg_call_pres < -0.1:
-                        _pressure_signal = "🔥 Strong Bearish"
-                    elif _avg_call_pres > 0.2 and _avg_put_pres > 0.2:
-                        _pressure_signal = "⚠️ High Volatility"
-                    else:
-                        _pressure_signal = "⏳ Sideways"
-
-                    # --- COMBINED FINAL SIGNAL ---
-                    if _iv_skew < 0.90 and _net_pressure > 0.15:
-                        _final_signal = "🚀 STRONG BUY (Confirmed Breakout)"
-                        _final_color = "#00C853"
-                    elif _iv_skew > 1.10 and _net_pressure < -0.15:
-                        _final_signal = "🔥 STRONG SELL (Confirmed Breakdown)"
-                        _final_color = "#FF5252"
-                    elif _iv_skew < 0.90 and _net_pressure < 0:
-                        _final_signal = "⚠️ Bull Trap"
-                        _final_color = "#FF9800"
-                    elif _iv_skew > 1.10 and _net_pressure > 0:
-                        _final_signal = "⚠️ Bear Trap"
-                        _final_color = "#FF9800"
-                    else:
-                        _final_signal = "⏳ No Clear Edge"
-                        _final_color = "#888888"
-
-                    # --- PRESSURE SPIKE (Entry Timing) ---
-                    _prev_net_pres = st.session_state.pressure_history[-1]['net_pressure'] if st.session_state.pressure_history else _net_pressure
-                    _pressure_change = _net_pressure - _prev_net_pres
-                    _spike_alert = "⚡ Sudden Aggression — Entry Signal!" if abs(_pressure_change) > 0.15 else ""
-
-                    # --- Save to history ---
-                    _ivp_now = datetime.now(pytz.timezone('Asia/Kolkata'))
-
-                    _should_append_iv = (
-                        not st.session_state.iv_skew_history or
-                        (_ivp_now - _to_ist(st.session_state.iv_skew_history[-1]['time'])).total_seconds() >= 30
-                    )
-                    if _should_append_iv:
-                        _iv_entry = {
-                            'time': _ivp_now,
-                            'iv_skew': round(_iv_skew, 4),
-                            'avg_iv_ce': round(_avg_iv_ce, 2),
-                            'avg_iv_pe': round(_avg_iv_pe, 2),
-                            **{f"iv_ce_{k}": round(v, 2) for k, v in _ivp_per_iv_ce.items()},
-                            **{f"iv_pe_{k}": round(v, 2) for k, v in _ivp_per_iv_pe.items()},
-                            **{f"pres_{k}": v for k, v in _ivp_per_net_pres.items()},
-                        }
-                        st.session_state.iv_skew_history.append(_iv_entry)
-                        if len(st.session_state.iv_skew_history) > 200:
-                            st.session_state.iv_skew_history = st.session_state.iv_skew_history[-200:]
-                        db.save_option_history('iv_skew_history', _iv_entry)
-
-                        _pres_entry = {
-                            'time': _ivp_now,
-                            'call_pressure': round(_avg_call_pres, 4),
-                            'put_pressure': round(_avg_put_pres, 4),
-                            'net_pressure': round(_net_pressure, 4),
-                        }
-                        st.session_state.pressure_history.append(_pres_entry)
-                        if len(st.session_state.pressure_history) > 200:
-                            st.session_state.pressure_history = st.session_state.pressure_history[-200:]
-                        db.save_option_history('pressure_history', _pres_entry)
-
-
-                    # ======== UI OUTPUT ========
-                    _ivp_c1, _ivp_c2, _ivp_c3 = st.columns(3)
-                    with _ivp_c1:
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_iv_signal_color};">
-                        <div style="color:#aaa;font-size:12px;">IV SKEW (PE/CE avg)</div>
-                        <div style="font-size:22px;font-weight:bold;color:{_iv_signal_color};">{_iv_skew:.3f}</div>
-                        <div style="font-size:13px;margin-top:4px;">{_iv_signal}</div>
-                        <div style="font-size:12px;color:#aaa;margin-top:2px;">Momentum: {_iv_momentum}</div>
-                        <div style="font-size:11px;color:#888;margin-top:4px;">
-                            CE avg IV: {_avg_iv_ce:.1f}% &nbsp;|&nbsp; PE avg IV: {_avg_iv_pe:.1f}%
-                        </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with _ivp_c2:
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_net_color};">
-                        <div style="color:#aaa;font-size:12px;">PRESSURE (ATM ± 2)</div>
-                        <div style="font-size:13px;margin-top:4px;">
-                            Call: <b style="color:#00C853;">{_avg_call_pres:+.3f}</b> &nbsp;
-                            Put: <b style="color:#FF5252;">{_avg_put_pres:+.3f}</b>
-                        </div>
-                        <div style="font-size:18px;font-weight:bold;color:{_net_color};margin-top:6px;">
-                            Net: {_net_pressure:+.3f}
-                        </div>
-                        <div style="font-size:13px;margin-top:4px;">{_net_signal}</div>
-                        <div style="font-size:12px;color:#aaa;margin-top:2px;">{_pressure_signal}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with _ivp_c3:
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:2px solid {_final_color};">
-                        <div style="color:#aaa;font-size:12px;">COMBINED SIGNAL</div>
-                        <div style="font-size:16px;font-weight:bold;color:{_final_color};margin-top:6px;">{_final_signal}</div>
-                        {"<div style='font-size:13px;color:#FFD740;margin-top:6px;'>" + _spike_alert + "</div>" if _spike_alert else ""}
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    st.markdown("<br>", unsafe_allow_html=True)
-
-                    # ---- IV Time-Series Chart ----
-                    if len(st.session_state.iv_skew_history) >= 2:
-                        _iv_hist_df = pd.DataFrame(st.session_state.iv_skew_history)
-                        _fig_iv = go.Figure()
-                        _fig_iv.add_trace(go.Scatter(
-                            x=_iv_hist_df['time'], y=_iv_hist_df['iv_skew'],
-                            mode='lines+markers', name='IV Skew (PE/CE)',
-                            line=dict(color='#FFD740', width=2),
-                            marker=dict(size=4)
-                        ))
-                        _fig_iv.add_hline(y=0.90, line_dash='dash', line_color='#00C853',
-                                          annotation_text='Bullish (0.90)', annotation_position='bottom right')
-                        _fig_iv.add_hline(y=1.10, line_dash='dash', line_color='#FF5252',
-                                          annotation_text='Bearish (1.10)', annotation_position='top right')
-                        # Current value marker (present value shown in graph)
-                        _iv_cur = _iv_hist_df['iv_skew'].iloc[-1]
-                        _fig_iv.add_trace(go.Scatter(
-                            x=[_iv_hist_df['time'].iloc[-1]], y=[_iv_cur],
-                            mode='markers+text', text=[f'{_iv_cur:.3f}'],
-                            textposition='top right', textfont=dict(size=10, color='#FFD740'),
-                            marker=dict(size=10, color='#FFD740', symbol='circle'),
-                            showlegend=False, hoverinfo='skip',
-                        ))
-                        _fig_iv.update_layout(
-                            title=f'IV Skew Over Time (ATM ± 2) — Now: {_iv_cur:.3f}',
-                            height=250, margin=dict(l=40, r=20, t=40, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111',
-                            font=dict(color='#ccc'),
-                            xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333'),
-                            showlegend=True, legend=dict(orientation='h', y=-0.3)
-                        )
-                        st.plotly_chart(_fig_iv, use_container_width=True)
-
-                    # ---- Pressure Time-Series Chart ----
-                    if len(st.session_state.pressure_history) >= 2:
-                        _pr_hist_df = pd.DataFrame(st.session_state.pressure_history)
-                        _fig_pr = go.Figure()
-                        _fig_pr.add_trace(go.Scatter(
-                            x=_pr_hist_df['time'], y=_pr_hist_df['call_pressure'],
-                            mode='lines', name='Call Pressure',
-                            line=dict(color='#00C853', width=2)
-                        ))
-                        _fig_pr.add_trace(go.Scatter(
-                            x=_pr_hist_df['time'], y=_pr_hist_df['put_pressure'],
-                            mode='lines', name='Put Pressure',
-                            line=dict(color='#FF5252', width=2)
-                        ))
-                        _fig_pr.add_trace(go.Scatter(
-                            x=_pr_hist_df['time'], y=_pr_hist_df['net_pressure'],
-                            mode='lines+markers', name='Net Pressure',
-                            line=dict(color='#FFD740', width=2, dash='dot'),
-                            marker=dict(size=4)
-                        ))
-                        _fig_pr.add_hline(y=0.15, line_dash='dash', line_color='#00C853',
-                                          annotation_text='+0.15 Bull', annotation_position='bottom right')
-                        _fig_pr.add_hline(y=-0.15, line_dash='dash', line_color='#FF5252',
-                                          annotation_text='-0.15 Bear', annotation_position='top right')
-                        _fig_pr.add_hline(y=0, line_color='#555', line_width=1)
-                        # Current value markers (present values shown in graph)
-                        _pr_cur_call = _pr_hist_df['call_pressure'].iloc[-1]
-                        _pr_cur_put  = _pr_hist_df['put_pressure'].iloc[-1]
-                        _pr_cur_net  = _pr_hist_df['net_pressure'].iloc[-1]
-                        _fig_pr.add_trace(go.Scatter(
-                            x=[_pr_hist_df['time'].iloc[-1]], y=[_pr_cur_net],
-                            mode='markers+text', text=[f'Net:{_pr_cur_net:+.3f}'],
-                            textposition='top right', textfont=dict(size=9, color='#FFD740'),
-                            marker=dict(size=9, color='#FFD740', symbol='circle'),
-                            showlegend=False, hoverinfo='skip',
-                        ))
-                        _fig_pr.update_layout(
-                            title=f'Call / Put / Net Pressure Over Time (ATM ± 2) — Net: {_pr_cur_net:+.3f}',
-                            height=250, margin=dict(l=40, r=20, t=40, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111',
-                            font=dict(color='#ccc'),
-                            xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333'),
-                            showlegend=True, legend=dict(orientation='h', y=-0.3)
-                        )
-                        st.plotly_chart(_fig_pr, use_container_width=True)
-
-                    # ---- ATM ±2 Strike Comparison — CE IV · PE IV (5-column per-strike) ----
-                    if len(st.session_state.iv_skew_history) >= 2:
-                        _ivh_df = pd.DataFrame(st.session_state.iv_skew_history)
-                        st.markdown("### 📊 ATM ±2 Strike Comparison — CE IV · PE IV")
-                        _ivp_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
-                        _ivp_pos_keys   = ['ATM-2', 'ATM-1', 'ATM', 'ATM+1', 'ATM+2']
-                        _ivp_pos_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
-                        _ivp_5cols = st.columns(5)
-                        for _ivc_i, _ivc_col in enumerate(_ivp_5cols):
-                            with _ivc_col:
-                                _ivlk = _ivp_pos_keys[_ivc_i]
-                                _ck = f"iv_ce_{_ivlk}"
-                                _pk = f"iv_pe_{_ivlk}"
-                                _prk = f"pres_{_ivlk}"
-                                _ivc_clr = _ivp_pos_colors[_ivc_i]
-                                if _ck not in _ivh_df.columns and _pk not in _ivh_df.columns:
-                                    st.info(f"{_ivp_pos_labels[_ivc_i]} N/A")
-                                    continue
-                                _fig_ivs = go.Figure()
-                                # CE IV (solid cyan)
-                                if _ck in _ivh_df.columns:
-                                    _fig_ivs.add_trace(go.Scatter(
-                                        x=_ivh_df['time'], y=_ivh_df[_ck],
-                                        mode='lines+markers', name='CE IV%',
-                                        line=dict(color='#00ccff', width=2),
-                                        marker=dict(size=3),
-                                    ))
-                                # PE IV (dashed orange)
-                                if _pk in _ivh_df.columns:
-                                    _fig_ivs.add_trace(go.Scatter(
-                                        x=_ivh_df['time'], y=_ivh_df[_pk],
-                                        mode='lines+markers', name='PE IV%',
-                                        line=dict(color='#ffaa00', width=2, dash='dash'),
-                                        marker=dict(size=3),
-                                    ))
-                                # Current value markers
-                                _iv_ce_cur = _ivh_df[_ck].iloc[-1] if _ck in _ivh_df.columns else None
-                                _iv_pe_cur = _ivh_df[_pk].iloc[-1] if _pk in _ivh_df.columns else None
-                                if _iv_ce_cur is not None:
-                                    _fig_ivs.add_trace(go.Scatter(
-                                        x=[_ivh_df['time'].iloc[-1]], y=[_iv_ce_cur],
-                                        mode='markers+text', text=[f'{_iv_ce_cur:.1f}%'],
-                                        textposition='top right', textfont=dict(size=8, color='#00ccff'),
-                                        marker=dict(size=8, color='#00ccff', symbol='circle'),
-                                        showlegend=False, hoverinfo='skip',
-                                    ))
-                                if _iv_pe_cur is not None:
-                                    _fig_ivs.add_trace(go.Scatter(
-                                        x=[_ivh_df['time'].iloc[-1]], y=[_iv_pe_cur],
-                                        mode='markers+text', text=[f'{_iv_pe_cur:.1f}%'],
-                                        textposition='bottom right', textfont=dict(size=8, color='#ffaa00'),
-                                        marker=dict(size=8, color='#ffaa00', symbol='diamond'),
-                                        showlegend=False, hoverinfo='skip',
-                                    ))
-                                # Determine IV skew signal for this strike
-                                _ivs_skew = (_iv_pe_cur / (_iv_ce_cur + 1e-6)) if (_iv_ce_cur and _iv_pe_cur) else 1.0
-                                _ivs_title = f"{_ivp_pos_labels[_ivc_i]}<br>{_ivlk}"
-                                if _iv_ce_cur is not None:
-                                    _ivs_title += f"<br>CE:{_iv_ce_cur:.1f}% PE:{_iv_pe_cur:.1f}%" if _iv_pe_cur else f"<br>CE:{_iv_ce_cur:.1f}%"
-                                _fig_ivs.update_layout(
-                                    title=dict(text=_ivs_title, font=dict(size=10)),
-                                    template='plotly_dark', height=300,
-                                    showlegend=True,
-                                    legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                                                xanchor='center', x=0.5, font=dict(size=8)),
-                                    margin=dict(l=5, r=10, t=80, b=30),
-                                    xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                                    yaxis=dict(title='IV%', tickfont=dict(size=8)),
-                                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                                )
-                                st.plotly_chart(_fig_ivs, use_container_width=True)
-                                # Net pressure caption
-                                _pres_cur = _ivh_df[_prk].iloc[-1] if (_prk in _ivh_df.columns and len(_ivh_df) > 0) else None
-                                _pres_sig = "🟢Bull" if (_pres_cur and _pres_cur > 0.15) else ("🔴Bear" if (_pres_cur and _pres_cur < -0.15) else "🟡Ntrl")
-                                _pres_str = f'{_pres_cur:+.3f}' if _pres_cur is not None else '—'
-                                _iv_skew_str = f'{_ivs_skew:.3f}' if _iv_ce_cur else '—'
-                                st.caption(f"IV Skew:{_iv_skew_str} · Pres:{_pres_str} {_pres_sig}")
-
-                    _ivp_col_l, _ivp_col_r = st.columns([3, 1])
-                    with _ivp_col_l:
-                        st.caption(f"📡 IV pts: {len(st.session_state.iv_skew_history)} · Pressure pts: {len(st.session_state.pressure_history)}")
-                    with _ivp_col_r:
-                        if st.button("🗑️ Clear IV/Pressure History"):
-                            st.session_state.iv_skew_history = []
-                            st.session_state.pressure_history = []
-                            st.rerun()
-                else:
-                    st.info("ATM strike not identified — IV Skew & Pressure unavailable.")
-            else:
-                st.info("Option chain data required for IV Skew & Pressure signals.")
-
-        except Exception as _ivp_e:
-            st.warning(f"IV Skew & Pressure unavailable: {str(_ivp_e)}")
-
-        # ===== AUTO ENTRY ENGINE =====
-        st.markdown("---")
-        st.markdown("## 🎯 Auto Entry Engine — CE / PE Strike + SL + Target")
-
-        try:
-            _ae_df = option_data.get('df_summary') if option_data else None
-            _ae_underlying = option_data.get('underlying') if option_data else None
-
-            # Ensure optional columns exist
-            if _ae_df is not None:
-                for _col in ['impliedVolatility_CE', 'impliedVolatility_PE',
-                             'bidQty_CE', 'bidQty_PE', 'askQty_CE', 'askQty_PE']:
-                    if _col not in _ae_df.columns:
-                        _ae_df[_col] = 0.0
-
-            if (_ae_df is not None and _ae_underlying and 'Zone' in _ae_df.columns):
-
-                # Re-compute signals (lightweight — uses same logic as above)
-                _ae_atm_idx = _ae_df[_ae_df['Zone'] == 'ATM'].index
-                if len(_ae_atm_idx) > 0:
-                    _ae_atm_pos = _ae_df.index.get_loc(_ae_atm_idx[0])
-                    _ae_start = max(0, _ae_atm_pos - 2)
-                    _ae_end = min(len(_ae_df), _ae_atm_pos + 3)
-                    _ae_slice = _ae_df.iloc[_ae_start:_ae_end].copy()
-
-                    # IV Skew
-                    _ae_iv_ce = _ae_slice['impliedVolatility_CE'].fillna(0).mean()
-                    _ae_iv_pe = _ae_slice['impliedVolatility_PE'].fillna(0).mean() if 'impliedVolatility_PE' in _ae_slice.columns else 0
-                    _ae_iv_skew = _ae_iv_pe / (_ae_iv_ce + 1e-6)
-
-                    # Net Pressure
-                    _ae_cp_list, _ae_pp_list = [], []
-                    for _, _aer in _ae_slice.iterrows():
-                        _bc = float(_aer.get('bidQty_CE', 0) or 0)
-                        _ac = float(_aer.get('askQty_CE', 0) or 0)
-                        _bp = float(_aer.get('bidQty_PE', 0) or 0)
-                        _ap = float(_aer.get('askQty_PE', 0) or 0)
-                        _ae_cp_list.append((_bc - _ac) / (_bc + _ac + 1e-6))
-                        _ae_pp_list.append((_bp - _ap) / (_bp + _ap + 1e-6))
-                    _ae_avg_cp = sum(_ae_cp_list) / len(_ae_cp_list) if _ae_cp_list else 0
-                    _ae_avg_pp = sum(_ae_pp_list) / len(_ae_pp_list) if _ae_pp_list else 0
-                    _ae_net_pres = _ae_avg_cp - _ae_avg_pp
-
-                    # Pressure spike (vs history)
-                    _ae_prev_np = st.session_state.pressure_history[-2]['net_pressure'] if len(st.session_state.pressure_history) >= 2 else _ae_net_pres
-                    _ae_pres_change = _ae_net_pres - _ae_prev_np
-
-                    # PCR OI (ATM)
-                    _ae_atm_row = _ae_df[_ae_df['Zone'] == 'ATM']
-                    _ae_pcr = float(_ae_atm_row['PCR'].values[0]) if (len(_ae_atm_row) > 0 and 'PCR' in _ae_atm_row.columns) else 1.0
-
-                    # Total Net GEX (from existing gex_data if available)
-                    _ae_net_gex = 0.0
-                    try:
-                        if gex_data and 'net_gex' in gex_data:
-                            _ae_net_gex = float(gex_data['net_gex'])
-                        elif gex_data and 'gex_df' in gex_data:
-                            _ae_gdf = gex_data['gex_df']
-                            if 'Net_GEX' in _ae_gdf.columns:
-                                _ae_net_gex = float(_ae_gdf['Net_GEX'].sum())
-                    except Exception:
-                        pass
-
-                    # ATM strike value
-                    _ae_atm_strike = float(_ae_atm_row['Strike'].values[0]) if len(_ae_atm_row) > 0 else round(_ae_underlying / 50) * 50
-
-                    # Determine strike step (50 or 100 points)
-                    _ae_strikes_sorted = sorted(_ae_slice['Strike'].unique())
-                    _ae_step = int(_ae_strikes_sorted[1] - _ae_strikes_sorted[0]) if len(_ae_strikes_sorted) >= 2 else 50
-
-                    # ---- ENTRY LOGIC ----
-                    _ae_signal = "NO TRADE"
-                    _ae_strike = _ae_atm_strike
-                    _ae_sl = None
-                    _ae_target = None
-                    _ae_trade_type = "Low Edge"
-                    _ae_option_type = ""
-
-                    # Safety filter: avoid trades when market is pinned
-                    if _ae_net_gex > 10:
-                        _ae_signal = "NO TRADE"
-                        _ae_trade_type = "Market Capped (GEX > 10L)"
-                    elif _ae_iv_skew < 0.90 and _ae_net_pres > 0.15 and _ae_net_gex < 0:
-                        _ae_signal = "BUY CE"
-                        _ae_option_type = "CE"
-                        if _ae_net_pres > 0.30:
-                            _ae_strike = _ae_atm_strike + _ae_step
-                            _ae_trade_type = "Breakout"
-                        elif _ae_net_pres > 0.50:
-                            _ae_strike = _ae_atm_strike + 2 * _ae_step
-                            _ae_trade_type = "Strong Breakout"
-                        else:
-                            _ae_strike = _ae_atm_strike
-                            _ae_trade_type = "Scalp"
-                        _ae_sl = _ae_underlying - 20
-                        _ae_target = _ae_underlying + 40
-
-                    elif _ae_iv_skew > 1.10 and _ae_net_pres < -0.15 and _ae_net_gex < 0:
-                        _ae_signal = "BUY PE"
-                        _ae_option_type = "PE"
-                        if _ae_net_pres < -0.30:
-                            _ae_strike = _ae_atm_strike - _ae_step
-                            _ae_trade_type = "Breakdown"
-                        elif _ae_net_pres < -0.50:
-                            _ae_strike = _ae_atm_strike - 2 * _ae_step
-                            _ae_trade_type = "Strong Breakdown"
-                        else:
-                            _ae_strike = _ae_atm_strike
-                            _ae_trade_type = "Scalp"
-                        _ae_sl = _ae_underlying + 20
-                        _ae_target = _ae_underlying - 40
-
-                    elif _ae_iv_skew < 0.90 and _ae_net_pres < 0:
-                        _ae_signal = "BUY PE"
-                        _ae_option_type = "PE"
-                        _ae_strike = _ae_atm_strike
-                        _ae_trade_type = "Bull Trap Reversal"
-                        _ae_sl = _ae_underlying + 15
-                        _ae_target = _ae_underlying - 30
-
-                    elif _ae_iv_skew > 1.10 and _ae_net_pres > 0:
-                        _ae_signal = "BUY CE"
-                        _ae_option_type = "CE"
-                        _ae_strike = _ae_atm_strike
-                        _ae_trade_type = "Bear Trap Reversal"
-                        _ae_sl = _ae_underlying - 15
-                        _ae_target = _ae_underlying + 30
-
-                    _ae_timing = "ENTER NOW ⚡" if abs(_ae_pres_change) > 0.15 else "WAIT ⏳"
-
-                    # Signal color
-                    if "BUY CE" in _ae_signal:
-                        _ae_sig_color = "#00C853"
-                    elif "BUY PE" in _ae_signal:
-                        _ae_sig_color = "#FF5252"
-                    else:
-                        _ae_sig_color = "#888888"
-
-                    # ---- UI ----
-                    _ae_c1, _ae_c2, _ae_c3, _ae_c4 = st.columns(4)
-                    with _ae_c1:
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:2px solid {_ae_sig_color};">
-                        <div style="color:#aaa;font-size:11px;">SIGNAL</div>
-                        <div style="font-size:20px;font-weight:bold;color:{_ae_sig_color};">{_ae_signal}</div>
-                        <div style="font-size:12px;color:#aaa;margin-top:4px;">{_ae_trade_type}</div>
-                        <div style="font-size:13px;margin-top:4px;color:#FFD740;">{_ae_timing}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with _ae_c2:
-                        _ae_strike_label = f"₹{int(_ae_strike)}" if _ae_signal != "NO TRADE" else "—"
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid #444;">
-                        <div style="color:#aaa;font-size:11px;">STRIKE</div>
-                        <div style="font-size:22px;font-weight:bold;color:#fff;">{_ae_strike_label}</div>
-                        <div style="font-size:12px;color:#aaa;margin-top:4px;">{_ae_option_type or '—'}</div>
-                        <div style="font-size:11px;color:#777;margin-top:2px;">ATM: ₹{int(_ae_atm_strike)}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with _ae_c3:
-                        _ae_sl_label = f"₹{_ae_sl:.0f}" if _ae_sl else "—"
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid #FF5252;">
-                        <div style="color:#aaa;font-size:11px;">STOP LOSS (Spot)</div>
-                        <div style="font-size:20px;font-weight:bold;color:#FF5252;">{_ae_sl_label}</div>
-                        <div style="font-size:11px;color:#777;margin-top:4px;">Spot: ₹{_ae_underlying:.0f}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with _ae_c4:
-                        _ae_tgt_label = f"₹{_ae_target:.0f}" if _ae_target else "—"
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid #00C853;">
-                        <div style="color:#aaa;font-size:11px;">TARGET (Spot)</div>
-                        <div style="font-size:20px;font-weight:bold;color:#00C853;">{_ae_tgt_label}</div>
-                        <div style="font-size:11px;color:#777;margin-top:4px;">
-                            {"R:R = 1:2" if _ae_sl and _ae_target else ""}
-                        </div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    # ---- Inputs summary row ----
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    _ae_meta_cols = st.columns(5)
-                    _ae_meta_labels = [
-                        ("IV Skew", f"{_ae_iv_skew:.3f}"),
-                        ("Net Pressure", f"{_ae_net_pres:+.3f}"),
-                        ("PCR (OI)", f"{_ae_pcr:.2f}"),
-                        ("Net GEX", f"{_ae_net_gex:+.1f}L"),
-                        ("Pressure Δ", f"{_ae_pres_change:+.3f}"),
-                    ]
-                    for _col, (_lbl, _val) in zip(_ae_meta_cols, _ae_meta_labels):
-                        with _col:
-                            st.metric(_lbl, _val)
-
-                    with st.expander("📖 Auto Entry Engine — How It Works"):
-                        st.markdown("""
-                        | Condition | Signal |
-                        |-----------|--------|
-                        | IV Skew < 0.90 AND Net Pressure > 0.15 AND GEX < 0 | **BUY CE** (Breakout/Scalp) |
-                        | IV Skew > 1.10 AND Net Pressure < -0.15 AND GEX < 0 | **BUY PE** (Breakdown/Scalp) |
-                        | IV Skew < 0.90 AND Net Pressure < 0 | **BUY PE** (Bull Trap Reversal) |
-                        | IV Skew > 1.10 AND Net Pressure > 0 | **BUY CE** (Bear Trap Reversal) |
-                        | GEX > 10L | **NO TRADE** (Market Capped) |
-
-                        **Strike Selection:**
-                        - Net Pressure > 0.50 → ATM+2 (Strong Breakout)
-                        - Net Pressure > 0.30 → ATM+1 (Breakout)
-                        - Otherwise → ATM (Scalp)
-
-                        **SL/Target based on spot points:**
-                        - CE trade: SL = Spot − 20, Target = Spot + 40
-                        - PE trade: SL = Spot + 20, Target = Spot − 40
-                        - Trap reversals: Tighter (±15 SL / ∓30 Target)
-
-                        **Entry Timing:** Pressure spike > 0.15 in last interval → ENTER NOW ⚡
-
-                        > ⚠️ These are directional signals for educational use.
-                        > Always apply your own risk management and position sizing.
-                        """)
-                else:
-                    st.info("ATM strike not identified — Auto Entry Engine unavailable.")
-            else:
-                st.info("Option chain data required for Auto Entry Engine.")
-
-        except Exception as _ae_e:
-            st.warning(f"Auto Entry Engine unavailable: {str(_ae_e)}")
-
-        # ===== DELTA & GAMMA ENGINE (PER STRIKE + OVERALL) =====
-        st.markdown("---")
-        st.markdown("## ⚡ Delta & Gamma Engine — Per Strike + Overall (ATM ± 2)")
-
-        try:
-            _dg_df = option_data.get('df_summary') if option_data else None
-            _dg_underlying = option_data.get('underlying') if option_data else None
-
-            _dg_required = ['Zone', 'Strike', 'Delta_CE', 'Delta_PE', 'Gamma_CE', 'Gamma_PE',
-                            'openInterest_CE', 'openInterest_PE']
-
-            if (_dg_df is not None and _dg_underlying and
-                    all(c in _dg_df.columns for c in _dg_required)):
-
-                # --- ATM ± 2 slice ---
-                _dg_atm_idx = _dg_df[_dg_df['Zone'] == 'ATM'].index
-                if len(_dg_atm_idx) > 0:
-                    _dg_atm_pos = _dg_df.index.get_loc(_dg_atm_idx[0])
-                    _dg_start = max(0, _dg_atm_pos - 2)
-                    _dg_end   = min(len(_dg_df), _dg_atm_pos + 3)
-                    _dg_slice = _dg_df.iloc[_dg_start:_dg_end].copy()
-
-                    _dg_strikes_sorted = sorted(_dg_slice['Strike'].unique())
-                    _dg_step = int(_dg_strikes_sorted[1] - _dg_strikes_sorted[0]) if len(_dg_strikes_sorted) >= 2 else 50
-                    _dg_atm_val = float(_dg_df[_dg_df['Zone'] == 'ATM']['Strike'].values[0])
-
-                    # Strike position labels
-                    def _dg_label(s):
-                        diff = int(round((s - _dg_atm_val) / _dg_step))
-                        if diff == 0:   return "ATM"
-                        if diff > 0:    return f"ATM+{diff}"
-                        return f"ATM{diff}"
-
-                    # --- PER STRIKE delta & gamma ---
-                    _dg_delta_per = {}
-                    _dg_gamma_per = {}
-                    _contract_mult = 25
-
-                    for _, _r in _dg_slice.iterrows():
-                        _s = float(_r['Strike'])
-                        _lbl = _dg_label(_s)
-                        _d_ce = float(_r.get('Delta_CE', 0) or 0)
-                        _d_pe = float(_r.get('Delta_PE', 0) or 0)
-                        _g_ce = float(_r.get('Gamma_CE', 0) or 0)
-                        _g_pe = float(_r.get('Gamma_PE', 0) or 0)
-                        _oi_ce = float(_r.get('openInterest_CE', 0) or 0)
-                        _oi_pe = float(_r.get('openInterest_PE', 0) or 0)
-
-                        _dg_delta_per[_lbl] = round(_d_ce + _d_pe, 4)
-                        # Gamma per strike in Lakhs (PE builds − CE pins)
-                        _dg_gamma_per[_lbl] = round(
-                            (_g_pe * _oi_pe - _g_ce * _oi_ce) * _contract_mult * _dg_underlying / 100000, 2
-                        )
-
-                    # --- OVERALL NET ---
-                    _all_d_ce = [float(_r.get('Delta_CE', 0) or 0) for _, _r in _dg_slice.iterrows()]
-                    _all_d_pe = [float(_r.get('Delta_PE', 0) or 0) for _, _r in _dg_slice.iterrows()]
-                    _avg_d_ce = sum(_all_d_ce) / len(_all_d_ce) if _all_d_ce else 0
-                    _avg_d_pe = sum(_all_d_pe) / len(_all_d_pe) if _all_d_pe else 0
-                    _net_delta = round(_avg_d_ce + _avg_d_pe, 4)
-                    _net_gamma = round(sum(_dg_gamma_per.values()), 2)
-
-                    # --- HISTORY (time-series) ---
-                    _dg_now = datetime.now(pytz.timezone('Asia/Kolkata'))
-                    _dg_should_append = (
-                        not st.session_state.delta_gamma_history or
-                        (_dg_now - _to_ist(st.session_state.delta_gamma_history[-1]['time'])).total_seconds() >= 30
-                    )
-                    if _dg_should_append:
-                        _dg_entry = {
-                            'time': _dg_now,
-                            'net_delta': _net_delta,
-                            'net_gamma': _net_gamma,
-                            **{f"delta_{k}": v for k, v in _dg_delta_per.items()},
-                            **{f"gamma_{k}": v for k, v in _dg_gamma_per.items()},
-                        }
-                        st.session_state.delta_gamma_history.append(_dg_entry)
-                        if len(st.session_state.delta_gamma_history) > 200:
-                            st.session_state.delta_gamma_history = st.session_state.delta_gamma_history[-200:]
-                        db.save_option_history('delta_gamma_history', _dg_entry)
-
-                    # --- CHANGE vs PREVIOUS ---
-                    _prev_dg = st.session_state.delta_gamma_history
-                    _prev_nd = _prev_dg[-2]['net_delta'] if len(_prev_dg) >= 2 else _net_delta
-                    _prev_ng = _prev_dg[-2]['net_gamma'] if len(_prev_dg) >= 2 else _net_gamma
-                    _delta_change = round(_net_delta - _prev_nd, 4)
-                    _gamma_change = round(_net_gamma - _prev_ng, 2)
-
-                    # --- HOT STRIKE (highest abs gamma) ---
-                    _hot_lbl = max(_dg_gamma_per, key=lambda k: abs(_dg_gamma_per[k])) if _dg_gamma_per else "ATM"
-                    _hot_val = _dg_gamma_per.get(_hot_lbl, 0)
-
-                    if _hot_lbl in ("ATM+1", "ATM+2") and _hot_val > 0:
-                        _hot_signal = "🚀 Bullish Build Above ATM"
-                        _hot_color  = "#00C853"
-                    elif _hot_lbl in ("ATM-1", "ATM-2") and _hot_val < 0:
-                        _hot_signal = "🔥 Bearish Build Below ATM"
-                        _hot_color  = "#FF5252"
-                    elif _hot_lbl == "ATM":
-                        _hot_signal = "📌 Pinned at ATM"
-                        _hot_color  = "#FFD740"
-                    else:
-                        _hot_signal = "➡️ Neutral"
-                        _hot_color  = "#888888"
-
-                    # --- MAIN SIGNAL ---
-                    if _net_delta > 0.15 and _gamma_change > 0:
-                        _dg_main_signal = "🚀 Bullish Momentum"
-                        _dg_main_color  = "#00C853"
-                    elif _net_delta < -0.15 and _gamma_change > 0:
-                        _dg_main_signal = "🔥 Bearish Momentum"
-                        _dg_main_color  = "#FF5252"
-                    elif _net_delta > 0.05:
-                        _dg_main_signal = "🟡 Mild Bullish"
-                        _dg_main_color  = "#FFD740"
-                    elif _net_delta < -0.05:
-                        _dg_main_signal = "🟡 Mild Bearish"
-                        _dg_main_color  = "#FFD740"
-                    else:
-                        _dg_main_signal = "⏳ No Clear Trend"
-                        _dg_main_color  = "#888888"
-
-                    # --- EARLY ENTRY ENGINE ---
-                    if _net_delta > 0 and _gamma_change > 0 and _hot_lbl in ("ATM+1", "ATM+2"):
-                        _dg_entry = "🚀 ENTER CE — Early Breakout"
-                        _dg_entry_color = "#00C853"
-                    elif _net_delta < 0 and _gamma_change > 0 and _hot_lbl in ("ATM-1", "ATM-2"):
-                        _dg_entry = "🔥 ENTER PE — Early Breakdown"
-                        _dg_entry_color = "#FF5252"
-                    elif _gamma_change > 0:
-                        _dg_entry = "⚡ Gamma Rising — Watch for breakout"
-                        _dg_entry_color = "#FFD740"
-                    else:
-                        _dg_entry = "WAIT ⏳"
-                        _dg_entry_color = "#888888"
-
-                    # ======== TELEGRAM ALERT (rate-limited to 5 min) ========
-                    if enable_signals:
-                        _dg_tg_now  = datetime.now(pytz.timezone('Asia/Kolkata'))
-                        _dg_tg_last = st.session_state.get('delta_gamma_last_alert')
-                        if _dg_tg_last is None or (_dg_tg_now - _dg_tg_last).total_seconds() > 300:
-                            # Build ATM ±2 strike comparison table rows
-                            _dg_tg_strike_lines = []
-                            for _dg_tg_lk in ['ATM-2', 'ATM-1', 'ATM', 'ATM+1', 'ATM+2']:
-                                _dg_tg_d = _dg_delta_per.get(_dg_tg_lk)
-                                _dg_tg_g = _dg_gamma_per.get(_dg_tg_lk)
-                                if _dg_tg_d is None and _dg_tg_g is None:
-                                    continue
-                                _dg_tg_hot = " 🔥" if _dg_tg_lk == _hot_lbl else ""
-                                _dg_tg_d_str = f"{_dg_tg_d:+.4f}" if _dg_tg_d is not None else "—"
-                                _dg_tg_g_str = f"{_dg_tg_g:+.2f}L" if _dg_tg_g is not None else "—"
-                                _dg_tg_strike_lines.append(
-                                    f"  <b>{_dg_tg_lk}</b>{_dg_tg_hot}  Δ:{_dg_tg_d_str}  Γ:{_dg_tg_g_str}"
-                                )
-                            _dg_gamma_dir = "⬆️ Gamma expanding" if _gamma_change > 0 else "⬇️ Gamma contracting"
-                            _dg_tg_msg = "\n".join([
-                                "<b>⚡ Delta &amp; Gamma Engine — ATM ± 2</b>",
-                                "",
-                                "<b>NET DELTA</b>",
-                                f"  Value: <b>{_net_delta:+.4f}</b>  |  Δ change: {_delta_change:+.4f}",
-                                f"  avg CE Δ: {_avg_d_ce:+.3f}   PE Δ: {_avg_d_pe:+.3f}",
-                                "",
-                                "<b>NET GAMMA (Lakhs)</b>",
-                                f"  Value: <b>{_net_gamma:+.2f}L</b>  |  Δ change: {_gamma_change:+.2f}L",
-                                f"  {_dg_gamma_dir}",
-                                "",
-                                "<b>HOT STRIKE</b>",
-                                f"  Strike: <b>{_hot_lbl}</b>  {_hot_signal}",
-                                f"  Gamma: {_hot_val:+.2f}L",
-                                "",
-                                "<b>SIGNAL &amp; ENTRY</b>",
-                                f"  {_dg_main_signal}",
-                                f"  {_dg_entry}",
-                                "",
-                                "<b>📊 ATM ±2 Strike Comparison</b>",
-                            ] + _dg_tg_strike_lines + [
-                                "",
-                                f"NIFTY Spot: ₹{int(_dg_underlying):,}",
-                            ])
-                            st.session_state.delta_gamma_last_alert = _dg_tg_now
-
-                    # ======== UI OUTPUT ========
-                    _dg_c1, _dg_c2, _dg_c3, _dg_c4 = st.columns(4)
-                    with _dg_c1:
-                        _nd_color = "#00C853" if _net_delta > 0.05 else ("#FF5252" if _net_delta < -0.05 else "#FFD740")
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_nd_color};">
-                        <div style="color:#aaa;font-size:11px;">NET DELTA</div>
-                        <div style="font-size:22px;font-weight:bold;color:{_nd_color};">{_net_delta:+.4f}</div>
-                        <div style="font-size:12px;color:#aaa;margin-top:4px;">Δ change: {_delta_change:+.4f}</div>
-                        <div style="font-size:11px;color:#777;">avg CE Δ: {_avg_d_ce:+.3f} &nbsp; PE Δ: {_avg_d_pe:+.3f}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with _dg_c2:
-                        _ng_color = "#00C853" if _net_gamma > 5 else ("#FF5252" if _net_gamma < -5 else "#FFD740")
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_ng_color};">
-                        <div style="color:#aaa;font-size:11px;">NET GAMMA (Lakhs)</div>
-                        <div style="font-size:22px;font-weight:bold;color:{_ng_color};">{_net_gamma:+.2f}L</div>
-                        <div style="font-size:12px;color:#aaa;margin-top:4px;">Δ change: {_gamma_change:+.2f}L</div>
-                        <div style="font-size:11px;color:#777;">{"⬆️ Gamma expanding" if _gamma_change > 0 else "⬇️ Gamma contracting"}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with _dg_c3:
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:1px solid {_hot_color};">
-                        <div style="color:#aaa;font-size:11px;">HOT STRIKE</div>
-                        <div style="font-size:20px;font-weight:bold;color:{_hot_color};">{_hot_lbl}</div>
-                        <div style="font-size:12px;margin-top:4px;">{_hot_signal}</div>
-                        <div style="font-size:11px;color:#777;margin-top:2px;">Gamma: {_hot_val:+.2f}L</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    with _dg_c4:
-                        st.markdown(f"""
-                        <div style="background:#1e1e1e;padding:14px;border-radius:10px;border:2px solid {_dg_main_color};">
-                        <div style="color:#aaa;font-size:11px;">SIGNAL &amp; ENTRY</div>
-                        <div style="font-size:14px;font-weight:bold;color:{_dg_main_color};margin-top:4px;">{_dg_main_signal}</div>
-                        <div style="font-size:13px;color:{_dg_entry_color};margin-top:6px;">{_dg_entry}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                    st.markdown("<br>", unsafe_allow_html=True)
-
-                    # ---- Per-Strike Current Snapshot ----
-                    _dg_snap_rows = []
-                    for _lk in sorted(_dg_delta_per.keys(), key=lambda x: (
-                        -99 if x == 'ATM-2' else -1 if x == 'ATM-1' else 0 if x == 'ATM' else 1 if x == 'ATM+1' else 2
-                    )):
-                        _dg_snap_rows.append({
-                            'Strike': _lk,
-                            'Net Delta': f"{_dg_delta_per[_lk]:+.4f}",
-                            'Net Gamma (L)': f"{_dg_gamma_per.get(_lk, 0):+.2f}",
-                            'Hot': '🔥' if _lk == _hot_lbl else ''
-                        })
-                    if _dg_snap_rows:
-                        _dg_snap_df = pd.DataFrame(_dg_snap_rows)
-                        st.dataframe(_dg_snap_df, use_container_width=True, hide_index=True)
-
-                    # ---- Overall Delta & Gamma Time-Series ----
-                    if len(st.session_state.delta_gamma_history) >= 2:
-                        _dgh = pd.DataFrame(st.session_state.delta_gamma_history)
-                        _fig_dg = go.Figure()
-                        _fig_dg.add_trace(go.Scatter(
-                            x=_dgh['time'], y=_dgh['net_delta'],
-                            mode='lines+markers', name='Net Delta',
-                            line=dict(color='#00C853', width=2),
-                            marker=dict(size=4), yaxis='y1'
-                        ))
-                        _fig_dg.add_trace(go.Scatter(
-                            x=_dgh['time'], y=_dgh['net_gamma'],
-                            mode='lines+markers', name='Net Gamma (L)',
-                            line=dict(color='#FFD740', width=2, dash='dot'),
-                            marker=dict(size=4), yaxis='y2'
-                        ))
-                        _fig_dg.add_hline(y=0.15, line_dash='dash', line_color='#00C853',
-                                          annotation_text='Bull Δ 0.15', annotation_position='bottom right',
-                                          yref='y1')
-                        _fig_dg.add_hline(y=-0.15, line_dash='dash', line_color='#FF5252',
-                                          annotation_text='Bear Δ -0.15', annotation_position='top right',
-                                          yref='y1')
-                        # Current value markers (present values shown in graph)
-                        _cur_nd = _dgh['net_delta'].iloc[-1]
-                        _cur_ng = _dgh['net_gamma'].iloc[-1]
-                        _fig_dg.add_trace(go.Scatter(
-                            x=[_dgh['time'].iloc[-1]], y=[_cur_nd],
-                            mode='markers+text', text=[f'{_cur_nd:+.4f}'],
-                            textposition='top right', textfont=dict(size=9, color='#00C853'),
-                            marker=dict(size=9, color='#00C853', symbol='circle'),
-                            showlegend=False, hoverinfo='skip', yaxis='y1'
-                        ))
-                        _fig_dg.add_trace(go.Scatter(
-                            x=[_dgh['time'].iloc[-1]], y=[_cur_ng],
-                            mode='markers+text', text=[f'{_cur_ng:+.2f}L'],
-                            textposition='bottom right', textfont=dict(size=9, color='#FFD740'),
-                            marker=dict(size=9, color='#FFD740', symbol='diamond'),
-                            showlegend=False, hoverinfo='skip', yaxis='y2'
-                        ))
-                        _fig_dg.update_layout(
-                            title=f'Net Delta & Net Gamma Over Time (ATM ± 2) — Δ:{_cur_nd:+.4f} Γ:{_cur_ng:+.2f}L',
-                            height=280, margin=dict(l=40, r=60, t=40, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111',
-                            font=dict(color='#ccc'),
-                            xaxis=dict(gridcolor='#333'),
-                            yaxis=dict(title=dict(text='Net Delta', font=dict(color='#00C853')), gridcolor='#333'),
-                            yaxis2=dict(title=dict(text='Net Gamma (L)', font=dict(color='#FFD740')),
-                                        overlaying='y', side='right', showgrid=False),
-                            showlegend=True, legend=dict(orientation='h', y=-0.3)
-                        )
-                        st.plotly_chart(_fig_dg, use_container_width=True)
-
-                        # ---- ATM ±2 Strike Comparison — Delta · Gamma (5-column per-strike) ----
-                        st.markdown("### 📊 ATM ±2 Strike Comparison — Delta · Gamma")
-                        _dg_pos_labels = ['🟣 ITM-2', '🟣 ITM-1', '🟡 ATM', '🔵 OTM+1', '🔵 OTM+2']
-                        _dg_pos_keys   = ['ATM-2', 'ATM-1', 'ATM', 'ATM+1', 'ATM+2']
-                        _dg_pos_colors = ['#ff44ff', '#cc44cc', '#ffaa00', '#00aaff', '#0088dd']
-                        _dg_ps_cols = st.columns(5)
-                        for _dg_ci, _dg_col in enumerate(_dg_ps_cols):
-                            with _dg_col:
-                                _lk = _dg_pos_keys[_dg_ci]
-                                _dk = f"delta_{_lk}"
-                                _gk = f"gamma_{_lk}"
-                                _clr = _dg_pos_colors[_dg_ci]
-                                if _dk not in _dgh.columns and _gk not in _dgh.columns:
-                                    st.info(f"{_dg_pos_labels[_dg_ci]} N/A")
-                                    continue
-                                _fig_dg_ps = go.Figure()
-                                # Delta (solid, left y-axis)
-                                if _dk in _dgh.columns:
-                                    _fig_dg_ps.add_trace(go.Scatter(
-                                        x=_dgh['time'], y=_dgh[_dk],
-                                        mode='lines+markers', name='Delta',
-                                        line=dict(color='#00C853', width=2),
-                                        marker=dict(size=3), yaxis='y1'
-                                    ))
-                                # Gamma (dashed, right y-axis)
-                                if _gk in _dgh.columns:
-                                    _fig_dg_ps.add_trace(go.Scatter(
-                                        x=_dgh['time'], y=_dgh[_gk],
-                                        mode='lines+markers', name='Gamma (L)',
-                                        line=dict(color='#FFD740', width=2, dash='dash'),
-                                        marker=dict(size=3), yaxis='y2'
-                                    ))
-                                _fig_dg_ps.add_hline(y=0, line_color='rgba(255,255,255,0.3)', line_width=1, yref='y1')
-                                # Current value markers
-                                _ps_cur_d = _dgh[_dk].iloc[-1] if _dk in _dgh.columns and len(_dgh) > 0 else None
-                                _ps_cur_g = _dgh[_gk].iloc[-1] if _gk in _dgh.columns and len(_dgh) > 0 else None
-                                if _ps_cur_d is not None:
-                                    _fig_dg_ps.add_trace(go.Scatter(
-                                        x=[_dgh['time'].iloc[-1]], y=[_ps_cur_d],
-                                        mode='markers+text', text=[f'{_ps_cur_d:+.4f}'],
-                                        textposition='top right', textfont=dict(size=8, color='#00C853'),
-                                        marker=dict(size=8, color='#00C853', symbol='circle'),
-                                        showlegend=False, hoverinfo='skip', yaxis='y1'
-                                    ))
-                                if _ps_cur_g is not None:
-                                    _fig_dg_ps.add_trace(go.Scatter(
-                                        x=[_dgh['time'].iloc[-1]], y=[_ps_cur_g],
-                                        mode='markers+text', text=[f'{_ps_cur_g:+.2f}L'],
-                                        textposition='bottom right', textfont=dict(size=8, color='#FFD740'),
-                                        marker=dict(size=8, color='#FFD740', symbol='diamond'),
-                                        showlegend=False, hoverinfo='skip', yaxis='y2'
-                                    ))
-                                _hot_border = '2px solid #ff4444' if _lk == _hot_lbl else '1px solid #333'
-                                _title_txt = f"{_dg_pos_labels[_dg_ci]}<br>{_lk}"
-                                if _ps_cur_d is not None:
-                                    _title_txt += f"<br>Δ:{_ps_cur_d:+.4f}"
-                                if _ps_cur_g is not None:
-                                    _title_txt += f" Γ:{_ps_cur_g:+.2f}L"
-                                _fig_dg_ps.update_layout(
-                                    title=dict(text=_title_txt, font=dict(size=10)),
-                                    template='plotly_dark', height=300,
-                                    showlegend=True,
-                                    legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                                                xanchor='center', x=0.5, font=dict(size=8)),
-                                    margin=dict(l=5, r=35, t=80, b=30),
-                                    xaxis=dict(tickformat='%H:%M', title='', tickfont=dict(size=8)),
-                                    yaxis=dict(title='Delta', title_font=dict(color='#00C853', size=9),
-                                               tickfont=dict(size=8), gridcolor='#333'),
-                                    yaxis2=dict(title='Gamma (L)', title_font=dict(color='#FFD740', size=9),
-                                                overlaying='y', side='right', showgrid=False,
-                                                tickfont=dict(size=8)),
-                                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
-                                )
-                                st.plotly_chart(_fig_dg_ps, use_container_width=True)
-                                _sig_d = "🟢" if _ps_cur_d and _ps_cur_d > 0.05 else ("🔴" if _ps_cur_d and _ps_cur_d < -0.05 else "🟡")
-                                _sig_g = "📍Pin" if _ps_cur_g and _ps_cur_g > 5 else ("⚡Acc" if _ps_cur_g and _ps_cur_g < -5 else "➡️Ntrl")
-                                _ps_d_str = f'{_ps_cur_d:+.4f}' if _ps_cur_d is not None else '—'
-                                _ps_g_str = f'{_ps_cur_g:+.2f}L' if _ps_cur_g is not None else '—'
-                                st.caption(f"{_sig_d} Δ:{_ps_d_str} · {_sig_g} Γ:{_ps_g_str}")
-
-                    _dg_col_l, _dg_col_r = st.columns([3, 1])
-                    with _dg_col_l:
-                        st.caption(f"⚡ Delta/Gamma pts: {len(st.session_state.delta_gamma_history)}")
-                    with _dg_col_r:
-                        if st.button("🗑️ Clear Delta/Gamma History"):
-                            st.session_state.delta_gamma_history = []
-                            st.rerun()
-                else:
-                    st.info("ATM strike not identified — Delta & Gamma Engine unavailable.")
-            else:
-                st.info("Option chain data with Greeks required for Delta & Gamma Engine.")
-
-        except Exception as _dg_e:
-            st.warning(f"Delta & Gamma Engine unavailable: {str(_dg_e)}")
-
-        # Expandable section for detailed Greeks and raw values
-        with st.expander("📊 Detailed Greeks & Raw Values"):
-            df_summary = option_data['df_summary']
-            detail_cols = ['Strike', 'Zone', 'lastPrice_CE', 'lastPrice_PE',
-                           'openInterest_CE', 'openInterest_PE', 'changeinOpenInterest_CE', 'changeinOpenInterest_PE',
-                           'totalTradedVolume_CE', 'totalTradedVolume_PE',
-                           'Delta_CE', 'Delta_PE', 'Gamma_CE', 'Gamma_PE', 'Vega_CE', 'Vega_PE', 'Theta_CE', 'Theta_PE',
-                           'impliedVolatility_CE', 'impliedVolatility_PE',
-                           'bidQty_CE', 'bidQty_PE', 'askQty_CE', 'askQty_PE']
-            detail_cols = [col for col in detail_cols if col in df_summary.columns]
-            if detail_cols:
-                st.dataframe(df_summary[detail_cols].style.apply(highlight_atm_row, axis=1), use_container_width=True)
-
-        # Add download button for CSV
-        csv_data = create_csv_download(option_data['df_summary'])
-        st.download_button(
-            label="📥 Download Summary as CSV",
-            data=csv_data,
-            file_name=f"nifty_options_summary_{option_data['expiry']}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-            mime="text/csv"
-        )
+            st.info("No SENSEX option chain data available.")
 
     # ===== FINAL INTELLIGENCE DASHBOARD (Master Summary) =====
     st.markdown("---")
