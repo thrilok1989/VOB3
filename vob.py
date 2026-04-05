@@ -16496,7 +16496,7 @@ def compute_strike_zone_classification(mde):
 
 
 
-def render_options_analysis_panel(option_data, current_price, api,
+def render_options_analysis_panel(option_data, current_price, api, db,
                                    lot_size=65, index_name="NIFTY", symbol_prefix="NIFTY"):
     """Render the full options chain analysis panel for any index.
     Supports NIFTY (lot_size=65, step=50), BANKNIFTY (lot_size=35, step=100),
@@ -24802,6 +24802,7 @@ def main():
                 option_data=option_data,
                 current_price=current_price,
                 api=api,
+                db=db,
                 lot_size=65,
                 index_name="NIFTY",
                 symbol_prefix="NIFTY",
@@ -24825,6 +24826,7 @@ def main():
                     option_data=_bnf_option_data,
                     current_price=_bnf_option_data['underlying'],
                     api=api,
+                    db=db,
                     lot_size=35,
                     index_name="BANKNIFTY",
                     symbol_prefix="BANKNIFTY",
@@ -24850,6 +24852,7 @@ def main():
                     option_data=_sx_option_data,
                     current_price=_sx_option_data['underlying'],
                     api=api,
+                    db=db,
                     lot_size=10,
                     index_name="SENSEX",
                     symbol_prefix="SENSEX",
