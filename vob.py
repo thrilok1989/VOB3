@@ -5676,7 +5676,8 @@ def get_combined_acceleration_signal(sentiment_verdict, spike_result, gamma_resu
 
 
 def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, live_spot_price=None,
-                         underlying_scrip=None, underlying_seg=None, symbol_name=None, lot_size=None):
+                         underlying_scrip=None, underlying_seg=None, symbol_name=None, lot_size=None,
+                         strike_step=None):
     """Enhanced options chain analysis with expiry selection, HTF pivot data, and VOB data.
 
     Pass underlying_scrip / underlying_seg / symbol_name / lot_size to use for any index
@@ -5691,6 +5692,8 @@ def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, l
         symbol_name = "NIFTY"
     if lot_size is None:
         lot_size = 75
+    if strike_step is None:
+        strike_step = 50  # Nifty default
 
     now = datetime.now(timezone("Asia/Kolkata"))
 
@@ -5787,8 +5790,9 @@ def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, l
 
     atm_strike = min(df['strikePrice'], key=lambda x: abs(x - underlying))
     
-    # Limit to ATM ± 2 strikes for faster UI (performance optimization)
-    atm_plus_minus_2 = df[abs(df['strikePrice'] - atm_strike) <= 100]  # Assuming 50 point strikes
+    # Limit to ATM ± 5 strikes for UI (covers ±2 and ±3 views)
+    _atm_filter = strike_step * 5
+    atm_plus_minus_2 = df[abs(df['strikePrice'] - atm_strike) <= _atm_filter]
     df = atm_plus_minus_2.copy()
     
     df['Zone'] = df['strikePrice'].apply(lambda x: 'ATM' if x == atm_strike else 'ITM' if x < underlying else 'OTM')
@@ -16707,6 +16711,159 @@ def compute_strike_zone_classification(mde):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STRIKE PRICE CALCULATOR — ATM ±2 and ATM ±3 for any index
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def show_strike_calculator(symbol_name: str, strike_step: int, current_price: float = None,
+                           option_data: dict = None, display_name: str = None):
+    """Interactive ATM ±2 / ±3 strike calculator for any index.
+
+    - Nifty  : strike_step = 50
+    - Bank Nifty / Sensex : strike_step = 100
+    """
+    if display_name is None:
+        display_name = symbol_name
+
+    st.markdown(f"### 🎯 Strike Price Calculator — {display_name}")
+    st.caption(f"Strike interval: **{strike_step} points** per step")
+
+    # ── Price Input ────────────────────────────────────────────────────
+    col_inp, col_step = st.columns([3, 1])
+    with col_inp:
+        default_price = float(current_price) if current_price and current_price > 0 else 0.0
+        input_price = st.number_input(
+            f"Enter {display_name} Price (or use live LTP)",
+            min_value=0.0,
+            value=default_price,
+            step=float(strike_step),
+            format="%.2f",
+            key=f"calc_price_{symbol_name}",
+        )
+    with col_step:
+        strike_range = st.selectbox(
+            "Range",
+            options=["ATM ±2", "ATM ±3", "ATM ±5"],
+            index=1,
+            key=f"calc_range_{symbol_name}",
+        )
+
+    price_to_use = input_price if input_price > 0 else default_price
+    if price_to_use <= 0:
+        st.info("Enter a price above to calculate strikes.")
+        return
+
+    # ── ATM calculation ────────────────────────────────────────────────
+    atm_strike = round(price_to_use / strike_step) * strike_step
+
+    spread_map = {"ATM ±2": 2, "ATM ±3": 3, "ATM ±5": 5}
+    spread = spread_map.get(strike_range, 3)
+
+    strikes = [atm_strike + (i * strike_step) for i in range(-spread, spread + 1)]
+
+    # ── Pull CE/PE data from option_data if available ─────────────────
+    oc_lookup = {}
+    if option_data and option_data.get('df_summary') is not None:
+        _df = option_data['df_summary']
+        for _, row in _df.iterrows():
+            s = int(row.get('Strike', 0))
+            oc_lookup[s] = {
+                'ce_ltp':  row.get('lastPrice_CE', None),
+                'pe_ltp':  row.get('lastPrice_PE', None),
+                'ce_oi':   row.get('openInterest_CE', None),
+                'pe_oi':   row.get('openInterest_PE', None),
+                'ce_iv':   row.get('impliedVolatility_CE', None),
+                'pe_iv':   row.get('impliedVolatility_PE', None),
+                'pcr':     row.get('PCR_OI', None),
+                'bias':    row.get('BiasScore', None),
+                'verdict': row.get('Verdict', None),
+            }
+
+    has_oc = len(oc_lookup) > 0
+
+    # ── Build rows ─────────────────────────────────────────────────────
+    rows = []
+    for s in sorted(strikes, reverse=True):
+        dist = s - atm_strike
+        if dist > 0:
+            zone = f"OTM CE / ITM PE  (+{dist})"
+            zone_short = f"+{dist//strike_step} strike{'s' if abs(dist)>strike_step else ''}"
+        elif dist < 0:
+            zone = f"ITM CE / OTM PE  ({dist})"
+            zone_short = f"{dist//strike_step} strike{'s' if abs(dist)>strike_step else ''}"
+        else:
+            zone = "ATM  ◀"
+            zone_short = "ATM"
+
+        row = {
+            "Strike": s,
+            "Zone": zone_short,
+            "Dist (pts)": int(dist),
+        }
+        if has_oc and s in oc_lookup:
+            d = oc_lookup[s]
+            row["CE LTP"]  = f"{d['ce_ltp']:.2f}"  if d['ce_ltp']  is not None else "—"
+            row["PE LTP"]  = f"{d['pe_ltp']:.2f}"  if d['pe_ltp']  is not None else "—"
+            row["CE OI (L)"] = f"{d['ce_oi']/100000:.1f}" if d['ce_oi'] is not None else "—"
+            row["PE OI (L)"] = f"{d['pe_oi']/100000:.1f}" if d['pe_oi'] is not None else "—"
+            row["CE IV %"] = f"{d['ce_iv']:.1f}" if d['ce_iv'] is not None else "—"
+            row["PE IV %"] = f"{d['pe_iv']:.1f}" if d['pe_iv'] is not None else "—"
+            row["PCR"]     = f"{d['pcr']:.2f}"   if d['pcr']     is not None else "—"
+            row["Bias"]    = f"{d['bias']:.1f}"  if d['bias']    is not None else "—"
+            row["Verdict"] = d['verdict'] or "—"
+        rows.append(row)
+
+    df_calc = pd.DataFrame(rows)
+
+    # ── Style ──────────────────────────────────────────────────────────
+    def _style_calc(df):
+        styles = pd.DataFrame("", index=df.index, columns=df.columns)
+        for i, row in df.iterrows():
+            if row["Dist (pts)"] == 0:  # ATM row
+                for col in df.columns:
+                    styles.at[i, col] = "background-color: #3d3400; color: #FFD700; font-weight: bold"
+            elif row["Dist (pts)"] > 0:
+                for col in df.columns:
+                    styles.at[i, col] = "background-color: #1a0a0a; color: #ff8888"
+            else:
+                for col in df.columns:
+                    styles.at[i, col] = "background-color: #0a1a0a; color: #88ff88"
+        return styles
+
+    styled = df_calc.style.apply(lambda _: _style_calc(df_calc), axis=None).hide(axis="index")
+    st.dataframe(styled, use_container_width=True, height=min(400, (len(strikes) + 1) * 38))
+
+    # ── Summary box ────────────────────────────────────────────────────
+    s2, s3, s4 = st.columns(3)
+    s2.metric("ATM Strike", f"{atm_strike:,}")
+    s2_val = atm_strike + strike_step
+    s3.metric(f"ATM+1 ({zone_short if False else f'+{strike_step}'})", f"{atm_strike + strike_step:,}")
+    s4.metric(f"ATM-1 (-{strike_step})", f"{atm_strike - strike_step:,}")
+
+    # ── ATM ±2 quick table ─────────────────────────────────────────────
+    st.markdown(f"**ATM ±2 Strikes** (step = {strike_step})")
+    pm2_cols = st.columns(5)
+    pm2_labels = [f"ATM-2\n{atm_strike - 2*strike_step}", f"ATM-1\n{atm_strike - strike_step}",
+                  f"ATM\n{atm_strike}", f"ATM+1\n{atm_strike + strike_step}", f"ATM+2\n{atm_strike + 2*strike_step}"]
+    pm2_colors = ["#00cc66", "#00ff88", "#FFD700", "#ff8888", "#ff4444"]
+    for col, label, color in zip(pm2_cols, pm2_labels, pm2_colors):
+        col.markdown(f"<div style='text-align:center; background:#1a1a1a; border-radius:6px; padding:8px;"
+                     f"border:1px solid {color}'>"
+                     f"<span style='color:{color}; font-weight:bold; font-size:0.85em'>{label.replace(chr(10),'<br>')}</span>"
+                     f"</div>", unsafe_allow_html=True)
+
+    st.markdown(f"**ATM ±3 Strikes** (step = {strike_step})")
+    pm3_cols = st.columns(7)
+    pm3_strikes = [atm_strike + i * strike_step for i in range(-3, 4)]
+    pm3_colors  = ["#009944", "#00cc66", "#00ff88", "#FFD700", "#ff8888", "#ff4444", "#cc0000"]
+    for col, s, color in zip(pm3_cols, pm3_strikes, pm3_colors):
+        lbl = "ATM" if s == atm_strike else (f"+{(s-atm_strike)//strike_step}" if s > atm_strike else f"{(s-atm_strike)//strike_step}")
+        col.markdown(f"<div style='text-align:center; background:#1a1a1a; border-radius:6px; padding:6px;"
+                     f"border:1px solid {color}'>"
+                     f"<span style='color:{color}; font-weight:bold; font-size:0.85em'>{lbl}<br>{s:,}</span>"
+                     f"</div>", unsafe_allow_html=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # GENERIC INDEX TAB — works for NIFTY, BANK NIFTY, SENSEX
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -16949,6 +17106,7 @@ def show_index_tab_content(
             underlying_seg=exchange_seg,
             symbol_name=symbol_name,
             lot_size=lot_size,
+            strike_step=index_config.get('strike_step', 50),
         )
 
         if option_data and option_data.get('underlying'):
@@ -17049,6 +17207,16 @@ def show_index_tab_content(
                         st.dataframe(_t5[_disp_cols], use_container_width=True, hide_index=True)
         except Exception as _te:
             st.warning(f"ATM table error: {_te}")
+
+        # Strike Price Calculator
+        st.markdown("---")
+        show_strike_calculator(
+            symbol_name=symbol_name,
+            strike_step=index_config.get('strike_step', 50),
+            current_price=current_price,
+            option_data=option_data,
+            display_name=display_name,
+        )
 
     # ─────────────────── ANALYSIS ENGINES ─────────────────────────────
     st.markdown("---")
@@ -19194,6 +19362,16 @@ def main():
                     st.info("Option data not available yet — wait for first refresh.")
             except Exception as _t5_exc:
                 st.warning(f"ATM ±3 table error: {str(_t5_exc)[:120]}")
+
+            # ===== NIFTY STRIKE PRICE CALCULATOR =====
+            st.markdown("---")
+            show_strike_calculator(
+                symbol_name="NIFTY",
+                strike_step=50,
+                current_price=current_price,
+                option_data=option_data,
+                display_name="Nifty 50",
+            )
 
             # Option Chain Bias Summary Table
             st.markdown("---")
