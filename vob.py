@@ -24536,18 +24536,21 @@ def main():
                 if max_pain_strike:
                     st.info(f"🎯 **Max Pain Level:** ₹{max_pain_strike:.0f} - Price magnet at expiry")
 
-            show_atm_pm2_charts(
-                option_data=option_data,
-                underlying_price=underlying_price if 'underlying_price' in dir() else current_price,
-                strike_step=50,
-                ss_prefix='nifty',
-                display_name='Nifty 50',
-                enable_signals=enable_signals,
-                vob_data=vob_data if 'vob_data' in dir() else None,
-                pivots=pivots if 'pivots' in dir() else None,
-                poc_data=poc_data_for_chart if 'poc_data_for_chart' in dir() else None,
-                db=db,
-            )
+            try:
+                show_atm_pm2_charts(
+                    option_data=option_data,
+                    underlying_price=underlying_price if 'underlying_price' in dir() else current_price,
+                    strike_step=50,
+                    ss_prefix='nifty',
+                    display_name='Nifty 50',
+                    enable_signals=enable_signals,
+                    vob_data=vob_data if 'vob_data' in dir() else None,
+                    pivots=pivots if 'pivots' in dir() else None,
+                    poc_data=poc_data_for_chart if 'poc_data_for_chart' in dir() else None,
+                    db=db,
+                )
+            except Exception as _nifty_atm_e:
+                st.warning(f"ATM ±2 Analysis error: {str(_nifty_atm_e)[:200]}")
             # ===== GAMMA SEQUENCE ANALYSIS =====
             st.markdown("---")
             st.markdown("## 📊 Gamma Sequence Analysis")
