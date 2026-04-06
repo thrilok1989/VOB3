@@ -17546,7 +17546,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             'net_delta':      float(_pro_net_delta),
                             'net_gex':        float(_pro_net_gex),
                             'breakout_score': int(_pro_score),
-                        }, on_conflict='timestamp').execute()
+                        }, on_conflict='"timestamp"').execute()
                     except Exception:
                         pass  # Supabase table may not exist yet; fail silently
 
