@@ -204,7 +204,7 @@ def _idx_swap_in(prefix):
         elif key.endswith('_history'):
             st.session_state[key] = []
         else:
-            st.session_state[key] = None
+            st.session_state[key] = 0 if key in ('_oi_prev_underlying', '_oi_tracker_prev_price') else None
 
 
 def _idx_swap_out(prefix):
@@ -16498,7 +16498,7 @@ def compute_strike_zone_classification(mde):
 
 def render_options_analysis_panel(option_data, current_price, api, db,
                                    lot_size=65, index_name="NIFTY", symbol_prefix="NIFTY",
-                                   idx_key="nifty"):
+                                   idx_key="nifty", vob_data=None, enable_signals=False, pivots=None):
     """Render the full options chain analysis panel for any index.
     Supports NIFTY (lot_size=65, step=50), BANKNIFTY (lot_size=35, step=100),
     and SENSEX (lot_size=10, step=100). Session state isolation is handled
@@ -16878,7 +16878,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     plot_bgcolor='#1e1e1e',
                     paper_bgcolor='#1e1e1e',
                 )
-                st.plotly_chart(_fig_d, use_container_width=True)
+                st.plotly_chart(_fig_d, use_container_width=True, key=f"{idx_key}_pc001")
                 _caption = f"{'PE Bid' if _side=='S' else 'CE Ask'} {_cur_qty:,.0f}"
                 if _cur_price is not None:
                     _caption += f" @ {_price_str}"
@@ -16889,7 +16889,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
             option_data.get('underlying')
         )
         if depth_fig is not None:
-            st.plotly_chart(depth_fig, use_container_width=True)
+            st.plotly_chart(depth_fig, use_container_width=True, key=f"{idx_key}_pc002")
 
     # ===== PRE-COMPUTE GEX + TRACK HISTORY (before comparison view) =====
     _gex_pre_summary = option_data.get('df_summary')
@@ -17030,7 +17030,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     margin=dict(l=50, r=60, t=55, b=40)
                 )
-                st.plotly_chart(_fig_cs, use_container_width=True)
+                st.plotly_chart(_fig_cs, use_container_width=True, key=f"{idx_key}_pc003")
             with _cc2:
                 _fig_cs2 = go.Figure()
                 if 'avg_pcr' in _cs_df.columns:
@@ -17068,7 +17068,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     margin=dict(l=40, r=55, t=55, b=40)
                 )
-                st.plotly_chart(_fig_cs2, use_container_width=True)
+                st.plotly_chart(_fig_cs2, use_container_width=True, key=f"{idx_key}_pc004")
 
         st.caption(f"📊 {len(_cs_hist)} data points · updates every ~30s · "
                    f"Full analysis with per-strike breakdown further below ↓")
@@ -17701,7 +17701,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
                             paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
                         )
-                        st.plotly_chart(_fig_st, use_container_width=True)
+                        st.plotly_chart(_fig_st, use_container_width=True, key=f"{idx_key}_pc005")
 
                     with _mc2:
                         # IV Skew Engine Chart
@@ -17738,7 +17738,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
                             paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
                         )
-                        st.plotly_chart(_fig_iv2, use_container_width=True)
+                        st.plotly_chart(_fig_iv2, use_container_width=True, key=f"{idx_key}_pc006")
 
                     _mc3, _mc4 = st.columns(2)
 
@@ -17786,7 +17786,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
                             paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
                         )
-                        st.plotly_chart(_fig_pcr2, use_container_width=True)
+                        st.plotly_chart(_fig_pcr2, use_container_width=True, key=f"{idx_key}_pc007")
 
                     with _mc4:
                         # Gamma Pressure Chart
@@ -17821,7 +17821,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             showlegend=False,
                             paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
                         )
-                        st.plotly_chart(_fig_gam, use_container_width=True)
+                        st.plotly_chart(_fig_gam, use_container_width=True, key=f"{idx_key}_pc008")
 
                     # ══════════════════════════════════════════════════════
                     # BOTTOM CHARTS  (3 columns)
@@ -17861,7 +17861,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             legend=dict(orientation='h', y=-0.4, font=dict(size=9)),
                             paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
                         )
-                        st.plotly_chart(_fig_pres2, use_container_width=True)
+                        st.plotly_chart(_fig_pres2, use_container_width=True, key=f"{idx_key}_pc009")
                         _p_sig = ("🚀 Call Dominating" if _pro_call_pres > _pro_put_pres + 0.1
                                   else "🔥 Put Dominating" if _pro_put_pres > _pro_call_pres + 0.1
                                   else "⚖️ Balanced")
@@ -17901,7 +17901,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             showlegend=False,
                             paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
                         )
-                        st.plotly_chart(_fig_nd, use_container_width=True)
+                        st.plotly_chart(_fig_nd, use_container_width=True, key=f"{idx_key}_pc010")
                         _nd_sig = ("📈 Bullish Positioning" if _pro_net_delta > 0
                                    else "📉 Bearish Positioning")
                         st.caption(_nd_sig)
@@ -17938,7 +17938,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             showlegend=False,
                             paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
                         )
-                        st.plotly_chart(_fig_bs, use_container_width=True)
+                        st.plotly_chart(_fig_bs, use_container_width=True, key=f"{idx_key}_pc011")
                         st.caption(f"Straddle {_s1}/20 · IV {_s2}/20 · Gamma {_s3}/20 · "
                                    f"Volume {_s4}/20 · Pressure {_s5}/20")
 
@@ -17990,7 +17990,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
                         margin=dict(l=40, r=65, t=45, b=30),
                         paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'))
-                    st.plotly_chart(_fig_sent, use_container_width=True)
+                    st.plotly_chart(_fig_sent, use_container_width=True, key=f"{idx_key}_pc012")
 
                 # ── Per-Strike Breakdown ─────────────────────────────────────
                 if _comp_strike_details:
@@ -18319,7 +18319,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
                         margin=dict(l=40, r=120, t=45, b=30),
                         paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'))
-                    st.plotly_chart(_fig_itm, use_container_width=True)
+                    st.plotly_chart(_fig_itm, use_container_width=True, key=f"{idx_key}_pc013")
 
                 # Source breakdown
                 with st.expander("📖 Level Sources"):
@@ -18689,7 +18689,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         paper_bgcolor='#1e1e1e',
                     )
 
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=f"{idx_key}_pc014")
 
                     # Signal summary below chart
                     cur_pcr = history_df[strike_col].iloc[-1] if (
@@ -18856,7 +18856,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         plot_bgcolor='#1e1e1e',
                         paper_bgcolor='#1e1e1e',
                     )
-                    st.plotly_chart(fig_gex, use_container_width=True)
+                    st.plotly_chart(fig_gex, use_container_width=True, key=f"{idx_key}_pc015")
                     gex_sig = "📍 Pin" if cur_gex > 10 else ("⚡ Accel" if cur_gex < -10 else "➡️ Ntrl")
                     st.caption(f"GEX {cur_gex:+.1f}L {gex_sig}")
 
@@ -18993,7 +18993,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         yaxis=dict(title='OI', range=[_cp_oi_ymin, _cp_oi_ymax]),
                         plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     )
-                    st.plotly_chart(_cp_fig, use_container_width=True)
+                    st.plotly_chart(_cp_fig, use_container_width=True, key=f"{idx_key}_pc016")
 
                     # Signal: which side dominates
                     if _cp_ce_cur is not None and _cp_pe_cur is not None and _cp_ce_cur > 0:
@@ -19089,7 +19089,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                        zeroline=True, zerolinecolor='white', zerolinewidth=1),
                             plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                         )
-                        st.plotly_chart(_chg_fig, use_container_width=True)
+                        st.plotly_chart(_chg_fig, use_container_width=True, key=f"{idx_key}_pc017")
 
                         # Signal: net change direction
                         if _chg_ce_cur is not None and _chg_pe_cur is not None:
@@ -19287,7 +19287,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         yaxis=dict(title='Volume', range=[_cv_ymin, _cv_ymax]),
                         plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     )
-                    st.plotly_chart(_cv_fig, use_container_width=True)
+                    st.plotly_chart(_cv_fig, use_container_width=True, key=f"{idx_key}_pc018")
 
                     # Signal: which side dominates
                     if _cv_ce_cur is not None and _cv_pe_cur is not None and _cv_ce_cur > 0:
@@ -19383,7 +19383,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                        zeroline=True, zerolinecolor='white', zerolinewidth=1),
                             plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                         )
-                        st.plotly_chart(_cvchg_fig, use_container_width=True)
+                        st.plotly_chart(_cvchg_fig, use_container_width=True, key=f"{idx_key}_pc019")
 
                         # Signal: net change direction
                         if _cvchg_ce_cur is not None and _cvchg_pe_cur is not None:
@@ -19477,7 +19477,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                            zeroline=True, zerolinecolor='white', zerolinewidth=1),
                 plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
             )
-            st.plotly_chart(_ph_fig, use_container_width=True)
+            st.plotly_chart(_ph_fig, use_container_width=True, key=f"{idx_key}_pc020")
 
             # Summary metrics
             _ph_c1, _ph_c2, _ph_c3, _ph_c4 = st.columns(4)
@@ -19807,7 +19807,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 legend=dict(orientation='h', y=-0.15),
                 margin=dict(l=40, r=20, t=30, b=40),
                 xaxis_title='Strike', yaxis_title='OI (Lakhs)')
-            st.plotly_chart(_sop_fig, use_container_width=True)
+            st.plotly_chart(_sop_fig, use_container_width=True, key=f"{idx_key}_pc021")
 
         # Row 4 — Institutional Activity + Smart Money Entries
         _sop_r4c1, _sop_r4c2 = st.columns(2)
@@ -20032,7 +20032,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     legend=dict(orientation='h', y=-0.15),
                     margin=dict(l=40, r=20, t=30, b=40),
                     xaxis_title='Strike', yaxis_title='Quantity')
-                st.plotly_chart(_mdp_fig, use_container_width=True)
+                st.plotly_chart(_mdp_fig, use_container_width=True, key=f"{idx_key}_pc022")
 
             # Row 4 — Institutional Walls + Institutional Control
             _mdp_r4c1, _mdp_r4c2, _mdp_r4c3 = st.columns(3)
@@ -20366,7 +20366,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 hovermode='x unified',
             )
 
-            st.plotly_chart(_fig_zone, use_container_width=True, key="zone_tracker_chart")
+            st.plotly_chart(_fig_zone, use_container_width=True, key=f"{idx_key}_zone_tracker_chart")
 
             # ── Support & Resistance Score Chart ─────────────────
             st.markdown("#### 📊 Zone Strength Over Time")
@@ -20392,7 +20392,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                            showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
                 hovermode='x unified',
             )
-            st.plotly_chart(_fig_score, use_container_width=True, key="zone_score_chart")
+            st.plotly_chart(_fig_score, use_container_width=True, key=f"{idx_key}_zone_score_chart")
 
             # ── Confidence + Market Bias timeline ────────────────
             st.markdown("#### 🎯 Confidence & Bias Timeline")
@@ -20421,7 +20421,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 hovermode='x unified',
                 barmode='overlay',
             )
-            st.plotly_chart(_fig_conf, use_container_width=True, key="zone_confidence_chart")
+            st.plotly_chart(_fig_conf, use_container_width=True, key=f"{idx_key}_zone_confidence_chart")
         else:
             st.info("Zone history accumulating... charts appear after 2+ snapshots (every 30s).")
 
@@ -20548,7 +20548,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='Vol PCR', range=[_vp_ymin, _vp_ymax]),
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                 )
-                st.plotly_chart(_vfig, use_container_width=True)
+                st.plotly_chart(_vfig, use_container_width=True, key=f"{idx_key}_pc026")
                 _vsig = "🟢 Bull" if _vcur > 1.2 else ("🔴 Bear" if _vcur < 0.7 else "🟡 Ntrl")
                 st.caption(f"Vol PCR {_vcur:.2f} {_vsig}")
     else:
@@ -20628,7 +20628,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='Premium (₹)', range=[_sy_min, _sy_max]),
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                 )
-                st.plotly_chart(_sfig, use_container_width=True)
+                st.plotly_chart(_sfig, use_container_width=True, key=f"{idx_key}_pc027")
                 _move_lbl = "💥 Explosive" if _st_dir == "rising" else ("🐌 Grinding" if _st_dir == "falling" else "⬛ Range")
                 st.caption(f"₹{_st_cur:.1f} → {_move_lbl}")
     else:
@@ -21055,7 +21055,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     margin=dict(l=50, r=50, t=60, b=50)
                 )
 
-                st.plotly_chart(fig_gex, use_container_width=True)
+                st.plotly_chart(fig_gex, use_container_width=True, key=f"{idx_key}_pc028")
 
                 # ===== GEX Breakdown Table =====
                 with st.expander("📋 GEX Breakdown by Strike"):
@@ -21266,7 +21266,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 margin=dict(l=50, r=50, t=60, b=50)
             )
 
-            st.plotly_chart(fig_pcr_chgoi, use_container_width=True)
+            st.plotly_chart(fig_pcr_chgoi, use_container_width=True, key=f"{idx_key}_pc029")
 
             # Status bar
             pcr_info1, pcr_info2 = st.columns([3, 1])
@@ -21577,7 +21577,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
                 plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                 margin=dict(l=50, r=50, t=60, b=50))
-            st.plotly_chart(fig_score, use_container_width=True)
+            st.plotly_chart(fig_score, use_container_width=True, key=f"{idx_key}_pc030")
 
             # Charts: PCR components + GEX (2 col)
             ind_col1, ind_col2 = st.columns(2)
@@ -21605,7 +21605,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                range=[max(0, min(_all_pcr)*0.9), max(_all_pcr)*1.1]),
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     margin=dict(l=40, r=10, t=50, b=30))
-                st.plotly_chart(fig_pcr_ts, use_container_width=True)
+                st.plotly_chart(fig_pcr_ts, use_container_width=True, key=f"{idx_key}_pc031")
             with ind_col2:
                 fig_gex_ts = go.Figure()
                 _gex_c2 = ['#00ff88' if g > 10 else '#ff4444' if g < -10 else '#FFD700'
@@ -21628,7 +21628,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='GEX (Lakhs)', zeroline=True, zerolinecolor='white'),
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     margin=dict(l=40, r=50, t=50, b=30))
-                st.plotly_chart(fig_gex_ts, use_container_width=True)
+                st.plotly_chart(fig_gex_ts, use_container_width=True, key=f"{idx_key}_pc032")
 
             # Per-strike score time series
             score_cols = [c for c in comp_hist_df.columns if c.startswith('score_')]
@@ -21654,7 +21654,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='Weighted Score', zeroline=True, zerolinecolor='white'),
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     margin=dict(l=50, r=20, t=50, b=40))
-                st.plotly_chart(fig_strike_ts, use_container_width=True)
+                st.plotly_chart(fig_strike_ts, use_container_width=True, key=f"{idx_key}_pc033")
 
             # Per-strike breakdown table
             if last_valid and last_valid.get('strike_details'):
@@ -21788,7 +21788,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 margin=dict(l=50, r=50, t=60, b=50)
             )
 
-            st.plotly_chart(fig_total_gex, use_container_width=True)
+            st.plotly_chart(fig_total_gex, use_container_width=True, key=f"{idx_key}_pc034")
 
             # Interpretation box
             st.markdown(f"""
@@ -21933,7 +21933,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 fig_gs.update_yaxes(title_text="Cumul Net Gamma (L)", row=2, col=1)
                 fig_gs.update_xaxes(title_text="Strike Price", row=2, col=1)
 
-                st.plotly_chart(fig_gs, use_container_width=True)
+                st.plotly_chart(fig_gs, use_container_width=True, key=f"{idx_key}_pc035")
 
                 # Gamma sequence table
                 with st.expander("📋 Gamma Sequence Data"):
@@ -22196,7 +22196,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333'),
                         showlegend=True, legend=dict(orientation='h', y=-0.3)
                     )
-                    st.plotly_chart(_fig_iv, use_container_width=True)
+                    st.plotly_chart(_fig_iv, use_container_width=True, key=f"{idx_key}_pc036")
 
                 # ---- Pressure Time-Series Chart ----
                 if len(st.session_state.pressure_history) >= 2:
@@ -22242,7 +22242,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333'),
                         showlegend=True, legend=dict(orientation='h', y=-0.3)
                     )
-                    st.plotly_chart(_fig_pr, use_container_width=True)
+                    st.plotly_chart(_fig_pr, use_container_width=True, key=f"{idx_key}_pc037")
 
                 # ---- ATM ±2 Strike Comparison — CE IV · PE IV (5-column per-strike) ----
                 if len(st.session_state.iv_skew_history) >= 2:
@@ -22314,7 +22314,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 yaxis=dict(title='IV%', tickfont=dict(size=8)),
                                 plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                             )
-                            st.plotly_chart(_fig_ivs, use_container_width=True)
+                            st.plotly_chart(_fig_ivs, use_container_width=True, key=f"{idx_key}_pc038")
                             # Net pressure caption
                             _pres_cur = _ivh_df[_prk].iloc[-1] if (_prk in _ivh_df.columns and len(_ivh_df) > 0) else None
                             _pres_sig = "🟢Bull" if (_pres_cur and _pres_cur > 0.15) else ("🔴Bear" if (_pres_cur and _pres_cur < -0.15) else "🟡Ntrl")
@@ -22853,7 +22853,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     overlaying='y', side='right', showgrid=False),
                         showlegend=True, legend=dict(orientation='h', y=-0.3)
                     )
-                    st.plotly_chart(_fig_dg, use_container_width=True)
+                    st.plotly_chart(_fig_dg, use_container_width=True, key=f"{idx_key}_pc039")
 
                     # ---- ATM ±2 Strike Comparison — Delta · Gamma (5-column per-strike) ----
                     st.markdown("### 📊 ATM ±2 Strike Comparison — Delta · Gamma")
@@ -22928,7 +22928,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                             tickfont=dict(size=8)),
                                 plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                             )
-                            st.plotly_chart(_fig_dg_ps, use_container_width=True)
+                            st.plotly_chart(_fig_dg_ps, use_container_width=True, key=f"{idx_key}_pc040")
                             _sig_d = "🟢" if _ps_cur_d and _ps_cur_d > 0.05 else ("🔴" if _ps_cur_d and _ps_cur_d < -0.05 else "🟡")
                             _sig_g = "📍Pin" if _ps_cur_g and _ps_cur_g > 5 else ("⚡Acc" if _ps_cur_g and _ps_cur_g < -5 else "➡️Ntrl")
                             _ps_d_str = f'{_ps_cur_d:+.4f}' if _ps_cur_d is not None else '—'
@@ -24815,6 +24815,9 @@ def main():
                 index_name="NIFTY",
                 symbol_prefix="NIFTY",
                 idx_key="nifty",
+                vob_data=vob_data,
+                enable_signals=enable_signals,
+                pivots=pivots,
             )
         else:
             st.info("No NIFTY option chain data available.")
@@ -24840,6 +24843,8 @@ def main():
                     index_name="BANKNIFTY",
                     symbol_prefix="BANKNIFTY",
                     idx_key="bnf",
+                    vob_data=None,
+                    enable_signals=enable_signals,
                 )
             finally:
                 _idx_swap_out('bnf')
@@ -24867,6 +24872,8 @@ def main():
                     index_name="SENSEX",
                     symbol_prefix="SENSEX",
                     idx_key="sx",
+                    vob_data=None,
+                    enable_signals=enable_signals,
                 )
             finally:
                 _idx_swap_out('sx')
