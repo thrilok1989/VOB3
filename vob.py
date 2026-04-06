@@ -16878,7 +16878,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     plot_bgcolor='#1e1e1e',
                     paper_bgcolor='#1e1e1e',
                 )
-                st.plotly_chart(_fig_d, use_container_width=True, key=f"{idx_key}_pc001")
+                st.plotly_chart(_fig_d, use_container_width=True, key=f"{idx_key}_pc001_{_col_idx}")
                 _caption = f"{'PE Bid' if _side=='S' else 'CE Ask'} {_cur_qty:,.0f}"
                 if _cur_price is not None:
                     _caption += f" @ {_price_str}"
@@ -18689,7 +18689,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         paper_bgcolor='#1e1e1e',
                     )
 
-                    st.plotly_chart(fig, use_container_width=True, key=f"{idx_key}_pc014")
+                    st.plotly_chart(fig, use_container_width=True, key=f"{idx_key}_pc014_{i}")
 
                     # Signal summary below chart
                     cur_pcr = history_df[strike_col].iloc[-1] if (
@@ -18856,7 +18856,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         plot_bgcolor='#1e1e1e',
                         paper_bgcolor='#1e1e1e',
                     )
-                    st.plotly_chart(fig_gex, use_container_width=True, key=f"{idx_key}_pc015")
+                    st.plotly_chart(fig_gex, use_container_width=True, key=f"{idx_key}_pc015_{i}")
                     gex_sig = "📍 Pin" if cur_gex > 10 else ("⚡ Accel" if cur_gex < -10 else "➡️ Ntrl")
                     st.caption(f"GEX {cur_gex:+.1f}L {gex_sig}")
 
@@ -18993,7 +18993,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         yaxis=dict(title='OI', range=[_cp_oi_ymin, _cp_oi_ymax]),
                         plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     )
-                    st.plotly_chart(_cp_fig, use_container_width=True, key=f"{idx_key}_pc016")
+                    st.plotly_chart(_cp_fig, use_container_width=True, key=f"{idx_key}_pc016_{_ci}")
 
                     # Signal: which side dominates
                     if _cp_ce_cur is not None and _cp_pe_cur is not None and _cp_ce_cur > 0:
@@ -19089,7 +19089,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                        zeroline=True, zerolinecolor='white', zerolinewidth=1),
                             plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                         )
-                        st.plotly_chart(_chg_fig, use_container_width=True, key=f"{idx_key}_pc017")
+                        st.plotly_chart(_chg_fig, use_container_width=True, key=f"{idx_key}_pc017_{_ci}")
 
                         # Signal: net change direction
                         if _chg_ce_cur is not None and _chg_pe_cur is not None:
@@ -19287,7 +19287,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         yaxis=dict(title='Volume', range=[_cv_ymin, _cv_ymax]),
                         plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                     )
-                    st.plotly_chart(_cv_fig, use_container_width=True, key=f"{idx_key}_pc018")
+                    st.plotly_chart(_cv_fig, use_container_width=True, key=f"{idx_key}_pc018_{_vi}")
 
                     # Signal: which side dominates
                     if _cv_ce_cur is not None and _cv_pe_cur is not None and _cv_ce_cur > 0:
@@ -19383,7 +19383,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                        zeroline=True, zerolinecolor='white', zerolinewidth=1),
                             plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                         )
-                        st.plotly_chart(_cvchg_fig, use_container_width=True, key=f"{idx_key}_pc019")
+                        st.plotly_chart(_cvchg_fig, use_container_width=True, key=f"{idx_key}_pc019_{_vi}")
 
                         # Signal: net change direction
                         if _cvchg_ce_cur is not None and _cvchg_pe_cur is not None:
@@ -20548,7 +20548,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='Vol PCR', range=[_vp_ymin, _vp_ymax]),
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                 )
-                st.plotly_chart(_vfig, use_container_width=True, key=f"{idx_key}_pc026")
+                st.plotly_chart(_vfig, use_container_width=True, key=f"{idx_key}_pc026_{_vi}")
                 _vsig = "🟢 Bull" if _vcur > 1.2 else ("🔴 Bear" if _vcur < 0.7 else "🟡 Ntrl")
                 st.caption(f"Vol PCR {_vcur:.2f} {_vsig}")
     else:
@@ -20628,7 +20628,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='Premium (₹)', range=[_sy_min, _sy_max]),
                     plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                 )
-                st.plotly_chart(_sfig, use_container_width=True, key=f"{idx_key}_pc027")
+                st.plotly_chart(_sfig, use_container_width=True, key=f"{idx_key}_pc027_{_si}")
                 _move_lbl = "💥 Explosive" if _st_dir == "rising" else ("🐌 Grinding" if _st_dir == "falling" else "⬛ Range")
                 st.caption(f"₹{_st_cur:.1f} → {_move_lbl}")
     else:
@@ -22314,7 +22314,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 yaxis=dict(title='IV%', tickfont=dict(size=8)),
                                 plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                             )
-                            st.plotly_chart(_fig_ivs, use_container_width=True, key=f"{idx_key}_pc038")
+                            st.plotly_chart(_fig_ivs, use_container_width=True, key=f"{idx_key}_pc038_{_ivc_i}")
                             # Net pressure caption
                             _pres_cur = _ivh_df[_prk].iloc[-1] if (_prk in _ivh_df.columns and len(_ivh_df) > 0) else None
                             _pres_sig = "🟢Bull" if (_pres_cur and _pres_cur > 0.15) else ("🔴Bear" if (_pres_cur and _pres_cur < -0.15) else "🟡Ntrl")
@@ -22928,7 +22928,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                             tickfont=dict(size=8)),
                                 plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
                             )
-                            st.plotly_chart(_fig_dg_ps, use_container_width=True, key=f"{idx_key}_pc040")
+                            st.plotly_chart(_fig_dg_ps, use_container_width=True, key=f"{idx_key}_pc040_{_dg_ci}")
                             _sig_d = "🟢" if _ps_cur_d and _ps_cur_d > 0.05 else ("🔴" if _ps_cur_d and _ps_cur_d < -0.05 else "🟡")
                             _sig_g = "📍Pin" if _ps_cur_g and _ps_cur_g > 5 else ("⚡Acc" if _ps_cur_g and _ps_cur_g < -5 else "➡️Ntrl")
                             _ps_d_str = f'{_ps_cur_d:+.4f}' if _ps_cur_d is not None else '—'
