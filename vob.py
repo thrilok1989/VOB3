@@ -16497,11 +16497,14 @@ def compute_strike_zone_classification(mde):
 
 
 def render_options_analysis_panel(option_data, current_price, api, db,
-                                   lot_size=65, index_name="NIFTY", symbol_prefix="NIFTY"):
+                                   lot_size=65, index_name="NIFTY", symbol_prefix="NIFTY",
+                                   idx_key="nifty"):
     """Render the full options chain analysis panel for any index.
     Supports NIFTY (lot_size=65, step=50), BANKNIFTY (lot_size=35, step=100),
     and SENSEX (lot_size=10, step=100). Session state isolation is handled
     by the caller via _idx_swap_in/_idx_swap_out before/after this call.
+    idx_key must be unique per tab (e.g. 'nifty', 'bnf', 'sx') to avoid
+    StreamlitDuplicateElementId across the three tabs.
     """
     if not option_data or not option_data.get('underlying'):
         return
@@ -16594,11 +16597,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
             r = st.columns([2, 1.5, 1, 2, 1, 2, 1.5])
             r[0].markdown(f"<span style='color:{ce_color}; font-weight:{fw}'>{ce_ltp:.2f}</span>", unsafe_allow_html=True)
             r[1].markdown(f"<span style='color:{ce_color}'>₹{ce_val:,.0f}</span>", unsafe_allow_html=True)
-            buy_ce = r[2].button("BUY", key=f"buy_ce_{strike}", type="primary",
+            buy_ce = r[2].button("BUY", key=f"{idx_key}_buy_ce_{strike}", type="primary",
                                  disabled=not (has_scrp and scrp_ce))
             r[3].markdown(f"<div style='text-align:center'><span style='{strike_style}'>{strike}</span></div>",
                            unsafe_allow_html=True)
-            buy_pe = r[4].button("BUY", key=f"buy_pe_{strike}", type="primary",
+            buy_pe = r[4].button("BUY", key=f"{idx_key}_buy_pe_{strike}", type="primary",
                                  disabled=not (has_scrp and scrp_pe))
             r[5].markdown(f"<span style='color:{pe_color}; font-weight:{fw}'>{pe_ltp:.2f}</span>", unsafe_allow_html=True)
             r[6].markdown(f"<span style='color:{pe_color}'>₹{pe_val:,.0f}</span>", unsafe_allow_html=True)
@@ -18004,13 +18007,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                f"Composite: {len(st.session_state.composite_signal_history)} pts · "
                                f"{_comp_status} · Refreshes every 30s")
                 with _pro_cm:
-                    if st.button("🗑️ Clear Pro"):
+                    if st.button("🗑️ Clear Pro", key=f"{idx_key}_clr_pro"):
                         st.session_state.pro_trader_history = []
                         st.session_state.pro_smart_signal_last = None
                         st.session_state.sentiment_history = []
                         st.rerun()
                 with _pro_cr:
-                    if st.button("🗑️ Clear Composite"):
+                    if st.button("🗑️ Clear Composite", key=f"{idx_key}_clr_comp"):
                         st.session_state.composite_signal_history = []
                         st.session_state.composite_signal_last_valid = None
                         st.rerun()
@@ -18864,7 +18867,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 st.caption(f"{status} | 📈 {len(st.session_state.pcr_history)} PCR pts · "
                            f"{len(chgoi_hist)} ChgOI pts")
             with col_info2:
-                if st.button("🗑️ Clear History"):
+                if st.button("🗑️ Clear History", key=f"{idx_key}_clr_hist"):
                     st.session_state.pcr_history = []
                     st.session_state.pcr_last_valid_data = None
                     st.session_state.pcr_chgoi_strike_history = []
@@ -20869,7 +20872,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
         _vp_status = "🟢 Live" if _vp_data_ok else "🟡 Cached"
         st.caption(f"{_vp_status} | Vol PCR: {len(_vp_hist)} pts · Straddle: {len(_st_hist)} pts")
     with _vp_c2:
-        if st.button("🗑️ Clear Vol/Straddle History"):
+        if st.button("🗑️ Clear Vol/Straddle History", key=f"{idx_key}_clr_vol_st"):
             st.session_state.vol_pcr_history = []
             st.session_state.straddle_history = []
             st.rerun()
@@ -21270,7 +21273,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
             with pcr_info1:
                 st.caption(f"🟢 Live | 📈 {len(st.session_state.pcr_chgoi_history)} data points | PCR > 1.2 = Bullish | PCR < 0.7 = Bearish")
             with pcr_info2:
-                if st.button("🗑️ Clear PCR ΔOI History"):
+                if st.button("🗑️ Clear PCR ΔOI History", key=f"{idx_key}_clr_pcr_doi"):
                     st.session_state.pcr_chgoi_history = []
                     st.session_state.pcr_chgoi_last_valid = None
                     st.rerun()
@@ -21461,7 +21464,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 status = "🟢 Live" if pcr_chgoi_strike_available else "🟡 Using cached history"
                 st.caption(f"{status} | 📈 {len(st.session_state.pcr_chgoi_strike_history)} data points | History preserved on refresh failures")
             with chgoi_info2:
-                if st.button("🗑️ Clear ΔOI Strike History"):
+                if st.button("🗑️ Clear ΔOI Strike History", key=f"{idx_key}_clr_doi_st"):
                     st.session_state.pcr_chgoi_strike_history = []
                     st.session_state.pcr_chgoi_strike_last_valid = None
                     st.rerun()
@@ -21665,7 +21668,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 st.caption(f"📈 {len(st.session_state.composite_signal_history)} pts · "
                            f"Computed inside Unified Sentiment Engine · Updates every ~30s")
             with comp_info2:
-                if st.button("🗑️ Clear Composite History", key="clr_comp_ts"):
+                if st.button("🗑️ Clear Composite History", key=f"{idx_key}_clr_comp_ts"):
                     st.session_state.composite_signal_history = []
                     st.session_state.composite_signal_last_valid = None
                     st.rerun()
@@ -21799,7 +21802,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
             with gex_ts_info1:
                 st.caption(f"🟢 Live | 📈 {len(st.session_state.total_gex_history)} data points | +GEX = Pin/Chop | -GEX = Trend/Breakout")
             with gex_ts_info2:
-                if st.button("🗑️ Clear Total GEX History"):
+                if st.button("🗑️ Clear Total GEX History", key=f"{idx_key}_clr_gex"):
                     st.session_state.total_gex_history = []
                     st.session_state.total_gex_last_valid = None
                     st.rerun()
@@ -22323,7 +22326,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 with _ivp_col_l:
                     st.caption(f"📡 IV pts: {len(st.session_state.iv_skew_history)} · Pressure pts: {len(st.session_state.pressure_history)}")
                 with _ivp_col_r:
-                    if st.button("🗑️ Clear IV/Pressure History"):
+                    if st.button("🗑️ Clear IV/Pressure History", key=f"{idx_key}_clr_iv_pres"):
                         st.session_state.iv_skew_history = []
                         st.session_state.pressure_history = []
                         st.rerun()
@@ -22936,7 +22939,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 with _dg_col_l:
                     st.caption(f"⚡ Delta/Gamma pts: {len(st.session_state.delta_gamma_history)}")
                 with _dg_col_r:
-                    if st.button("🗑️ Clear Delta/Gamma History"):
+                    if st.button("🗑️ Clear Delta/Gamma History", key=f"{idx_key}_clr_dg"):
                         st.session_state.delta_gamma_history = []
                         st.rerun()
             else:
@@ -22966,7 +22969,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
         label="📥 Download Summary as CSV",
         data=csv_data,
         file_name=f"{index_name.lower()}_options_summary_{option_data['expiry']}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv"
+        mime="text/csv",
+        key=f"{idx_key}_dl_csv"
     )
 
 
@@ -24810,6 +24814,7 @@ def main():
                 lot_size=65,
                 index_name="NIFTY",
                 symbol_prefix="NIFTY",
+                idx_key="nifty",
             )
         else:
             st.info("No NIFTY option chain data available.")
@@ -24834,6 +24839,7 @@ def main():
                     lot_size=35,
                     index_name="BANKNIFTY",
                     symbol_prefix="BANKNIFTY",
+                    idx_key="bnf",
                 )
             finally:
                 _idx_swap_out('bnf')
@@ -24860,6 +24866,7 @@ def main():
                     lot_size=10,
                     index_name="SENSEX",
                     symbol_prefix="SENSEX",
+                    idx_key="sx",
                 )
             finally:
                 _idx_swap_out('sx')
