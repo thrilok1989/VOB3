@@ -4905,14 +4905,14 @@ def create_candlestick_chart(df, title, interval, show_pivots=True, pivot_settin
 
     fig.update_layout(
         title=title,
-        template='plotly_dark',
+        template='plotly_white',
         xaxis_rangeslider_visible=False,
         height=850 if has_ursi else 700,
         showlegend=False,
         margin=dict(l=0, r=0, t=40, b=0),
-        font=dict(color='white'),
-        plot_bgcolor='#1e1e1e',
-        paper_bgcolor='#1e1e1e'
+        font=dict(color='#222'),
+        plot_bgcolor='white',
+        paper_bgcolor='white'
     )
     
     fig.update_xaxes(
@@ -4997,7 +4997,7 @@ def plot_depth_levels(df_summary, underlying_price=None):
     max_qty = max(r['qty'] for r in rows)
     fig.update_layout(
         title=dict(text="Key Levels from Order Book Depth", font=dict(size=16)),
-        template='plotly_dark',
+        template='plotly_white',
         height=320,
         barmode='overlay',
         xaxis=dict(
@@ -5013,8 +5013,8 @@ def plot_depth_levels(df_summary, underlying_price=None):
         ),
         yaxis=dict(autorange=True, tickfont=dict(size=12)),
         margin=dict(l=10, r=80, t=50, b=50),
-        plot_bgcolor='#1e1e1e',
-        paper_bgcolor='#1e1e1e',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
         annotations=[dict(
             x=0.02, y=1.08, xref='paper', yref='paper',
             text="🟢 Support Levels (Largest bid quantities) &nbsp;&nbsp; 🔴 Resistance Levels (Largest ask quantities)",
@@ -7274,7 +7274,7 @@ def display_analytics_dashboard(db, symbol="NIFTY50"):
             
             fig_price.update_layout(
                 title="30-Day Price Trend",
-                template='plotly_dark',
+                template='plotly_white',
                 height=300,
                 margin=dict(l=0, r=0, t=30, b=0)
             )
@@ -7291,7 +7291,7 @@ def display_analytics_dashboard(db, symbol="NIFTY50"):
             
             fig_volume.update_layout(
                 title="30-Day Volume Trend",
-                template='plotly_dark',
+                template='plotly_white',
                 height=300,
                 margin=dict(l=0, r=0, t=30, b=0)
             )
@@ -9101,8 +9101,8 @@ def show_market_depth_engine(api=None, option_data: dict = None,
                 xaxis_title="Volume (←Bids | Asks→)",
                 yaxis_title="Price Level (₹)",
                 barmode="overlay",
-                paper_bgcolor="#0e1117", plot_bgcolor="#0e1117",
-                font=dict(color="#e0e0e0"),
+                paper_bgcolor="white", plot_bgcolor="white",
+                font=dict(color='#222'),
                 legend=dict(bgcolor="#1e1e1e"),
                 height=500,
                 yaxis=dict(tickformat=","),
@@ -9470,7 +9470,7 @@ def show_market_sentiment_engine(api=None, option_data: dict = None,
                 number={"font": {"color": color, "size": 36}},
             ))
             fig_gauge.update_layout(
-                paper_bgcolor="#0e1117", font={"color": "#e0e0e0"},
+                paper_bgcolor="white", font={"color": "#222"},
                 height=280, margin=dict(t=40, b=20, l=20, r=20)
             )
             st.plotly_chart(fig_gauge, use_container_width=True)
@@ -10063,9 +10063,9 @@ def show_fii_dii_analysis(df: pd.DataFrame = None, option_data: dict = None,
             fig.update_layout(
                 title="FII vs DII Net Cash Flow (₹ Crore)",
                 barmode="group",
-                paper_bgcolor="#0e1117",
-                plot_bgcolor="#0e1117",
-                font=dict(color="#e0e0e0"),
+                paper_bgcolor="white",
+                plot_bgcolor="white",
+                font=dict(color='#222'),
                 legend=dict(bgcolor="#1e1e1e"),
                 height=350,
             )
@@ -12067,11 +12067,11 @@ def show_global_correlation_engine():
         ))
         fig_gc.update_layout(
             height=240, margin=dict(l=10, r=10, t=40, b=60),
-            paper_bgcolor="#111", plot_bgcolor="#111",
+            paper_bgcolor="white", plot_bgcolor="white",
             font=dict(color="#ccc", size=10),
-            yaxis=dict(zeroline=True, zerolinecolor="#555", gridcolor="#333",
+            yaxis=dict(zeroline=True, zerolinecolor="#555", gridcolor="#ddd",
                        title="NIFTY Impact (–bear … +bull)"),
-            xaxis=dict(tickangle=-35, gridcolor="#333"),
+            xaxis=dict(tickangle=-35, gridcolor="#ddd"),
             title=dict(text=f"Global Market Contributions to NIFTY Bias → Score: {gcorr_signal:+.3f}",
                        font=dict(size=12)),
         )
@@ -12968,11 +12968,11 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
     ))
     _fig_radar.update_layout(
         height=260, margin=dict(l=10, r=10, t=30, b=60),
-        paper_bgcolor='#111', plot_bgcolor='#111',
+        paper_bgcolor='white', plot_bgcolor='white',
         font=dict(color='#ccc', size=10),
         yaxis=dict(range=[-1.2, 1.2], zeroline=True, zerolinecolor='#555',
-                   gridcolor='#333', title='Signal Value (-1 bear … +1 bull)'),
-        xaxis=dict(tickangle=-35, gridcolor='#333'),
+                   gridcolor='#ddd', title='Signal Value (-1 bear … +1 bull)'),
+        xaxis=dict(tickangle=-35, gridcolor='#ddd'),
         title=dict(text='ML Feature Vector — 24 signals normalised to -1…+1', font=dict(size=12)),
     )
     _fig_radar.add_hline(y=0.12,  line_dash='dash', line_color='#00C853', line_width=1)
@@ -13095,8 +13095,8 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
         _fig_clust.update_layout(
             height=155,
             margin=dict(l=10, r=55, t=4, b=4),
-            paper_bgcolor='#0d1117',
-            plot_bgcolor='#0d1117',
+            paper_bgcolor='white',
+            plot_bgcolor='white',
             font=dict(color='#ccc', size=11),
             xaxis=dict(range=[-1.2, 1.2], zeroline=True, zerolinecolor='#555',
                        gridcolor='#1e1e1e', showticklabels=False),
@@ -13276,11 +13276,11 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
     ))
     _fig_c.update_layout(
         height=230, margin=dict(l=10, r=10, t=30, b=60),
-        paper_bgcolor='#111', plot_bgcolor='#111',
+        paper_bgcolor='white', plot_bgcolor='white',
         font=dict(color='#ccc', size=10),
-        yaxis=dict(zeroline=True, zerolinecolor='#555', gridcolor='#333',
+        yaxis=dict(zeroline=True, zerolinecolor='#555', gridcolor='#ddd',
                    title='Contribution to ensemble score'),
-        xaxis=dict(tickangle=-35, gridcolor='#333'),
+        xaxis=dict(tickangle=-35, gridcolor='#ddd'),
         title=dict(text=f'Weighted Contributions → Final Score: {ensemble_score:+.3f}', font=dict(size=12)),
     )
     st.plotly_chart(_fig_c, use_container_width=True)
@@ -13314,9 +13314,9 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
         _fig_mh.update_layout(
             title='ML Ensemble Score Over Time',
             height=200, margin=dict(l=10, r=60, t=35, b=30),
-            paper_bgcolor='#111', plot_bgcolor='#111',
-            font=dict(color='#ccc'),
-            xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333', range=[-1.1, 1.1]),
+            paper_bgcolor='white', plot_bgcolor='white',
+            font=dict(color='#222'),
+            xaxis=dict(gridcolor='#ddd'), yaxis=dict(gridcolor='#ddd', range=[-1.1, 1.1]),
             showlegend=False,
         )
         st.plotly_chart(_fig_mh, use_container_width=True)
@@ -16879,7 +16879,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             text=f"{'🟢' if _side=='S' else '🔴'} {_side}{_n} {_label}<br>{_price_str}<br>Qty: {_cur_qty:,.0f}",
                             font=dict(size=11)
                         ),
-                        template='plotly_dark',
+                        template='plotly_white',
                         height=300,
                         showlegend=False,
                         margin=dict(l=5, r=10, t=70, b=30),
@@ -16891,8 +16891,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             title_font=dict(color=_clr, size=9),
                             tickfont=dict(size=8),
                         ),
-                        plot_bgcolor='#1e1e1e',
-                        paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
                     )
                     st.plotly_chart(_fig_d, use_container_width=True, key=f"{idx_key}_pc001_{_col_idx}")
                     _caption = f"{'PE Bid' if _side=='S' else 'CE Ask'} {_cur_qty:,.0f}"
@@ -17040,11 +17040,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 with _cc1:
                     _fig_cs.update_layout(
                         title=f"Composite Score Time-Series | Now: {_cs_pct:+.0f}% ({_cs_verdict})",
-                        template='plotly_dark', height=360,
+                        template='plotly_white', height=360,
                         showlegend=False,
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time'),
                         yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                         margin=dict(l=50, r=60, t=55, b=40)
                     )
                     st.plotly_chart(_fig_cs, use_container_width=True, key=f"{idx_key}_pc003")
@@ -17075,14 +17075,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     _pcr_all = _cs_df['avg_pcr'].dropna().tolist() + _cs_df['avg_chgoi'].dropna().tolist() + [0.7, 1.2]
                     _fig_cs2.update_layout(
                         title="PCR OI · PCR ΔOI · GEX",
-                        template='plotly_dark', height=360,
+                        template='plotly_white', height=360,
                         showlegend=True,
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=1, xanchor="right"),
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                         yaxis=dict(title='PCR', range=[max(0, min(_pcr_all)*0.9), max(_pcr_all)*1.1]),
                         yaxis2=dict(title='GEX (L)', overlaying='y', side='right',
                                     showgrid=False, zeroline=True, zerolinecolor='rgba(255,255,255,0.3)'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                         margin=dict(l=40, r=55, t=55, b=40)
                     )
                     st.plotly_chart(_fig_cs2, use_container_width=True, key=f"{idx_key}_pc004")
@@ -17711,13 +17711,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     ))
                             _fig_st.update_layout(
                                 title=f'Straddle Engine — ATM: ₹{_pro_atm_straddle:.0f}',
-                                height=280, template='plotly_dark',
+                                height=280, template='plotly_white',
                                 margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='₹ Straddle'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                                yaxis=dict(gridcolor='#ddd', title='₹ Straddle'),
                                 showlegend=True,
                                 legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                                paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
                             st.plotly_chart(_fig_st, use_container_width=True, key=f"{idx_key}_pc005")
 
@@ -17748,13 +17748,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _fig_iv2.add_hline(y=0, line_color='#555', line_width=1)
                             _fig_iv2.update_layout(
                                 title=f'IV Skew Engine — PE−CE: {_pro_market_iv_sk:+.1f}',
-                                height=280, template='plotly_dark',
+                                height=280, template='plotly_white',
                                 margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='IV %'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                                yaxis=dict(gridcolor='#ddd', title='IV %'),
                                 showlegend=True,
                                 legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                                paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
                             st.plotly_chart(_fig_iv2, use_container_width=True, key=f"{idx_key}_pc006")
 
@@ -17796,13 +17796,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _fig_pcr2.add_hline(y=1.0, line_color='rgba(255,255,255,0.2)', line_width=1)
                             _fig_pcr2.update_layout(
                                 title=f'PCR Engine — OI:{_pro_pcr_oi:.2f} Vol:{_pro_pcr_vol:.2f} ΔOI:{_pro_pcr_chg:.2f}',
-                                height=280, template='plotly_dark',
+                                height=280, template='plotly_white',
                                 margin=dict(l=40, r=40, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='PCR'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                                yaxis=dict(gridcolor='#ddd', title='PCR'),
                                 showlegend=True,
                                 legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                                paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
                             st.plotly_chart(_fig_pcr2, use_container_width=True, key=f"{idx_key}_pc007")
 
@@ -17831,13 +17831,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 ))
                             _fig_gam.update_layout(
                                 title=f'Gamma Pressure — {_pro_market_mode} (GEX: {_pro_net_gex:+.1f}L)',
-                                height=280, template='plotly_dark',
+                                height=280, template='plotly_white',
                                 margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='GEX (L)',
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                                yaxis=dict(gridcolor='#ddd', title='GEX (L)',
                                            zeroline=True, zerolinecolor='white'),
                                 showlegend=False,
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                                paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
                             st.plotly_chart(_fig_gam, use_container_width=True, key=f"{idx_key}_pc008")
 
@@ -17871,13 +17871,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _fig_pres2.add_hline(y=0.5, line_color='#555', line_width=1)
                             _fig_pres2.update_layout(
                                 title=f'Bid/Ask Pressure — C:{_pro_call_pres:.3f} P:{_pro_put_pres:.3f}',
-                                height=250, template='plotly_dark',
+                                height=250, template='plotly_white',
                                 margin=dict(l=30, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', range=[0, 1], title='Pressure'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                                yaxis=dict(gridcolor='#ddd', range=[0, 1], title='Pressure'),
                                 showlegend=True,
                                 legend=dict(orientation='h', y=-0.4, font=dict(size=9)),
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                                paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
                             st.plotly_chart(_fig_pres2, use_container_width=True, key=f"{idx_key}_pc009")
                             _p_sig = ("🚀 Call Dominating" if _pro_call_pres > _pro_put_pres + 0.1
@@ -17911,13 +17911,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 ))
                             _fig_nd.update_layout(
                                 title=f'Net Delta Shift — {_pro_net_delta:+,.0f}',
-                                height=250, template='plotly_dark',
+                                height=250, template='plotly_white',
                                 margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', title='Net Δ', zeroline=True,
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                                yaxis=dict(gridcolor='#ddd', title='Net Δ', zeroline=True,
                                            zerolinecolor='white'),
                                 showlegend=False,
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                                paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
                             st.plotly_chart(_fig_nd, use_container_width=True, key=f"{idx_key}_pc010")
                             _nd_sig = ("📈 Bullish Positioning" if _pro_net_delta > 0
@@ -17949,12 +17949,12 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                                   annotation_font_size=8)
                             _fig_bs.update_layout(
                                 title=f'Breakout Probability — {_pro_score}/100',
-                                height=250, template='plotly_dark',
+                                height=250, template='plotly_white',
                                 margin=dict(l=30, r=50, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                                yaxis=dict(gridcolor='#333', range=[0, 105], title='Score'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                                yaxis=dict(gridcolor='#ddd', range=[0, 105], title='Score'),
                                 showlegend=False,
-                                paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'),
+                                paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
                             st.plotly_chart(_fig_bs, use_container_width=True, key=f"{idx_key}_pc011")
                             st.caption(f"Straddle {_s1}/20 · IV {_s2}/20 · Gamma {_s3}/20 · "
@@ -18002,12 +18002,12 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             fillcolor='rgba(255,68,68,0.05)', line_width=0)
                         _fig_sent.update_layout(
                             title=f'Options Flow Sentiment — Current: {_sentiment_score}/100 ({_sent_verdict})',
-                            height=320, template='plotly_dark',
-                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                            yaxis=dict(title='Score (0–100)', range=[0, 105], gridcolor='#333'),
+                            height=320, template='plotly_white',
+                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                            yaxis=dict(title='Score (0–100)', range=[0, 105], gridcolor='#ddd'),
                             legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
                             margin=dict(l=40, r=65, t=45, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'))
+                            paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'))
                         st.plotly_chart(_fig_sent, use_container_width=True, key=f"{idx_key}_pc012")
 
                     # ── Per-Strike Breakdown ─────────────────────────────────────
@@ -18332,12 +18332,12 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             line=dict(color='#FFD740', width=2)))
                         _fig_itm.update_layout(
                             title=f"Institutional Trade Map — Spot: {_itm_spot:,.0f}",
-                            height=350, template='plotly_dark',
-                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#333'),
-                            yaxis=dict(title='Price', gridcolor='#333'),
+                            height=350, template='plotly_white',
+                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
+                            yaxis=dict(title='Price', gridcolor='#ddd'),
                             legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
                             margin=dict(l=40, r=120, t=45, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111', font=dict(color='#ccc'))
+                            paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'))
                         st.plotly_chart(_fig_itm, use_container_width=True, key=f"{idx_key}_pc013")
 
                     # Source breakdown
@@ -18403,14 +18403,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
 
                 fig.update_layout(
                     title=f"{title_prefix}<br>₹{strike_val}<br>PCR: {current_pcr:.2f}",
-                    template='plotly_dark',
+                    template='plotly_white',
                     height=280,
                     showlegend=False,
                     margin=dict(l=10, r=10, t=70, b=30),
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                     yaxis=dict(title='PCR', range=[_pcr_ymin, _pcr_ymax]),
-                    plot_bgcolor='#1e1e1e',
-                    paper_bgcolor='#1e1e1e'
+                    plot_bgcolor='white',
+                    paper_bgcolor='white'
                 )
                 return fig, current_pcr
             return None, 0
@@ -18442,14 +18442,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 current_gex = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
                 fig.update_layout(
                     title=f"{title_prefix}<br>₹{strike_val}<br>GEX: {current_gex:+.1f}L",
-                    template='plotly_dark', height=280, showlegend=False,
+                    template='plotly_white', height=280, showlegend=False,
                     margin=dict(l=10, r=10, t=70, b=30),
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                     yaxis=dict(title='GEX (L)', range=y_range, zeroline=True,
                                zerolinecolor='white', zerolinewidth=2,
                                tickmode='array',
                                tickvals=[-20, -10, 0, 10, 20] if max_abs <= 25 else None),
-                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e'
+                    plot_bgcolor='white', paper_bgcolor='white'
                 )
                 return fig, current_gex
             return None, 0
@@ -18697,7 +18697,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
 
                         fig.update_layout(
                             title=dict(text=f"{position_labels[i]}<br>₹{strike}", font=dict(size=11)),
-                            template='plotly_dark',
+                            template='plotly_white',
                             height=300,
                             showlegend=True,
                             legend=dict(orientation='h', yanchor='bottom', y=1.02,
@@ -18705,8 +18705,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             margin=dict(l=5, r=10, t=70, b=30),
                             xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                             yaxis=dict(title='PCR', range=[_cmp_ymin, _cmp_ymax]),
-                            plot_bgcolor='#1e1e1e',
-                            paper_bgcolor='#1e1e1e',
+                            plot_bgcolor='white',
+                            paper_bgcolor='white',
                         )
 
                         st.plotly_chart(fig, use_container_width=True, key=f"{idx_key}_pc014_{i}")
@@ -18762,11 +18762,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                               line_width=1, row=1, col=_col_idx)
                         _tg_fig.update_layout(
                             title="ATM ±2 Strike Comparison — PCR · ChgOI PCR",
-                            template='plotly_dark',
+                            template='plotly_white',
                             height=350,
                             width=1400,
-                            paper_bgcolor='#1e1e1e',
-                            plot_bgcolor='#1e1e1e',
+                            paper_bgcolor='white',
+                            plot_bgcolor='white',
                             margin=dict(l=10, r=10, t=80, b=40),
                             legend=dict(orientation='h', yanchor='bottom', y=1.06, xanchor='center', x=0.5),
                         )
@@ -18865,7 +18865,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         fig_gex.update_layout(
                             title=dict(text=f"{position_labels[i]}<br>₹{strike}<br>GEX: {cur_gex:+.1f}L",
                                        font=dict(size=11)),
-                            template='plotly_dark',
+                            template='plotly_white',
                             height=300,
                             showlegend=False,
                             margin=dict(l=5, r=10, t=70, b=30),
@@ -18873,8 +18873,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             yaxis=dict(title='GEX (L)',
                                        title_font=dict(color=clr, size=9),
                                        tickfont=dict(size=8)),
-                            plot_bgcolor='#1e1e1e',
-                            paper_bgcolor='#1e1e1e',
+                            plot_bgcolor='white',
+                            paper_bgcolor='white',
                         )
                         st.plotly_chart(fig_gex, use_container_width=True, key=f"{idx_key}_pc015_{i}")
                         gex_sig = "📍 Pin" if cur_gex > 10 else ("⚡ Accel" if cur_gex < -10 else "➡️ Ntrl")
@@ -19005,14 +19005,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _cp_fig.update_layout(
                             title=dict(text=f"{_cp_pos_labels[_ci]}<br>₹{_cp_strike}<br>{_cp_ce_str} | {_cp_pe_str}",
                                        font=dict(size=11)),
-                            template='plotly_dark', height=300,
+                            template='plotly_white', height=300,
                             showlegend=True,
                             legend=dict(orientation='h', yanchor='bottom', y=1.02,
                                         xanchor='center', x=0.5, font=dict(size=8)),
                             margin=dict(l=5, r=10, t=70, b=30),
                             xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                             yaxis=dict(title='OI', range=[_cp_oi_ymin, _cp_oi_ymax]),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            plot_bgcolor='white', paper_bgcolor='white',
                         )
                         st.plotly_chart(_cp_fig, use_container_width=True, key=f"{idx_key}_pc016_{_ci}")
 
@@ -19100,7 +19100,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _chg_fig.update_layout(
                                 title=dict(text=f"{_cp_pos_labels[_ci]}<br>₹{_cp_strike}<br>{_chg_ce_s} | {_chg_pe_s}",
                                            font=dict(size=11)),
-                                template='plotly_dark', height=300,
+                                template='plotly_white', height=300,
                                 showlegend=True,
                                 legend=dict(orientation='h', yanchor='bottom', y=1.02,
                                             xanchor='center', x=0.5, font=dict(size=8)),
@@ -19108,7 +19108,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                                 yaxis=dict(title='ΔOI', range=[_chg_ymin, _chg_ymax],
                                            zeroline=True, zerolinecolor='white', zerolinewidth=1),
-                                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                                plot_bgcolor='white', paper_bgcolor='white',
                             )
                             st.plotly_chart(_chg_fig, use_container_width=True, key=f"{idx_key}_pc017_{_ci}")
 
@@ -19172,9 +19172,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     ), row=2, col=_col_idx)
                         _cp_tg_fig.update_layout(
                             title="ATM ±2 Strike Comparison — Call OI · Put OI · ΔOI",
-                            template='plotly_dark',
+                            template='plotly_white',
                             height=350 * _cp_rows, width=1400,
-                            paper_bgcolor='#1e1e1e', plot_bgcolor='#1e1e1e',
+                            paper_bgcolor='white', plot_bgcolor='white',
                             margin=dict(l=10, r=10, t=80, b=40),
                             legend=dict(orientation='h', yanchor='bottom', y=1.06, xanchor='center', x=0.5),
                         )
@@ -19300,14 +19300,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _cv_fig.update_layout(
                             title=dict(text=f"{_cv_pos_labels[_vi]}<br>₹{_cv_strike}<br>{_cv_ce_str} | {_cv_pe_str}",
                                        font=dict(size=11)),
-                            template='plotly_dark', height=300,
+                            template='plotly_white', height=300,
                             showlegend=True,
                             legend=dict(orientation='h', yanchor='bottom', y=1.02,
                                         xanchor='center', x=0.5, font=dict(size=8)),
                             margin=dict(l=5, r=10, t=70, b=30),
                             xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                             yaxis=dict(title='Volume', range=[_cv_ymin, _cv_ymax]),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            plot_bgcolor='white', paper_bgcolor='white',
                         )
                         st.plotly_chart(_cv_fig, use_container_width=True, key=f"{idx_key}_pc018_{_vi}")
 
@@ -19395,7 +19395,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cvchg_fig.update_layout(
                                 title=dict(text=f"{_cv_pos_labels[_vi]}<br>₹{_cv_strike}<br>{_cvchg_ce_s} | {_cvchg_pe_s}",
                                            font=dict(size=11)),
-                                template='plotly_dark', height=300,
+                                template='plotly_white', height=300,
                                 showlegend=True,
                                 legend=dict(orientation='h', yanchor='bottom', y=1.02,
                                             xanchor='center', x=0.5, font=dict(size=8)),
@@ -19403,7 +19403,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                                 yaxis=dict(title='ΔVol', range=[_cvchg_ymin, _cvchg_ymax],
                                            zeroline=True, zerolinecolor='white', zerolinewidth=1),
-                                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                                plot_bgcolor='white', paper_bgcolor='white',
                             )
                             st.plotly_chart(_cvchg_fig, use_container_width=True, key=f"{idx_key}_pc019_{_vi}")
 
@@ -19491,14 +19491,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     title=dict(text=f"Price Change: {_ph_cur:+.2f}% | Open: ₹{_ph_day_open:,.0f} | "
                                f"Spot: ₹{mde.val('spot_price', 0):,.0f}",
                                font=dict(size=13)),
-                    template='plotly_dark', height=350,
+                    template='plotly_white', height=350,
                     showlegend=False,
                     margin=dict(l=10, r=10, t=60, b=30),
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time'),
                     yaxis=dict(title='Price Change %',
                                range=[-_ph_max_abs * 1.2, _ph_max_abs * 1.2],
                                zeroline=True, zerolinecolor='white', zerolinewidth=1),
-                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    plot_bgcolor='white', paper_bgcolor='white',
                 )
                 st.plotly_chart(_ph_fig, use_container_width=True, key=f"{idx_key}_pc020")
 
@@ -19832,8 +19832,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     name='PE ΔOI (L)', marker_color='#88ffaa', opacity=0.5))
                 _sop_fig.update_layout(
                     barmode='group', height=320,
-                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                    font=dict(color='#ccc'),
+                    paper_bgcolor='white', plot_bgcolor='white',
+                    font=dict(color='#222'),
                     legend=dict(orientation='h', y=-0.15),
                     margin=dict(l=40, r=20, t=30, b=40),
                     xaxis_title='Strike', yaxis_title='OI (Lakhs)')
@@ -20059,8 +20059,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         name='PE Ask', marker_color='#00ff88', opacity=0.8))
                     _mdp_fig.update_layout(
                         barmode='group', height=320,
-                        paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                        font=dict(color='#ccc'),
+                        paper_bgcolor='white', plot_bgcolor='white',
+                        font=dict(color='#222'),
                         legend=dict(orientation='h', y=-0.15),
                         margin=dict(l=40, r=20, t=30, b=40),
                         xaxis_title='Strike', yaxis_title='Quantity')
@@ -20391,7 +20391,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     ))
 
                 _fig_zone.update_layout(
-                    template='plotly_dark',
+                    template='plotly_white',
                     height=450,
                     margin=dict(l=10, r=10, t=30, b=10),
                     legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
@@ -20418,7 +20418,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     fill='tozeroy', fillcolor='rgba(255,68,68,0.1)',
                 ))
                 _fig_score.update_layout(
-                    template='plotly_dark', height=300,
+                    template='plotly_white', height=300,
                     margin=dict(l=10, r=10, t=30, b=10),
                     legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
                     xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
@@ -20447,7 +20447,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     opacity=0.4,
                 ))
                 _fig_conf.update_layout(
-                    template='plotly_dark', height=280,
+                    template='plotly_white', height=280,
                     margin=dict(l=10, r=10, t=30, b=10),
                     legend=dict(orientation='h', y=1.12, x=0.5, xanchor='center'),
                     xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
@@ -20577,11 +20577,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     _vp_ymax = max(_vp_all) * 1.1
                     _vfig.update_layout(
                         title=dict(text=f"{_pos_labels[_vi]}<br>₹{_vstrike}<br>Vol PCR: {_vcur:.2f}", font=dict(size=11)),
-                        template='plotly_dark', height=280, showlegend=False,
+                        template='plotly_white', height=280, showlegend=False,
                         margin=dict(l=5, r=10, t=70, b=30),
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                         yaxis=dict(title='Vol PCR', range=[_vp_ymin, _vp_ymax]),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                     )
                     st.plotly_chart(_vfig, use_container_width=True, key=f"{idx_key}_pc026_{_vi}")
                     _vsig = "🟢 Bull" if _vcur > 1.2 else ("🔴 Bear" if _vcur < 0.7 else "🟡 Ntrl")
@@ -20654,14 +20654,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     _sfig.update_layout(
                         title=dict(text=f"{_pos_labels[_si]}<br>₹{_sstrike}<br>{_st_icon} ₹{_st_cur:.1f} (Δ{_st_delta:+.1f})",
                                    font=dict(size=11)),
-                        template='plotly_dark', height=300,
+                        template='plotly_white', height=300,
                         showlegend=True,
                         legend=dict(orientation='h', yanchor='bottom', y=1.02,
                                     xanchor='center', x=0.5, font=dict(size=8)),
                         margin=dict(l=5, r=10, t=75, b=30),
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                         yaxis=dict(title='Premium (₹)', range=[_sy_min, _sy_max]),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                     )
                     st.plotly_chart(_sfig, use_container_width=True, key=f"{idx_key}_pc027_{_si}")
                     _move_lbl = "💥 Explosive" if _st_dir == "rising" else ("🐌 Grinding" if _st_dir == "falling" else "⬛ Range")
@@ -21081,13 +21081,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
 
                     fig_gex.update_layout(
                         title=f"Net GEX by Strike | Total: {gex_data['total_gex']:+.2f}L",
-                        template='plotly_dark',
+                        template='plotly_white',
                         height=400,
                         showlegend=False,
                         xaxis_title="Strike Price",
                         yaxis_title="Net GEX (Lakhs)",
-                        plot_bgcolor='#1e1e1e',
-                        paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
                         margin=dict(l=50, r=50, t=60, b=50)
                     )
 
@@ -21293,13 +21293,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
 
                 fig_pcr_chgoi.update_layout(
                     title=f"PCR of Total Change in OI | Current: {curr_pcr:.3f} ({pcr_label})",
-                    template='plotly_dark',
+                    template='plotly_white',
                     height=400,
                     showlegend=False,
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time'),
                     yaxis=dict(title='PCR (Total PE ΔOI / Total CE ΔOI)', range=[_ov_ymin, _ov_ymax]),
-                    plot_bgcolor='#1e1e1e',
-                    paper_bgcolor='#1e1e1e',
+                    plot_bgcolor='white',
+                    paper_bgcolor='white',
                     margin=dict(l=50, r=50, t=60, b=50)
                 )
 
@@ -21359,14 +21359,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
 
                 fig.update_layout(
                     title=f"{title_prefix}<br>₹{strike_val}<br>PCR(ΔOI): {current_val:.2f}",
-                    template='plotly_dark',
+                    template='plotly_white',
                     height=280,
                     showlegend=False,
                     margin=dict(l=10, r=10, t=70, b=30),
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                     yaxis=dict(title='PCR (ΔOI)', range=[_chgoi_ymin, _chgoi_ymax]),
-                    plot_bgcolor='#1e1e1e',
-                    paper_bgcolor='#1e1e1e'
+                    plot_bgcolor='white',
+                    paper_bgcolor='white'
                 )
                 return fig, current_val
             return None, 0
@@ -21611,10 +21611,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 _cv2_v_now = last_valid['verdict']    if last_valid else 'NEUTRAL'
                 fig_score.update_layout(
                     title=f"Composite Direction Score | Current: {_cv2_s_now:+.0f}% ({_cv2_v_now})",
-                    template='plotly_dark', height=380, showlegend=False,
+                    template='plotly_white', height=380, showlegend=False,
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time'),
                     yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
-                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                    plot_bgcolor='white', paper_bgcolor='white',
                     margin=dict(l=50, r=50, t=60, b=50))
                 st.plotly_chart(fig_score, use_container_width=True, key=f"{idx_key}_pc030")
 
@@ -21637,12 +21637,12 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 comp_hist_df['avg_chgoi'].dropna().tolist() + [0.7, 1.0, 1.2])
                     fig_pcr_ts.update_layout(
                         title='Avg PCR (OI) vs Avg PCR (ΔOI)',
-                        template='plotly_dark', height=300, showlegend=True,
+                        template='plotly_white', height=300, showlegend=True,
                         legend=dict(orientation="h", y=-0.3, font=dict(size=9)),
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range()),
                         yaxis=dict(title='PCR',
                                    range=[max(0, min(_all_pcr)*0.9), max(_all_pcr)*1.1]),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                         margin=dict(l=40, r=10, t=50, b=30))
                     st.plotly_chart(fig_pcr_ts, use_container_width=True, key=f"{idx_key}_pc031")
                 with ind_col2:
@@ -21662,10 +21662,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         annotation_text='Accel Zone', annotation_position='right')
                     fig_gex_ts.update_layout(
                         title='Total GEX (ATM±2) Over Time',
-                        template='plotly_dark', height=300, showlegend=False,
+                        template='plotly_white', height=300, showlegend=False,
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range()),
                         yaxis=dict(title='GEX (Lakhs)', zeroline=True, zerolinecolor='white'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                         margin=dict(l=40, r=50, t=50, b=30))
                     st.plotly_chart(fig_gex_ts, use_container_width=True, key=f"{idx_key}_pc032")
 
@@ -21687,11 +21687,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     fig_strike_ts.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
                     fig_strike_ts.update_layout(
                         title='Per-Strike Weighted Score Over Time',
-                        template='plotly_dark', height=320, showlegend=True,
+                        template='plotly_white', height=320, showlegend=True,
                         legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range()),
                         yaxis=dict(title='Weighted Score', zeroline=True, zerolinecolor='white'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                         margin=dict(l=50, r=20, t=50, b=40))
                     st.plotly_chart(fig_strike_ts, use_container_width=True, key=f"{idx_key}_pc033")
 
@@ -21813,7 +21813,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
 
                 fig_total_gex.update_layout(
                     title=f"Total Net GEX | Current: {curr_gex:+.2f}L ({curr_signal})",
-                    template='plotly_dark',
+                    template='plotly_white',
                     height=400,
                     showlegend=False,
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time'),
@@ -21823,8 +21823,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         zerolinecolor='white',
                         zerolinewidth=2
                     ),
-                    plot_bgcolor='#1e1e1e',
-                    paper_bgcolor='#1e1e1e',
+                    plot_bgcolor='white',
+                    paper_bgcolor='white',
                     margin=dict(l=50, r=50, t=60, b=50)
                 )
 
@@ -21960,12 +21960,12 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     )
 
                     fig_gs.update_layout(
-                        template='plotly_dark',
+                        template='plotly_white',
                         height=600,
                         showlegend=True,
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                        plot_bgcolor='#1e1e1e',
-                        paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white',
+                        paper_bgcolor='white',
                         margin=dict(l=50, r=50, t=80, b=50),
                         barmode='group'
                     )
@@ -22233,9 +22233,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_iv.update_layout(
                             title=f'IV Skew Over Time (ATM ± 2) — Now: {_iv_cur:.3f}',
                             height=250, margin=dict(l=40, r=20, t=40, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111',
-                            font=dict(color='#ccc'),
-                            xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333'),
+                            paper_bgcolor='white', plot_bgcolor='white',
+                            font=dict(color='#222'),
+                            xaxis=dict(gridcolor='#ddd'), yaxis=dict(gridcolor='#ddd'),
                             showlegend=True, legend=dict(orientation='h', y=-0.3)
                         )
                         st.plotly_chart(_fig_iv, use_container_width=True, key=f"{idx_key}_pc036")
@@ -22279,9 +22279,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_pr.update_layout(
                             title=f'Call / Put / Net Pressure Over Time (ATM ± 2) — Net: {_pr_cur_net:+.3f}',
                             height=250, margin=dict(l=40, r=20, t=40, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111',
-                            font=dict(color='#ccc'),
-                            xaxis=dict(gridcolor='#333'), yaxis=dict(gridcolor='#333'),
+                            paper_bgcolor='white', plot_bgcolor='white',
+                            font=dict(color='#222'),
+                            xaxis=dict(gridcolor='#ddd'), yaxis=dict(gridcolor='#ddd'),
                             showlegend=True, legend=dict(orientation='h', y=-0.3)
                         )
                         st.plotly_chart(_fig_pr, use_container_width=True, key=f"{idx_key}_pc037")
@@ -22347,14 +22347,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     _ivs_title += f"<br>CE:{_iv_ce_cur:.1f}% PE:{_iv_pe_cur:.1f}%" if _iv_pe_cur else f"<br>CE:{_iv_ce_cur:.1f}%"
                                 _fig_ivs.update_layout(
                                     title=dict(text=_ivs_title, font=dict(size=10)),
-                                    template='plotly_dark', height=300,
+                                    template='plotly_white', height=300,
                                     showlegend=True,
                                     legend=dict(orientation='h', yanchor='bottom', y=1.02,
                                                 xanchor='center', x=0.5, font=dict(size=8)),
                                     margin=dict(l=5, r=10, t=80, b=30),
                                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                                     yaxis=dict(title='IV%', tickfont=dict(size=8)),
-                                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                                    plot_bgcolor='white', paper_bgcolor='white',
                                 )
                                 st.plotly_chart(_fig_ivs, use_container_width=True, key=f"{idx_key}_pc038_{_ivc_i}")
                                 # Net pressure caption
@@ -22889,10 +22889,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_dg.update_layout(
                             title=f'Net Delta & Net Gamma Over Time (ATM ± 2) — Δ:{_cur_nd:+.4f} Γ:{_cur_ng:+.2f}L',
                             height=280, margin=dict(l=40, r=60, t=40, b=30),
-                            paper_bgcolor='#111', plot_bgcolor='#111',
-                            font=dict(color='#ccc'),
-                            xaxis=dict(gridcolor='#333'),
-                            yaxis=dict(title=dict(text='Net Delta', font=dict(color='#00C853')), gridcolor='#333'),
+                            paper_bgcolor='white', plot_bgcolor='white',
+                            font=dict(color='#222'),
+                            xaxis=dict(gridcolor='#ddd'),
+                            yaxis=dict(title=dict(text='Net Delta', font=dict(color='#00C853')), gridcolor='#ddd'),
                             yaxis2=dict(title=dict(text='Net Gamma (L)', font=dict(color='#FFD740')),
                                         overlaying='y', side='right', showgrid=False),
                             showlegend=True, legend=dict(orientation='h', y=-0.3)
@@ -22959,18 +22959,18 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     _title_txt += f" Γ:{_ps_cur_g:+.2f}L"
                                 _fig_dg_ps.update_layout(
                                     title=dict(text=_title_txt, font=dict(size=10)),
-                                    template='plotly_dark', height=300,
+                                    template='plotly_white', height=300,
                                     showlegend=True,
                                     legend=dict(orientation='h', yanchor='bottom', y=1.02,
                                                 xanchor='center', x=0.5, font=dict(size=8)),
                                     margin=dict(l=5, r=35, t=80, b=30),
                                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                                     yaxis=dict(title='Delta', title_font=dict(color='#00C853', size=9),
-                                               tickfont=dict(size=8), gridcolor='#333'),
+                                               tickfont=dict(size=8), gridcolor='#ddd'),
                                     yaxis2=dict(title='Gamma (L)', title_font=dict(color='#FFD740', size=9),
                                                 overlaying='y', side='right', showgrid=False,
                                                 tickfont=dict(size=8)),
-                                    plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                                    plot_bgcolor='white', paper_bgcolor='white',
                                 )
                                 st.plotly_chart(_fig_dg_ps, use_container_width=True, key=f"{idx_key}_pc040_{_dg_ci}")
                                 _sig_d = "🟢" if _ps_cur_d and _ps_cur_d > 0.05 else ("🔴" if _ps_cur_d and _ps_cur_d < -0.05 else "🟡")
@@ -24014,7 +24014,7 @@ def main():
                             ), row=1, col=2)
 
                             _mfp_fig.update_layout(
-                                template='plotly_dark',
+                                template='plotly_white',
                                 height=max(500, _mfp_num_rows * 22),
                                 showlegend=False,
                                 margin=dict(l=0, r=0, t=40, b=0),
@@ -24126,14 +24126,14 @@ def main():
                         _vdc_fig1.add_hline(y=0, line_dash='dot', line_color='#555', row=2, col=1)
 
                         _vdc_fig1.update_layout(
-                            template='plotly_dark',
+                            template='plotly_white',
                             height=550,
                             showlegend=False,
                             xaxis_rangeslider_visible=False,
                             xaxis2_rangeslider_visible=False,
                             margin=dict(l=40, r=40, t=40, b=30),
                             hovermode='x unified',
-                            plot_bgcolor='#111', paper_bgcolor='#111', font=dict(color='#ccc'),
+                            plot_bgcolor='white', paper_bgcolor='white', font=dict(color='#222'),
                         )
 
                         st.plotly_chart(_vdc_fig1, use_container_width=True)
@@ -24195,15 +24195,15 @@ def main():
 
                         _vdc_fig2.update_layout(
                             title=f"Volume Delta Trend | Current Delta: {_vdc_last_delta:+,.0f} | Cum Delta: {_vdc_last_cum:+,.0f} | <span style='color:{_vdc_bias_clr}'>{_vdc_bias}</span>",
-                            template='plotly_dark',
+                            template='plotly_white',
                             height=400,
                             showlegend=True,
                             legend=dict(orientation='h', y=-0.25, font=dict(size=9)),
-                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time', gridcolor='#333'),
-                            yaxis=dict(title='Delta Volume', range=[_vdc_ymin, _vdc_ymax], gridcolor='#333'),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time', gridcolor='#ddd'),
+                            yaxis=dict(title='Delta Volume', range=[_vdc_ymin, _vdc_ymax], gridcolor='#ddd'),
+                            plot_bgcolor='white', paper_bgcolor='white',
                             margin=dict(l=50, r=50, t=60, b=50),
-                            font=dict(color='#ccc'),
+                            font=dict(color='#222'),
                         )
 
                         st.plotly_chart(_vdc_fig2, use_container_width=True)
@@ -24306,463 +24306,470 @@ def main():
 
             # ── Candle Types Table ────────────────────────────────────────
             if _chart_candle_markers:
-                st.markdown(f"### 🕯️ Candle Patterns Detected — {_date_label}")
-                _ctype_rows = []
-                for _cp in reversed(_chart_candle_markers):
-                    _ts = _cp['time']
-                    _time_str = _ts.strftime('%H:%M') if hasattr(_ts, 'strftime') else str(_ts)
-                    _dir = _cp['direction']
-                    _dir_lbl = '🟢 BUY' if _dir == 'BUY' else ('🔴 SELL' if _dir == 'SELL' else '🟡 NEUTRAL')
-                    _price = _cp['price']
+                with st.expander(f"🕯️ Candle Patterns Detected — {_date_label}", expanded=False):
+                    st.markdown(f"### 🕯️ Candle Patterns Detected — {_date_label}")
+                    _ctype_rows = []
+                    for _cp in reversed(_chart_candle_markers):
+                        _ts = _cp['time']
+                        _time_str = _ts.strftime('%H:%M') if hasattr(_ts, 'strftime') else str(_ts)
+                        _dir = _cp['direction']
+                        _dir_lbl = '🟢 BUY' if _dir == 'BUY' else ('🔴 SELL' if _dir == 'SELL' else '🟡 NEUTRAL')
+                        _price = _cp['price']
 
-                    # For BUY → show nearest HTF support + distance + VOB support
-                    # For SELL → show nearest HTF resistance + distance + VOB resistance
-                    if _dir == 'BUY':
-                        _htf_level, _dist_pts, _dist_pct = _nearest_level(_price, _cp_htf_supports)
-                        _htf_label = (f"₹{_htf_level:.0f} ({_dist_pct:.2f}% below)"
-                                      if _htf_level else '—')
-                        _vob_label = _nearest_vob(_price, _cp_vob_supports)
-                        _htf_col   = 'Nearest HTF Support'
-                        _vob_col   = 'Nearest VOB Support'
-                    elif _dir == 'SELL':
-                        _htf_level, _dist_pts, _dist_pct = _nearest_level(_price, _cp_htf_resistances)
-                        _htf_label = (f"₹{_htf_level:.0f} ({_dist_pct:.2f}% above)"
-                                      if _htf_level else '—')
-                        _vob_label = _nearest_vob(_price, _cp_vob_resistances)
-                        _htf_col   = 'Nearest HTF Resistance'
-                        _vob_col   = 'Nearest VOB Resistance'
-                    else:
-                        # NEUTRAL — show both nearest support and resistance
-                        _sup_lvl, _sup_pts, _sup_pct = _nearest_level(_price, _cp_htf_supports)
-                        _res_lvl, _res_pts, _res_pct = _nearest_level(_price, _cp_htf_resistances)
-                        _htf_label = (f"S ₹{_sup_lvl:.0f} / R ₹{_res_lvl:.0f}"
-                                      if (_sup_lvl and _res_lvl) else '—')
-                        _vob_label = '—'
-                        _htf_col   = 'HTF S/R Context'
-                        _vob_col   = 'VOB'
+                        # For BUY → show nearest HTF support + distance + VOB support
+                        # For SELL → show nearest HTF resistance + distance + VOB resistance
+                        if _dir == 'BUY':
+                            _htf_level, _dist_pts, _dist_pct = _nearest_level(_price, _cp_htf_supports)
+                            _htf_label = (f"₹{_htf_level:.0f} ({_dist_pct:.2f}% below)"
+                                          if _htf_level else '—')
+                            _vob_label = _nearest_vob(_price, _cp_vob_supports)
+                            _htf_col   = 'Nearest HTF Support'
+                            _vob_col   = 'Nearest VOB Support'
+                        elif _dir == 'SELL':
+                            _htf_level, _dist_pts, _dist_pct = _nearest_level(_price, _cp_htf_resistances)
+                            _htf_label = (f"₹{_htf_level:.0f} ({_dist_pct:.2f}% above)"
+                                          if _htf_level else '—')
+                            _vob_label = _nearest_vob(_price, _cp_vob_resistances)
+                            _htf_col   = 'Nearest HTF Resistance'
+                            _vob_col   = 'Nearest VOB Resistance'
+                        else:
+                            # NEUTRAL — show both nearest support and resistance
+                            _sup_lvl, _sup_pts, _sup_pct = _nearest_level(_price, _cp_htf_supports)
+                            _res_lvl, _res_pts, _res_pct = _nearest_level(_price, _cp_htf_resistances)
+                            _htf_label = (f"S ₹{_sup_lvl:.0f} / R ₹{_res_lvl:.0f}"
+                                          if (_sup_lvl and _res_lvl) else '—')
+                            _vob_label = '—'
+                            _htf_col   = 'HTF S/R Context'
+                            _vob_col   = 'VOB'
 
-                    # Volume context for the candle
-                    _cp_vol = _cp.get('volume', 0)
-                    _cp_vol_str = f"{int(_cp_vol):,}" if _cp_vol else '—'
-                    # Compute vol ratio vs MA20 at this candle's time
-                    _cp_vol_ratio_str = '—'
-                    _cp_vol_signal = '—'
-                    if _cp_vol and not _df_today.empty and 'volume' in _df_today.columns:
-                        try:
-                            _cp_ts = _cp['time']
-                            _cp_match = _df_today[_df_today['datetime'] == _cp_ts]
-                            if not _cp_match.empty:
-                                _cp_idx = _cp_match.index[0]
-                                _cp_win_start = max(0, _cp_idx - 20)
-                                _cp_avg_vol = _df_today.iloc[_cp_win_start:_cp_idx]['volume'].mean() if _cp_idx > 0 else _cp_vol
-                                if _cp_avg_vol and _cp_avg_vol > 0:
-                                    _cp_vr = _cp_vol / _cp_avg_vol
-                                    _cp_vol_ratio_str = f"{_cp_vr:.2f}x"
-                                    _cp_vol_signal = '🔥 Spike' if _cp_vr > 2.0 else ('⬆️ High' if _cp_vr > 1.5 else ('➡️ Avg' if _cp_vr > 0.75 else '⬇️ Low'))
-                        except Exception:
-                            pass
+                        # Volume context for the candle
+                        _cp_vol = _cp.get('volume', 0)
+                        _cp_vol_str = f"{int(_cp_vol):,}" if _cp_vol else '—'
+                        # Compute vol ratio vs MA20 at this candle's time
+                        _cp_vol_ratio_str = '—'
+                        _cp_vol_signal = '—'
+                        if _cp_vol and not _df_today.empty and 'volume' in _df_today.columns:
+                            try:
+                                _cp_ts = _cp['time']
+                                _cp_match = _df_today[_df_today['datetime'] == _cp_ts]
+                                if not _cp_match.empty:
+                                    _cp_idx = _cp_match.index[0]
+                                    _cp_win_start = max(0, _cp_idx - 20)
+                                    _cp_avg_vol = _df_today.iloc[_cp_win_start:_cp_idx]['volume'].mean() if _cp_idx > 0 else _cp_vol
+                                    if _cp_avg_vol and _cp_avg_vol > 0:
+                                        _cp_vr = _cp_vol / _cp_avg_vol
+                                        _cp_vol_ratio_str = f"{_cp_vr:.2f}x"
+                                        _cp_vol_signal = '🔥 Spike' if _cp_vr > 2.0 else ('⬆️ High' if _cp_vr > 1.5 else ('➡️ Avg' if _cp_vr > 0.75 else '⬇️ Low'))
+                            except Exception:
+                                pass
 
-                    _ctype_rows.append({
-                        'Time': _time_str,
-                        'Pattern': _cp['pattern'],
-                        'Signal': _dir_lbl,
-                        'Price (₹)': f"{_price:.1f}",
-                        'High (₹)': f"{_cp['high']:.1f}",
-                        'Low (₹)': f"{_cp['low']:.1f}",
-                        'Volume': _cp_vol_str,
-                        'Vol Ratio': _cp_vol_ratio_str,
-                        'Vol Signal': _cp_vol_signal,
-                        'Nearest HTF Pivot': _htf_label,
-                        'Nearest VOB': _vob_label,
-                    })
-                st.dataframe(pd.DataFrame(_ctype_rows), use_container_width=True, hide_index=True)
+                        _ctype_rows.append({
+                            'Time': _time_str,
+                            'Pattern': _cp['pattern'],
+                            'Signal': _dir_lbl,
+                            'Price (₹)': f"{_price:.1f}",
+                            'High (₹)': f"{_cp['high']:.1f}",
+                            'Low (₹)': f"{_cp['low']:.1f}",
+                            'Volume': _cp_vol_str,
+                            'Vol Ratio': _cp_vol_ratio_str,
+                            'Vol Signal': _cp_vol_signal,
+                            'Nearest HTF Pivot': _htf_label,
+                            'Nearest VOB': _vob_label,
+                        })
+                    st.dataframe(pd.DataFrame(_ctype_rows), use_container_width=True, hide_index=True)
 
             # ── Geometric & Reversal Pattern Analysis ──────────────────────
-            render_geo_pattern_analysis(_df_today, df, date_label=_date_label)
+            with st.expander("📐 Geometric & Reversal Pattern Analysis", expanded=False):
+                render_geo_pattern_analysis(_df_today, df, date_label=_date_label)
 
             # ── HTF Support & Resistance + VOB Summary ────────────────────
-            st.markdown("---")
-            _sr_label = f"HTF Support & Resistance Levels — {_date_label}" if (backtest_mode and backtest_date) else "HTF Support & Resistance Levels"
-            st.markdown(f"## 📊 {_sr_label}")
-
-            _htf_pivots_raw = []
-            if show_pivots and len(df) > 50:
-                try:
-                    _htf_pivots_raw = cached_pivot_calculation(_cached_df_json, pivot_settings or {})
-                except Exception:
-                    _htf_pivots_raw = []
-
-            _htf_supports = sorted([p['value'] for p in _htf_pivots_raw if p['type'] == 'low'], reverse=True)
-            _htf_resistances = sorted([p['value'] for p in _htf_pivots_raw if p['type'] == 'high'])
-
-            _vob_supports = []
-            _vob_resistances = []
-            if _cached_vob_sr is not None:
-                try:
-                    _vob_supports = sorted([v for v in _cached_vob_sr.get('support', [])], reverse=True)
-                    _vob_resistances = sorted([v for v in _cached_vob_sr.get('resistance', [])])
-                except Exception:
-                    pass
-
-            _col_sup, _col_res = st.columns(2)
-            with _col_sup:
-                st.markdown("### 🟢 Support Levels")
-                _sup_rows = []
-                for _v in _htf_supports[:10]:
-                    _sup_rows.append({'Type': 'HTF Pivot', 'Level (₹)': f"{_v:.1f}"})
-                for _v in _vob_supports[:5]:
-                    _sup_rows.append({'Type': 'VOB↑', 'Level (₹)': f"{_v:.1f}"})
-                if _sup_rows:
-                    st.dataframe(pd.DataFrame(_sup_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.info("No support levels detected")
-
-            with _col_res:
-                st.markdown("### 🔴 Resistance Levels")
-                _res_rows = []
-                for _v in _htf_resistances[:10]:
-                    _res_rows.append({'Type': 'HTF Pivot', 'Level (₹)': f"{_v:.1f}"})
-                for _v in _vob_resistances[:5]:
-                    _res_rows.append({'Type': 'VOB↓', 'Level (₹)': f"{_v:.1f}"})
-                if _res_rows:
-                    st.dataframe(pd.DataFrame(_res_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.info("No resistance levels detected")
-
-            # Reversal Detector Analysis
-            st.markdown("---")
-            st.markdown("## 🔄 Intraday Reversal Detector")
-
-            try:
-                # Get pivot lows and highs for S/R detection
-                pivot_lows = []
-                pivot_highs = []
-                if show_pivots and len(df) > 50:
-                    pivots = cached_pivot_calculation(_cached_df_json, pivot_settings or {})
-                    pivot_lows = [p['value'] for p in pivots if p['type'] == 'low']
-                    pivot_highs = [p['value'] for p in pivots if p['type'] == 'high']
-
-                # Reuse cached VOB for S/R integration
-                if _cached_vob_sr is not None:
-                    vob_data = {
-                        'sr_levels': _cached_vob_sr,
-                        'blocks': _cached_vob_blks
-                    }
-                elif vob_data is None and len(df) > 30:
-                    try:
-                        vob_detector = VolumeOrderBlocks(sensitivity=5)
-                        vob_sr_levels, vob_blocks = vob_detector.get_sr_levels(df)
-                        vob_data = {
-                            'sr_levels': vob_sr_levels,
-                            'blocks': vob_blocks
-                        }
-                    except Exception as e:
-                        st.warning(f"VOB calculation error: {str(e)}")
-                        vob_data = None
-
-                # Calculate BULLISH reversal score
-                bull_score, bull_signals, bull_verdict = ReversalDetector.calculate_reversal_score(df, pivot_lows)
-
-                # Calculate BEARISH reversal score
-                bear_score, bear_signals, bear_verdict = ReversalDetector.calculate_bearish_reversal_score(df, pivot_highs)
-
-                # Display both verdicts side by side
-                col_bull, col_bear = st.columns(2)
-
-                with col_bull:
-                    st.markdown("### 🟢 Bullish Reversal")
-                    if "STRONG BUY" in bull_verdict:
-                        st.success(f"**{bull_verdict}**")
-                    elif "MODERATE BUY" in bull_verdict:
-                        st.warning(f"**{bull_verdict}**")
-                    else:
-                        st.info(f"**{bull_verdict}**")
-
-                    st.markdown(f"**Score: {bull_signals.get('Reversal_Score', 0)}/6**")
-                    st.markdown(f"- Selling Exhausted: {bull_signals.get('Selling_Exhausted', 'N/A')}")
-                    st.markdown(f"- Higher Low: {bull_signals.get('Higher_Low', 'N/A')}")
-                    st.markdown(f"- Strong Bullish Candle: {bull_signals.get('Strong_Bullish_Candle', 'N/A')}")
-                    st.markdown(f"- Volume: {bull_signals.get('Volume_Signal', 'N/A')}")
-                    st.markdown(f"- Above VWAP: {bull_signals.get('Above_VWAP', 'N/A')}")
-
-                with col_bear:
-                    st.markdown("### 🔴 Bearish Reversal")
-                    if "STRONG SELL" in bear_verdict:
-                        st.error(f"**{bear_verdict}**")
-                    elif "MODERATE SELL" in bear_verdict:
-                        st.warning(f"**{bear_verdict}**")
-                    else:
-                        st.info(f"**{bear_verdict}**")
-
-                    st.markdown(f"**Score: {bear_signals.get('Bearish_Score', 0)}/6**")
-                    st.markdown(f"- Buying Exhausted: {bear_signals.get('Buying_Exhausted', 'N/A')}")
-                    st.markdown(f"- Lower High: {bear_signals.get('Lower_High', 'N/A')}")
-                    st.markdown(f"- Strong Bearish Candle: {bear_signals.get('Strong_Bearish_Candle', 'N/A')}")
-                    st.markdown(f"- Volume: {bear_signals.get('Volume_Signal', 'N/A')}")
-                    st.markdown(f"- Below VWAP: {bear_signals.get('Below_VWAP', 'N/A')}")
-
-                # VWAP display
-                if bull_signals.get('VWAP'):
-                    st.info(f"📊 **VWAP:** ₹{bull_signals.get('VWAP')} | **Day High:** ₹{bull_signals.get('Day_High', 'N/A')} | **Day Low:** ₹{bull_signals.get('Day_Low', 'N/A')}")
-
-                # Entry Rules Expander
-                with st.expander("📋 Entry Rules & Recommendations"):
-                    col_r1, col_r2 = st.columns(2)
-
-                    with col_r1:
-                        st.markdown("**🟢 Bullish Entry Rules:**")
-                        entry_rules = ReversalDetector.get_entry_rules(bull_signals, bull_score)
-                        for rule in entry_rules:
-                            st.markdown(f"- {rule}")
-
-                    with col_r2:
-                        st.markdown("**🔴 Bearish Entry Rules:**")
-                        if bear_score <= -4:
-                            st.markdown("- 🎯 ENTRY: Buy PE at current level")
-                            st.markdown(f"- 🛑 SL: Above recent high ({bear_signals.get('Day_High', 'N/A')})")
-                            st.markdown("- 🎯 Target: Previous low / Nearest support")
-                        elif bear_score <= -2.5:
-                            st.markdown("- ⏳ WAIT: Confirmation pending")
-                            st.markdown("- 📋 Checklist: Lower High + Strong Bearish Candle + Volume")
-                        else:
-                            st.markdown("- ❌ NO ENTRY: Bearish conditions not met")
-
-                    st.markdown("---")
-                    st.markdown("**🧠 Trading Psychology:**")
-                    st.markdown("> *Missing a trade is 100x better than entering a wrong trade.*")
-                    st.markdown("- Trade only after structure forms")
-                    st.markdown("- No emotional entries")
-                    st.markdown("- Fixed SL, fixed target")
-                    st.markdown("- If trade missed → day closed")
-
-            except Exception as e:
-                st.warning(f"Reversal analysis unavailable: {str(e)}")
-
-            # ===== ULTIMATE RSI [LuxAlgo] =====
-            if ultimate_rsi_data_for_chart:
+            with st.expander("📊 HTF Support & Resistance Levels", expanded=False):
                 st.markdown("---")
-                st.markdown("## 📈 Ultimate RSI [LuxAlgo]")
+                _sr_label = f"HTF Support & Resistance Levels — {_date_label}" if (backtest_mode and backtest_date) else "HTF Support & Resistance Levels"
+                st.markdown(f"## 📊 {_sr_label}")
 
-                ursi_val = ultimate_rsi_data_for_chart.get('latest_arsi', 50)
-                ursi_sig = ultimate_rsi_data_for_chart.get('latest_signal', 50)
-                ursi_zone = ultimate_rsi_data_for_chart.get('zone', 'Neutral')
-                ursi_cross = ultimate_rsi_data_for_chart.get('cross_signal', 'None')
-                ursi_momentum = ultimate_rsi_data_for_chart.get('momentum', 'Neutral')
+                _htf_pivots_raw = []
+                if show_pivots and len(df) > 50:
+                    try:
+                        _htf_pivots_raw = cached_pivot_calculation(_cached_df_json, pivot_settings or {})
+                    except Exception:
+                        _htf_pivots_raw = []
 
-                ursi_col1, ursi_col2, ursi_col3, ursi_col4 = st.columns(4)
-                with ursi_col1:
-                    delta_color = "normal" if ursi_momentum == 'Bullish' else ("inverse" if ursi_momentum == 'Bearish' else "off")
-                    st.metric("URSI Value", f"{ursi_val:.1f}", delta=ursi_momentum, delta_color=delta_color)
-                with ursi_col2:
-                    st.metric("Signal Line", f"{ursi_sig:.1f}")
-                with ursi_col3:
-                    zone_icon = "🟢" if ursi_zone == 'Overbought' else ("🔴" if ursi_zone == 'Oversold' else "⚪")
-                    st.metric("Zone", f"{zone_icon} {ursi_zone}")
-                with ursi_col4:
-                    cross_icon = "🔼" if 'Bullish' in ursi_cross else ("🔽" if 'Bearish' in ursi_cross else "➖")
-                    st.metric("Cross Signal", f"{cross_icon} {ursi_cross}")
+                _htf_supports = sorted([p['value'] for p in _htf_pivots_raw if p['type'] == 'low'], reverse=True)
+                _htf_resistances = sorted([p['value'] for p in _htf_pivots_raw if p['type'] == 'high'])
 
-                st.markdown("""
-                **Ultimate RSI Interpretation:**
-                - **Above 70 (OB)**: Overbought — expect bearish reversal
-                - **Below 40 (OS)**: Oversold — expect bullish bounce
-                - **URSI > Signal + Above 50**: Bullish momentum confirmed
-                - **URSI < Signal + Below 50**: Bearish momentum confirmed
-                - **Bullish/Bearish Cross**: URSI crossing signal line = momentum shift
-                """)
+                _vob_supports = []
+                _vob_resistances = []
+                if _cached_vob_sr is not None:
+                    try:
+                        _vob_supports = sorted([v for v in _cached_vob_sr.get('support', [])], reverse=True)
+                        _vob_resistances = sorted([v for v in _cached_vob_sr.get('resistance', [])])
+                    except Exception:
+                        pass
 
-            # ===== TRIPLE POC + FUTURE SWING ANALYSIS =====
-            st.markdown("---")
-            st.markdown("## 📊 Triple POC + Future Swing Analysis")
+                _col_sup, _col_res = st.columns(2)
+                with _col_sup:
+                    st.markdown("### 🟢 Support Levels")
+                    _sup_rows = []
+                    for _v in _htf_supports[:10]:
+                        _sup_rows.append({'Type': 'HTF Pivot', 'Level (₹)': f"{_v:.1f}"})
+                    for _v in _vob_supports[:5]:
+                        _sup_rows.append({'Type': 'VOB↑', 'Level (₹)': f"{_v:.1f}"})
+                    if _sup_rows:
+                        st.dataframe(pd.DataFrame(_sup_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No support levels detected")
 
-            # Triple POC Table
-            if poc_data_for_chart:
-                st.markdown("### 🎯 Triple Point of Control (POC)")
+                with _col_res:
+                    st.markdown("### 🔴 Resistance Levels")
+                    _res_rows = []
+                    for _v in _htf_resistances[:10]:
+                        _res_rows.append({'Type': 'HTF Pivot', 'Level (₹)': f"{_v:.1f}"})
+                    for _v in _vob_resistances[:5]:
+                        _res_rows.append({'Type': 'VOB↓', 'Level (₹)': f"{_v:.1f}"})
+                    if _res_rows:
+                        st.dataframe(pd.DataFrame(_res_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No resistance levels detected")
 
-                poc_table_data = []
-                current_price_for_poc = df['close'].iloc[-1] if not df.empty else 0
+                # Reversal Detector Analysis
+            with st.expander("🔄 Intraday Reversal Detector", expanded=True):
+                st.markdown("---")
+                st.markdown("## 🔄 Intraday Reversal Detector")
 
-                for poc_key, period_key in [('poc1', 'poc1'), ('poc2', 'poc2'), ('poc3', 'poc3')]:
-                    poc = poc_data_for_chart.get(poc_key)
-                    period = poc_data_for_chart.get('periods', {}).get(period_key, '')
+                try:
+                    # Get pivot lows and highs for S/R detection
+                    pivot_lows = []
+                    pivot_highs = []
+                    if show_pivots and len(df) > 50:
+                        pivots = cached_pivot_calculation(_cached_df_json, pivot_settings or {})
+                        pivot_lows = [p['value'] for p in pivots if p['type'] == 'low']
+                        pivot_highs = [p['value'] for p in pivots if p['type'] == 'high']
 
-                    if poc:
-                        # Determine position relative to POC line
-                        # Above POC = Bull, Below POC = Bear
-                        if current_price_for_poc > poc.get('poc', 0):
-                            position = "🟢 Above"
-                            signal = "Bullish"
+                    # Reuse cached VOB for S/R integration
+                    if _cached_vob_sr is not None:
+                        vob_data = {
+                            'sr_levels': _cached_vob_sr,
+                            'blocks': _cached_vob_blks
+                        }
+                    elif vob_data is None and len(df) > 30:
+                        try:
+                            vob_detector = VolumeOrderBlocks(sensitivity=5)
+                            vob_sr_levels, vob_blocks = vob_detector.get_sr_levels(df)
+                            vob_data = {
+                                'sr_levels': vob_sr_levels,
+                                'blocks': vob_blocks
+                            }
+                        except Exception as e:
+                            st.warning(f"VOB calculation error: {str(e)}")
+                            vob_data = None
+
+                    # Calculate BULLISH reversal score
+                    bull_score, bull_signals, bull_verdict = ReversalDetector.calculate_reversal_score(df, pivot_lows)
+
+                    # Calculate BEARISH reversal score
+                    bear_score, bear_signals, bear_verdict = ReversalDetector.calculate_bearish_reversal_score(df, pivot_highs)
+
+                    # Display both verdicts side by side
+                    col_bull, col_bear = st.columns(2)
+
+                    with col_bull:
+                        st.markdown("### 🟢 Bullish Reversal")
+                        if "STRONG BUY" in bull_verdict:
+                            st.success(f"**{bull_verdict}**")
+                        elif "MODERATE BUY" in bull_verdict:
+                            st.warning(f"**{bull_verdict}**")
                         else:
-                            position = "🔴 Below"
-                            signal = "Bearish"
+                            st.info(f"**{bull_verdict}**")
 
-                        poc_table_data.append({
-                            'POC': f"POC {poc_key[-1]} ({period})",
-                            'Value': f"₹{poc.get('poc', 0):.2f}",
-                            'Upper': f"₹{poc.get('upper_poc', 0):.2f}",
-                            'Lower': f"₹{poc.get('lower_poc', 0):.2f}",
-                            'Range': f"₹{poc.get('high', 0):.0f} - ₹{poc.get('low', 0):.0f}",
-                            'Position': position,
-                            'Signal': signal
-                        })
+                        st.markdown(f"**Score: {bull_signals.get('Reversal_Score', 0)}/6**")
+                        st.markdown(f"- Selling Exhausted: {bull_signals.get('Selling_Exhausted', 'N/A')}")
+                        st.markdown(f"- Higher Low: {bull_signals.get('Higher_Low', 'N/A')}")
+                        st.markdown(f"- Strong Bullish Candle: {bull_signals.get('Strong_Bullish_Candle', 'N/A')}")
+                        st.markdown(f"- Volume: {bull_signals.get('Volume_Signal', 'N/A')}")
+                        st.markdown(f"- Above VWAP: {bull_signals.get('Above_VWAP', 'N/A')}")
 
-                if poc_table_data:
-                    poc_df = pd.DataFrame(poc_table_data)
-
-                    # Style the table
-                    def style_poc_signal(val):
-                        if val == 'Bullish':
-                            return 'background-color: #00ff8840; color: white'
-                        elif val == 'Bearish':
-                            return 'background-color: #ff444440; color: white'
+                    with col_bear:
+                        st.markdown("### 🔴 Bearish Reversal")
+                        if "STRONG SELL" in bear_verdict:
+                            st.error(f"**{bear_verdict}**")
+                        elif "MODERATE SELL" in bear_verdict:
+                            st.warning(f"**{bear_verdict}**")
                         else:
-                            return 'background-color: #FFD70040; color: white'
+                            st.info(f"**{bear_verdict}**")
 
-                    styled_poc = poc_df.style.map(style_poc_signal, subset=['Signal'])
-                    st.dataframe(styled_poc, use_container_width=True, hide_index=True)
+                        st.markdown(f"**Score: {bear_signals.get('Bearish_Score', 0)}/6**")
+                        st.markdown(f"- Buying Exhausted: {bear_signals.get('Buying_Exhausted', 'N/A')}")
+                        st.markdown(f"- Lower High: {bear_signals.get('Lower_High', 'N/A')}")
+                        st.markdown(f"- Strong Bearish Candle: {bear_signals.get('Strong_Bearish_Candle', 'N/A')}")
+                        st.markdown(f"- Volume: {bear_signals.get('Volume_Signal', 'N/A')}")
+                        st.markdown(f"- Below VWAP: {bear_signals.get('Below_VWAP', 'N/A')}")
+
+                    # VWAP display
+                    if bull_signals.get('VWAP'):
+                        st.info(f"📊 **VWAP:** ₹{bull_signals.get('VWAP')} | **Day High:** ₹{bull_signals.get('Day_High', 'N/A')} | **Day Low:** ₹{bull_signals.get('Day_Low', 'N/A')}")
+
+                    # Entry Rules Expander
+                    with st.expander("📋 Entry Rules & Recommendations"):
+                        col_r1, col_r2 = st.columns(2)
+
+                        with col_r1:
+                            st.markdown("**🟢 Bullish Entry Rules:**")
+                            entry_rules = ReversalDetector.get_entry_rules(bull_signals, bull_score)
+                            for rule in entry_rules:
+                                st.markdown(f"- {rule}")
+
+                        with col_r2:
+                            st.markdown("**🔴 Bearish Entry Rules:**")
+                            if bear_score <= -4:
+                                st.markdown("- 🎯 ENTRY: Buy PE at current level")
+                                st.markdown(f"- 🛑 SL: Above recent high ({bear_signals.get('Day_High', 'N/A')})")
+                                st.markdown("- 🎯 Target: Previous low / Nearest support")
+                            elif bear_score <= -2.5:
+                                st.markdown("- ⏳ WAIT: Confirmation pending")
+                                st.markdown("- 📋 Checklist: Lower High + Strong Bearish Candle + Volume")
+                            else:
+                                st.markdown("- ❌ NO ENTRY: Bearish conditions not met")
+
+                        st.markdown("---")
+                        st.markdown("**🧠 Trading Psychology:**")
+                        st.markdown("> *Missing a trade is 100x better than entering a wrong trade.*")
+                        st.markdown("- Trade only after structure forms")
+                        st.markdown("- No emotional entries")
+                        st.markdown("- Fixed SL, fixed target")
+                        st.markdown("- If trade missed → day closed")
+
+                except Exception as e:
+                    st.warning(f"Reversal analysis unavailable: {str(e)}")
+
+                # ===== ULTIMATE RSI [LuxAlgo] =====
+            if ultimate_rsi_data_for_chart:
+                with st.expander("📈 Ultimate RSI [LuxAlgo]", expanded=False):
+                    st.markdown("---")
+                    st.markdown("## 📈 Ultimate RSI [LuxAlgo]")
+
+                    ursi_val = ultimate_rsi_data_for_chart.get('latest_arsi', 50)
+                    ursi_sig = ultimate_rsi_data_for_chart.get('latest_signal', 50)
+                    ursi_zone = ultimate_rsi_data_for_chart.get('zone', 'Neutral')
+                    ursi_cross = ultimate_rsi_data_for_chart.get('cross_signal', 'None')
+                    ursi_momentum = ultimate_rsi_data_for_chart.get('momentum', 'Neutral')
+
+                    ursi_col1, ursi_col2, ursi_col3, ursi_col4 = st.columns(4)
+                    with ursi_col1:
+                        delta_color = "normal" if ursi_momentum == 'Bullish' else ("inverse" if ursi_momentum == 'Bearish' else "off")
+                        st.metric("URSI Value", f"{ursi_val:.1f}", delta=ursi_momentum, delta_color=delta_color)
+                    with ursi_col2:
+                        st.metric("Signal Line", f"{ursi_sig:.1f}")
+                    with ursi_col3:
+                        zone_icon = "🟢" if ursi_zone == 'Overbought' else ("🔴" if ursi_zone == 'Oversold' else "⚪")
+                        st.metric("Zone", f"{zone_icon} {ursi_zone}")
+                    with ursi_col4:
+                        cross_icon = "🔼" if 'Bullish' in ursi_cross else ("🔽" if 'Bearish' in ursi_cross else "➖")
+                        st.metric("Cross Signal", f"{cross_icon} {ursi_cross}")
 
                     st.markdown("""
-                    **POC Interpretation:**
-                    - **POC 1 (10)**: Short-term volume profile - intraday support/resistance
-                    - **POC 2 (25)**: Medium-term volume profile - swing trading levels
-                    - **POC 3 (70)**: Long-term volume profile - major support/resistance
-                    - **Above POC**: Bullish — market is bull, POC acts as support
-                    - **Below POC**: Bearish — market is bear, POC acts as resistance
+                    **Ultimate RSI Interpretation:**
+                    - **Above 70 (OB)**: Overbought — expect bearish reversal
+                    - **Below 40 (OS)**: Oversold — expect bullish bounce
+                    - **URSI > Signal + Above 50**: Bullish momentum confirmed
+                    - **URSI < Signal + Below 50**: Bearish momentum confirmed
+                    - **Bullish/Bearish Cross**: URSI crossing signal line = momentum shift
                     """)
 
-            # Future Swing Table
-            if swing_data_for_chart:
-                st.markdown("### 🔄 Future Swing Projection")
+            # ===== TRIPLE POC + FUTURE SWING ANALYSIS =====
+            with st.expander("📊 Triple POC + Future Swing Analysis", expanded=False):
+                st.markdown("---")
+                st.markdown("## 📊 Triple POC + Future Swing Analysis")
 
-                swings = swing_data_for_chart.get('swings', {})
-                projection = swing_data_for_chart.get('projection')
-                volume = swing_data_for_chart.get('volume', {})
-                percentages = swing_data_for_chart.get('percentages', [])
+                # Triple POC Table
+                if poc_data_for_chart:
+                    st.markdown("### 🎯 Triple Point of Control (POC)")
 
-                # Swing Summary
-                swing_col1, swing_col2, swing_col3 = st.columns(3)
+                    poc_table_data = []
+                    current_price_for_poc = df['close'].iloc[-1] if not df.empty else 0
 
-                with swing_col1:
-                    direction = swings.get('direction', 'Unknown')
-                    dir_color = "#15dd7c" if direction == 'bullish' else "#eb7514"
-                    dir_icon = "🟢" if direction == 'bullish' else "🔴"
-                    st.markdown(f"""
-                    <div style="background-color: {dir_color}20; padding: 15px; border-radius: 10px; border: 2px solid {dir_color};">
-                        <h4 style="color: {dir_color}; margin: 0;">Current Direction</h4>
-                        <h2 style="color: {dir_color}; margin: 5px 0;">{dir_icon} {direction.upper()}</h2>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    for poc_key, period_key in [('poc1', 'poc1'), ('poc2', 'poc2'), ('poc3', 'poc3')]:
+                        poc = poc_data_for_chart.get(poc_key)
+                        period = poc_data_for_chart.get('periods', {}).get(period_key, '')
 
-                with swing_col2:
-                    if projection:
-                        target_color = "#15dd7c" if projection['direction'] == 'bullish' else "#eb7514"
+                        if poc:
+                            # Determine position relative to POC line
+                            # Above POC = Bull, Below POC = Bear
+                            if current_price_for_poc > poc.get('poc', 0):
+                                position = "🟢 Above"
+                                signal = "Bullish"
+                            else:
+                                position = "🔴 Below"
+                                signal = "Bearish"
+
+                            poc_table_data.append({
+                                'POC': f"POC {poc_key[-1]} ({period})",
+                                'Value': f"₹{poc.get('poc', 0):.2f}",
+                                'Upper': f"₹{poc.get('upper_poc', 0):.2f}",
+                                'Lower': f"₹{poc.get('lower_poc', 0):.2f}",
+                                'Range': f"₹{poc.get('high', 0):.0f} - ₹{poc.get('low', 0):.0f}",
+                                'Position': position,
+                                'Signal': signal
+                            })
+
+                    if poc_table_data:
+                        poc_df = pd.DataFrame(poc_table_data)
+
+                        # Style the table
+                        def style_poc_signal(val):
+                            if val == 'Bullish':
+                                return 'background-color: #00ff8840; color: white'
+                            elif val == 'Bearish':
+                                return 'background-color: #ff444440; color: white'
+                            else:
+                                return 'background-color: #FFD70040; color: white'
+
+                        styled_poc = poc_df.style.map(style_poc_signal, subset=['Signal'])
+                        st.dataframe(styled_poc, use_container_width=True, hide_index=True)
+
+                        st.markdown("""
+                        **POC Interpretation:**
+                        - **POC 1 (10)**: Short-term volume profile - intraday support/resistance
+                        - **POC 2 (25)**: Medium-term volume profile - swing trading levels
+                        - **POC 3 (70)**: Long-term volume profile - major support/resistance
+                        - **Above POC**: Bullish — market is bull, POC acts as support
+                        - **Below POC**: Bearish — market is bear, POC acts as resistance
+                        """)
+
+                # Future Swing Table
+                if swing_data_for_chart:
+                    st.markdown("### 🔄 Future Swing Projection")
+
+                    swings = swing_data_for_chart.get('swings', {})
+                    projection = swing_data_for_chart.get('projection')
+                    volume = swing_data_for_chart.get('volume', {})
+                    percentages = swing_data_for_chart.get('percentages', [])
+
+                    # Swing Summary
+                    swing_col1, swing_col2, swing_col3 = st.columns(3)
+
+                    with swing_col1:
+                        direction = swings.get('direction', 'Unknown')
+                        dir_color = "#15dd7c" if direction == 'bullish' else "#eb7514"
+                        dir_icon = "🟢" if direction == 'bullish' else "🔴"
                         st.markdown(f"""
-                        <div style="background-color: {target_color}20; padding: 15px; border-radius: 10px; border: 2px solid {target_color};">
-                            <h4 style="color: {target_color}; margin: 0;">Projected Target</h4>
-                            <h2 style="color: {target_color}; margin: 5px 0;">₹{projection['target']:.0f}</h2>
-                            <p style="color: white; margin: 0;">{projection['sign']}{projection['swing_pct']:.1f}%</p>
+                        <div style="background-color: {dir_color}20; padding: 15px; border-radius: 10px; border: 2px solid {dir_color};">
+                            <h4 style="color: {dir_color}; margin: 0;">Current Direction</h4>
+                            <h2 style="color: {dir_color}; margin: 5px 0;">{dir_icon} {direction.upper()}</h2>
                         </div>
                         """, unsafe_allow_html=True)
-                    else:
-                        st.info("Projection not available")
 
-                with swing_col3:
-                    delta = volume.get('delta', 0)
-                    delta_color = "#15dd7c" if delta > 0 else "#eb7514"
-                    delta_icon = "🟢" if delta > 0 else "🔴"
-                    st.markdown(f"""
-                    <div style="background-color: {delta_color}20; padding: 15px; border-radius: 10px; border: 2px solid {delta_color};">
-                        <h4 style="color: {delta_color}; margin: 0;">Volume Delta</h4>
-                        <h2 style="color: {delta_color}; margin: 5px 0;">{delta_icon} {delta:+,.0f}</h2>
-                        <p style="color: white; margin: 0;">Buy: {volume.get('buy_volume', 0):,.0f} | Sell: {volume.get('sell_volume', 0):,.0f}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    with swing_col2:
+                        if projection:
+                            target_color = "#15dd7c" if projection['direction'] == 'bullish' else "#eb7514"
+                            st.markdown(f"""
+                            <div style="background-color: {target_color}20; padding: 15px; border-radius: 10px; border: 2px solid {target_color};">
+                                <h4 style="color: {target_color}; margin: 0;">Projected Target</h4>
+                                <h2 style="color: {target_color}; margin: 5px 0;">₹{projection['target']:.0f}</h2>
+                                <p style="color: white; margin: 0;">{projection['sign']}{projection['swing_pct']:.1f}%</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.info("Projection not available")
 
-                # Swing Percentages Table
-                if percentages:
-                    st.markdown("### 📈 Historical Swing Percentages")
+                    with swing_col3:
+                        delta = volume.get('delta', 0)
+                        delta_color = "#15dd7c" if delta > 0 else "#eb7514"
+                        delta_icon = "🟢" if delta > 0 else "🔴"
+                        st.markdown(f"""
+                        <div style="background-color: {delta_color}20; padding: 15px; border-radius: 10px; border: 2px solid {delta_color};">
+                            <h4 style="color: {delta_color}; margin: 0;">Volume Delta</h4>
+                            <h2 style="color: {delta_color}; margin: 5px 0;">{delta_icon} {delta:+,.0f}</h2>
+                            <p style="color: white; margin: 0;">Buy: {volume.get('buy_volume', 0):,.0f} | Sell: {volume.get('sell_volume', 0):,.0f}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-                    swing_pct_data = []
-                    for i, pct in enumerate(percentages):
+                    # Swing Percentages Table
+                    if percentages:
+                        st.markdown("### 📈 Historical Swing Percentages")
+
+                        swing_pct_data = []
+                        for i, pct in enumerate(percentages):
+                            swing_pct_data.append({
+                                'Swing': f"Swing {i+1}",
+                                'Percentage': f"{pct:+.2f}%",
+                                'Type': '🟢 Bullish' if pct > 0 else '🔴 Bearish'
+                            })
+
+                        # Add average
+                        avg_pct = sum(abs(p) for p in percentages) / len(percentages) if percentages else 0
                         swing_pct_data.append({
-                            'Swing': f"Swing {i+1}",
-                            'Percentage': f"{pct:+.2f}%",
-                            'Type': '🟢 Bullish' if pct > 0 else '🔴 Bearish'
+                            'Swing': '📊 Average',
+                            'Percentage': f"{avg_pct:.2f}%",
+                            'Type': 'Used for projection'
                         })
 
-                    # Add average
-                    avg_pct = sum(abs(p) for p in percentages) / len(percentages) if percentages else 0
-                    swing_pct_data.append({
-                        'Swing': '📊 Average',
-                        'Percentage': f"{avg_pct:.2f}%",
-                        'Type': 'Used for projection'
-                    })
+                        swing_pct_df = pd.DataFrame(swing_pct_data)
+                        st.dataframe(swing_pct_df, use_container_width=True, hide_index=True)
 
-                    swing_pct_df = pd.DataFrame(swing_pct_data)
-                    st.dataframe(swing_pct_df, use_container_width=True, hide_index=True)
+                    # Swing Levels Table
+                    st.markdown("### 📍 Swing Levels")
 
-                # Swing Levels Table
-                st.markdown("### 📍 Swing Levels")
+                    swing_levels_data = []
+                    last_high = swings.get('last_swing_high')
+                    last_low = swings.get('last_swing_low')
 
-                swing_levels_data = []
-                last_high = swings.get('last_swing_high')
-                last_low = swings.get('last_swing_low')
+                    if last_high:
+                        swing_levels_data.append({
+                            'Type': '🔴 Swing High',
+                            'Value': f"₹{last_high['value']:.2f}",
+                            'Index': last_high['index']
+                        })
 
-                if last_high:
-                    swing_levels_data.append({
-                        'Type': '🔴 Swing High',
-                        'Value': f"₹{last_high['value']:.2f}",
-                        'Index': last_high['index']
-                    })
+                    if last_low:
+                        swing_levels_data.append({
+                            'Type': '🟢 Swing Low',
+                            'Value': f"₹{last_low['value']:.2f}",
+                            'Index': last_low['index']
+                        })
 
-                if last_low:
-                    swing_levels_data.append({
-                        'Type': '🟢 Swing Low',
-                        'Value': f"₹{last_low['value']:.2f}",
-                        'Index': last_low['index']
-                    })
+                    if swing_levels_data:
+                        swing_levels_df = pd.DataFrame(swing_levels_data)
+                        st.dataframe(swing_levels_df, use_container_width=True, hide_index=True)
 
-                if swing_levels_data:
-                    swing_levels_df = pd.DataFrame(swing_levels_data)
-                    st.dataframe(swing_levels_df, use_container_width=True, hide_index=True)
+                    st.markdown("""
+                    **Swing Analysis Interpretation:**
+                    - **Swing High**: Resistance level where price reversed down
+                    - **Swing Low**: Support level where price reversed up
+                    - **Volume Delta**: Positive = more buying, Negative = more selling
+                    - **Projected Target**: Based on average of historical swing percentages
+                    """)
 
-                st.markdown("""
-                **Swing Analysis Interpretation:**
-                - **Swing High**: Resistance level where price reversed down
-                - **Swing Low**: Support level where price reversed up
-                - **Volume Delta**: Positive = more buying, Negative = more selling
-                - **Projected Target**: Based on average of historical swing percentages
-                """)
-
-            # ===== RSI VOLATILITY SUPPRESSION ZONES =====
+                # ===== RSI VOLATILITY SUPPRESSION ZONES =====
             if rsi_sz_data_for_chart and rsi_sz_data_for_chart.get('zones'):
-                st.markdown("---")
-                st.markdown("## ∿ RSI Volatility Suppression Zones")
+                with st.expander("∿ RSI Volatility Suppression Zones", expanded=False):
+                    st.markdown("---")
+                    st.markdown("## ∿ RSI Volatility Suppression Zones")
 
-                current_signal = rsi_sz_data_for_chart.get('current_signal', 'No Zone')
-                count_vol = rsi_sz_data_for_chart.get('count_volatility', 0)
+                    current_signal = rsi_sz_data_for_chart.get('current_signal', 'No Zone')
+                    count_vol = rsi_sz_data_for_chart.get('count_volatility', 0)
 
-                # Signal summary
-                sz_col1, sz_col2, sz_col3 = st.columns(3)
-                with sz_col1:
-                    signal_color = "normal" if current_signal == 'Bullish Breakout' else ("inverse" if current_signal == 'Bearish Breakout' else "off")
-                    st.metric("Current Signal", current_signal, delta=current_signal if current_signal != 'No Zone' else None, delta_color=signal_color)
-                with sz_col2:
-                    st.metric("Low Vol Bar Count", count_vol)
-                with sz_col3:
-                    total_zones = len(rsi_sz_data_for_chart['zones'])
-                    bullish_count = sum(1 for z in rsi_sz_data_for_chart['zones'] if z['breakout'] == 'bullish')
-                    bearish_count = sum(1 for z in rsi_sz_data_for_chart['zones'] if z['breakout'] == 'bearish')
-                    st.metric("Zones Detected", f"{total_zones} (▲{bullish_count} / ▼{bearish_count})")
+                    # Signal summary
+                    sz_col1, sz_col2, sz_col3 = st.columns(3)
+                    with sz_col1:
+                        signal_color = "normal" if current_signal == 'Bullish Breakout' else ("inverse" if current_signal == 'Bearish Breakout' else "off")
+                        st.metric("Current Signal", current_signal, delta=current_signal if current_signal != 'No Zone' else None, delta_color=signal_color)
+                    with sz_col2:
+                        st.metric("Low Vol Bar Count", count_vol)
+                    with sz_col3:
+                        total_zones = len(rsi_sz_data_for_chart['zones'])
+                        bullish_count = sum(1 for z in rsi_sz_data_for_chart['zones'] if z['breakout'] == 'bullish')
+                        bearish_count = sum(1 for z in rsi_sz_data_for_chart['zones'] if z['breakout'] == 'bearish')
+                        st.metric("Zones Detected", f"{total_zones} (▲{bullish_count} / ▼{bearish_count})")
 
-                # Zone table
-                zone_table_data = []
-                for idx, zone in enumerate(reversed(rsi_sz_data_for_chart['zones'][-10:]), 1):
-                    breakout = zone.get('breakout', 'pending')
-                    if breakout == 'bullish':
-                        signal = '▲ Bullish'
-                    elif breakout == 'bearish':
-                        signal = '▼ Bearish'
+                    # Zone table
+                    zone_table_data = []
+                    for idx, zone in enumerate(reversed(rsi_sz_data_for_chart['zones'][-10:]), 1):
+                        breakout = zone.get('breakout', 'pending')
+                        if breakout == 'bullish':
+                            signal = '▲ Bullish'
+                        elif breakout == 'bearish':
+                            signal = '▼ Bearish'
                     else:
                         signal = '∿ Pending'
 
@@ -25175,11 +25182,11 @@ def main():
                         ))
                         _fig_gs.update_layout(
                             title='ATM Gamma Over Time',
-                            template='plotly_dark', height=260,
+                            template='plotly_white', height=260,
                             margin=dict(l=40, r=20, t=40, b=30),
                             xaxis=dict(title='Snapshot', showticklabels=False),
                             yaxis=dict(title='Gamma'),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            plot_bgcolor='white', paper_bgcolor='white',
                         )
                         st.plotly_chart(_fig_gs, use_container_width=True)
                     else:
@@ -25200,11 +25207,11 @@ def main():
                     ))
                     _fig_gmap.update_layout(
                         title=f'Gamma Sequence Map — Pattern: {_gamma["pattern"]}',
-                        template='plotly_dark', height=260,
+                        template='plotly_white', height=260,
                         margin=dict(l=40, r=20, t=50, b=30),
                         xaxis=dict(title='Strike Position'),
                         yaxis=dict(title='Gamma Value'),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                     )
                     st.plotly_chart(_fig_gmap, use_container_width=True)
 
@@ -25230,11 +25237,11 @@ def main():
                     _fig_esh.add_hline(y=40, line_dash='dot', line_color='#aaaaaa', annotation_text='Build-up 40')
                     _fig_esh.update_layout(
                         title='Expiry Spike Score History',
-                        template='plotly_dark', height=260,
+                        template='plotly_white', height=260,
                         margin=dict(l=40, r=80, t=40, b=30),
                         xaxis=dict(title='Snapshot', showticklabels=False),
                         yaxis=dict(title='Expiry Spike Score', range=[0, 110]),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                     )
                     st.plotly_chart(_fig_esh, use_container_width=True)
 
@@ -25252,12 +25259,12 @@ def main():
                         ))
                     _fig_gsh.update_layout(
                         title='Gamma Sequence Over Time (ATM ±2)',
-                        template='plotly_dark', height=280,
+                        template='plotly_white', height=280,
                         margin=dict(l=40, r=20, t=40, b=30),
                         xaxis=dict(title='Snapshot', showticklabels=False),
                         yaxis=dict(title='Gamma'),
                         showlegend=True, legend=dict(orientation='h', y=-0.3),
-                        plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                        plot_bgcolor='white', paper_bgcolor='white',
                     )
                     st.plotly_chart(_fig_gsh, use_container_width=True)
 
@@ -25556,10 +25563,10 @@ def main():
 
                         _cie_fig.update_layout(
                             title='NIFTY 5-Min — Candlestick Intelligence Engine S/R Map',
-                            template='plotly_dark', height=480,
+                            template='plotly_white', height=480,
                             xaxis_rangeslider_visible=False,
                             margin=dict(l=10, r=80, t=50, b=30),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            plot_bgcolor='white', paper_bgcolor='white',
                             xaxis=dict(type='category', tickangle=-45, nticks=15,
                                        tickfont=dict(size=8)),
                         )
@@ -25642,9 +25649,9 @@ def main():
                                                   annotation_text='Bullish 0.90')
                             _cie_iv_fig.update_layout(
                                 title='IV Skew (PE IV / CE IV)',
-                                template='plotly_dark', height=260,
+                                template='plotly_white', height=260,
                                 margin=dict(l=30, r=30, t=40, b=20),
-                                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                                plot_bgcolor='white', paper_bgcolor='white',
                                 xaxis=dict(title='Snapshot', showticklabels=False),
                                 yaxis=dict(title='Skew'),
                             )
@@ -25673,9 +25680,9 @@ def main():
                                                     annotation_text='Bear -0.15')
                             _cie_pres_fig.update_layout(
                                 title='Net Bid/Ask Pressure',
-                                template='plotly_dark', height=260,
+                                template='plotly_white', height=260,
                                 margin=dict(l=30, r=30, t=40, b=20),
-                                plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                                plot_bgcolor='white', paper_bgcolor='white',
                                 xaxis=dict(title='Snapshot', showticklabels=False),
                                 yaxis=dict(title='Pressure'),
                             )
@@ -25698,9 +25705,9 @@ def main():
                             ))
                         _cie_strad_fig.update_layout(
                             title='ATM Straddle Movement',
-                            template='plotly_dark', height=240,
+                            template='plotly_white', height=240,
                             margin=dict(l=30, r=30, t=40, b=20),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            plot_bgcolor='white', paper_bgcolor='white',
                             xaxis=dict(title='Snapshot', showticklabels=False),
                             yaxis=dict(title='Straddle ₹'),
                         )
@@ -25722,9 +25729,9 @@ def main():
                             ))
                         _cie_gex_fig.update_layout(
                             title='Gamma Exposure (GEX) Over Time',
-                            template='plotly_dark', height=240,
+                            template='plotly_white', height=240,
                             margin=dict(l=30, r=30, t=40, b=20),
-                            plot_bgcolor='#1e1e1e', paper_bgcolor='#1e1e1e',
+                            plot_bgcolor='white', paper_bgcolor='white',
                             xaxis=dict(title='Snapshot', showticklabels=False),
                             yaxis=dict(title='GEX (L)'),
                         )
