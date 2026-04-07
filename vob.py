@@ -16498,14 +16498,14 @@ def compute_strike_zone_classification(mde):
 
 
 def _mkt_range():
-    """Return rolling 2-hour window ending now, clamped to 9:15-15:30 IST."""
+    """Return rolling 30-minute window ending now, clamped to 9:15-15:30 IST."""
     _tz = pytz.timezone('Asia/Kolkata')
     _now = datetime.now(_tz)
     _today = _now.strftime('%Y-%m-%d')
     _mkt_open  = _tz.localize(datetime.strptime(f'{_today} 09:15:00', '%Y-%m-%d %H:%M:%S'))
     _mkt_close = _tz.localize(datetime.strptime(f'{_today} 15:30:00', '%Y-%m-%d %H:%M:%S'))
     _end   = min(_now, _mkt_close)
-    _start = max(_end - __import__('datetime').timedelta(hours=2), _mkt_open)
+    _start = max(_end - __import__('datetime').timedelta(minutes=30), _mkt_open)
     return [_start.strftime('%Y-%m-%d %H:%M:%S'), _end.strftime('%Y-%m-%d %H:%M:%S')]
 
 def render_options_analysis_panel(option_data, current_price, api, db,
