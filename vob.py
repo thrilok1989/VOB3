@@ -4268,10 +4268,10 @@ def create_candlestick_chart(df, title, interval, show_pivots=True, pivot_settin
             low=df['low'],
             close=df['close'],
             name='Nifty 50',
-            increasing_line_color='#00ff88',
-            decreasing_line_color='#ff4444',
-            increasing_fillcolor='#00ff88',
-            decreasing_fillcolor='#ff4444'
+            increasing_line_color='#007a42',
+            decreasing_line_color='#cc0000',
+            increasing_fillcolor='#007a42',
+            decreasing_fillcolor='#cc0000'
         ),
         row=1, col=1
     )
@@ -4350,7 +4350,7 @@ def create_candlestick_chart(df, title, interval, show_pivots=True, pivot_settin
                     y=vwap,
                     mode='lines',
                     name='VWAP',
-                    line=dict(color='#FFD700', width=2, dash='dot'),
+                    line=dict(color='#8a6f00', width=2, dash='dot'),
                     opacity=0.8
                 ),
                 row=1, col=1
@@ -4795,9 +4795,9 @@ def create_candlestick_chart(df, title, interval, show_pivots=True, pivot_settin
             if _buy_x:
                 fig.add_trace(go.Scatter(
                     x=_buy_x, y=_buy_y, mode='markers+text',
-                    marker=dict(symbol='triangle-up', size=12, color='#00ff88'),
+                    marker=dict(symbol='triangle-up', size=12, color='#007a42'),
                     text=_buy_txt, textposition='bottom center',
-                    textfont=dict(color='#00ff88', size=9),
+                    textfont=dict(color='#007a42', size=9),
                     name='Bullish Pattern', hovertemplate='%{text}<br>%{x}<extra></extra>',
                     showlegend=True
                 ), row=1, col=1)
@@ -4805,9 +4805,9 @@ def create_candlestick_chart(df, title, interval, show_pivots=True, pivot_settin
             if _sell_x:
                 fig.add_trace(go.Scatter(
                     x=_sell_x, y=_sell_y, mode='markers+text',
-                    marker=dict(symbol='triangle-down', size=12, color='#ff4444'),
+                    marker=dict(symbol='triangle-down', size=12, color='#cc0000'),
                     text=_sell_txt, textposition='top center',
-                    textfont=dict(color='#ff4444', size=9),
+                    textfont=dict(color='#cc0000', size=9),
                     name='Bearish Pattern', hovertemplate='%{text}<br>%{x}<extra></extra>',
                     showlegend=True
                 ), row=1, col=1)
@@ -4815,9 +4815,9 @@ def create_candlestick_chart(df, title, interval, show_pivots=True, pivot_settin
             if _neutral_x:
                 fig.add_trace(go.Scatter(
                     x=_neutral_x, y=_neutral_y, mode='markers+text',
-                    marker=dict(symbol='diamond', size=9, color='#FFD700'),
+                    marker=dict(symbol='diamond', size=9, color='#8a6f00'),
                     text=_neutral_txt, textposition='top center',
-                    textfont=dict(color='#FFD700', size=9),
+                    textfont=dict(color='#8a6f00', size=9),
                     name='Neutral Pattern', hovertemplate='%{text}<br>%{x}<extra></extra>',
                     showlegend=True
                 ), row=1, col=1)
@@ -4861,7 +4861,7 @@ def create_candlestick_chart(df, title, interval, show_pivots=True, pivot_settin
                         x=[hi_time], y=[hi_price],
                         mode='markers+text',
                         marker=dict(symbol=marker_symbol, size=14, color=pat_color,
-                                    line=dict(color='white', width=1)),
+                                    line=dict(color='#111', width=1)),
                         text=[gp.get('pattern', '')[:10]],
                         textposition=text_pos,
                         textfont=dict(color=pat_color, size=8),
@@ -4910,9 +4910,9 @@ def create_candlestick_chart(df, title, interval, show_pivots=True, pivot_settin
         height=850 if has_ursi else 700,
         showlegend=False,
         margin=dict(l=0, r=0, t=40, b=0),
-        font=dict(color='#222'),
         plot_bgcolor='white',
-        paper_bgcolor='white'
+        paper_bgcolor='white',
+        font=dict(color='#111'),
     )
     
     fig.update_xaxes(
@@ -5004,7 +5004,7 @@ def plot_depth_levels(df_summary, underlying_price=None):
             title='← Support (PE Bid) &nbsp;&nbsp;|&nbsp;&nbsp; Resistance (CE Ask) →',
             range=[-max_qty * 1.35, max_qty * 1.35],
             zeroline=True,
-            zerolinecolor='#FFD700',
+            zerolinecolor='#8a6f00',
             zerolinewidth=2,
             tickformat=',.0f',
             tickvals=[-max_qty, -max_qty // 2, 0, max_qty // 2, max_qty],
@@ -5018,7 +5018,7 @@ def plot_depth_levels(df_summary, underlying_price=None):
         annotations=[dict(
             x=0.02, y=1.08, xref='paper', yref='paper',
             text="🟢 Support Levels (Largest bid quantities) &nbsp;&nbsp; 🔴 Resistance Levels (Largest ask quantities)",
-            showarrow=False, font=dict(color='white', size=11)
+            showarrow=False, font=dict(color='#111', size=11)
         )],
     )
     return fig
@@ -7269,14 +7269,15 @@ def display_analytics_dashboard(db, symbol="NIFTY50"):
                 y=analytics_df['day_close'],
                 mode='lines+markers',
                 name='Close Price',
-                line=dict(color='#00ff88', width=2)
+                line=dict(color='#007a42', width=2)
             ))
             
             fig_price.update_layout(
                 title="30-Day Price Trend",
                 template='plotly_white',
                 height=300,
-                margin=dict(l=0, r=0, t=30, b=0)
+                margin=dict(l=0, r=0, t=30, b=0),
+        font=dict(color='#111'),
             )
             st.plotly_chart(fig_price, use_container_width=True)
         
@@ -7293,7 +7294,8 @@ def display_analytics_dashboard(db, symbol="NIFTY50"):
                 title="30-Day Volume Trend",
                 template='plotly_white',
                 height=300,
-                margin=dict(l=0, r=0, t=30, b=0)
+                margin=dict(l=0, r=0, t=30, b=0),
+        font=dict(color='#111'),
             )
             st.plotly_chart(fig_volume, use_container_width=True)
         
@@ -12068,10 +12070,10 @@ def show_global_correlation_engine():
         fig_gc.update_layout(
             height=240, margin=dict(l=10, r=10, t=40, b=60),
             paper_bgcolor="white", plot_bgcolor="white",
-            font=dict(color="#ccc", size=10),
-            yaxis=dict(zeroline=True, zerolinecolor="#555", gridcolor="#ddd",
+            font=dict(color="#333", size=10),
+            yaxis=dict(zeroline=True, zerolinecolor="#555", gridcolor="#555",
                        title="NIFTY Impact (–bear … +bull)"),
-            xaxis=dict(tickangle=-35, gridcolor="#ddd"),
+            xaxis=dict(tickangle=-35, gridcolor="#555"),
             title=dict(text=f"Global Market Contributions to NIFTY Bias → Score: {gcorr_signal:+.3f}",
                        font=dict(size=12)),
         )
@@ -12969,10 +12971,10 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
     _fig_radar.update_layout(
         height=260, margin=dict(l=10, r=10, t=30, b=60),
         paper_bgcolor='white', plot_bgcolor='white',
-        font=dict(color='#ccc', size=10),
+        font=dict(color='#333', size=10),
         yaxis=dict(range=[-1.2, 1.2], zeroline=True, zerolinecolor='#555',
-                   gridcolor='#ddd', title='Signal Value (-1 bear … +1 bull)'),
-        xaxis=dict(tickangle=-35, gridcolor='#ddd'),
+                   gridcolor='#555', title='Signal Value (-1 bear … +1 bull)'),
+        xaxis=dict(tickangle=-35, gridcolor='#555'),
         title=dict(text='ML Feature Vector — 24 signals normalised to -1…+1', font=dict(size=12)),
     )
     _fig_radar.add_hline(y=0.12,  line_dash='dash', line_color='#00C853', line_width=1)
@@ -13097,7 +13099,7 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
             margin=dict(l=10, r=55, t=4, b=4),
             paper_bgcolor='white',
             plot_bgcolor='white',
-            font=dict(color='#ccc', size=11),
+            font=dict(color='#333', size=11),
             xaxis=dict(range=[-1.2, 1.2], zeroline=True, zerolinecolor='#555',
                        gridcolor='#1e1e1e', showticklabels=False),
             yaxis=dict(gridcolor='#1e1e1e'),
@@ -13277,10 +13279,10 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
     _fig_c.update_layout(
         height=230, margin=dict(l=10, r=10, t=30, b=60),
         paper_bgcolor='white', plot_bgcolor='white',
-        font=dict(color='#ccc', size=10),
-        yaxis=dict(zeroline=True, zerolinecolor='#555', gridcolor='#ddd',
+        font=dict(color='#333', size=10),
+        yaxis=dict(zeroline=True, zerolinecolor='#555', gridcolor='#555',
                    title='Contribution to ensemble score'),
-        xaxis=dict(tickangle=-35, gridcolor='#ddd'),
+        xaxis=dict(tickangle=-35, gridcolor='#555'),
         title=dict(text=f'Weighted Contributions → Final Score: {ensemble_score:+.3f}', font=dict(size=12)),
     )
     st.plotly_chart(_fig_c, use_container_width=True)
@@ -13316,7 +13318,7 @@ def show_ml_market_report(option_data=None, df=None, current_price=None):
             height=200, margin=dict(l=10, r=60, t=35, b=30),
             paper_bgcolor='white', plot_bgcolor='white',
             font=dict(color='#222'),
-            xaxis=dict(gridcolor='#ddd'), yaxis=dict(gridcolor='#ddd', range=[-1.1, 1.1]),
+            xaxis=dict(gridcolor='#555'), yaxis=dict(gridcolor='#555', range=[-1.1, 1.1]),
             showlegend=False,
         )
         st.plotly_chart(_fig_mh, use_container_width=True)
@@ -17017,11 +17019,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     fill='tozeroy', fillcolor='rgba(0,170,255,0.08)'
                 ))
                 _y_max = max(abs(_cs_df['score_pct'].max()), abs(_cs_df['score_pct'].min()), 30) * 1.2
-                _fig_cs.add_hline(y=0, line_dash="dash", line_color="white", line_width=1.5,
+                _fig_cs.add_hline(y=0, line_dash="dash", line_color="#111", line_width=1.5,
                                   annotation_text="Neutral (0%)", annotation_position="right")
-                _fig_cs.add_hline(y=15, line_dash="dot", line_color="#00ff88", line_width=1,
+                _fig_cs.add_hline(y=15, line_dash="dot", line_color="#007a42", line_width=1,
                                   annotation_text="Bullish Zone", annotation_position="right")
-                _fig_cs.add_hline(y=-15, line_dash="dot", line_color="#ff4444", line_width=1,
+                _fig_cs.add_hline(y=-15, line_dash="dot", line_color="#cc0000", line_width=1,
                                   annotation_text="Bearish Zone", annotation_position="right")
                 _fig_cs.add_hrect(y0=15, y1=_y_max, fillcolor="rgba(0,255,136,0.06)", line_width=0)
                 _fig_cs.add_hrect(y0=-_y_max, y1=-15, fillcolor="rgba(255,68,68,0.06)", line_width=0)
@@ -17032,7 +17034,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_cs.add_annotation(
                             x=_crow['time'], y=_crow['score_pct'],
                             text=_crow['verdict'], showarrow=False,
-                            yshift=14, font=dict(size=8, color='white'),
+                            yshift=14, font=dict(size=8, color='#111'),
                             bgcolor='rgba(0,0,0,0.5)', borderpad=2
                         )
                 # Companion: PCR + GEX sub-charts inline
@@ -17043,9 +17045,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         template='plotly_white', height=360,
                         showlegend=False,
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time'),
-                        yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
+                        yaxis=dict(title='Score %', zeroline=True, zerolinecolor='#111'),
                         plot_bgcolor='white', paper_bgcolor='white',
-                        margin=dict(l=50, r=60, t=55, b=40)
+                        margin=dict(l=50, r=60, t=55, b=40),
+        font=dict(color='#111'),
                     )
                     st.plotly_chart(_fig_cs, use_container_width=True, key=f"{idx_key}_pc003")
                 with _cc2:
@@ -17066,12 +17069,12 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_cs2.add_trace(go.Scatter(
                             x=_cs_df['time'], y=_cs_df['total_gex'],
                             mode='lines', name='GEX (L)',
-                            line=dict(color='#FFD700', width=2, dash='dot'),
+                            line=dict(color='#8a6f00', width=2, dash='dot'),
                             yaxis='y2'
                         ))
-                    _fig_cs2.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
-                    _fig_cs2.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
-                    _fig_cs2.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
+                    _fig_cs2.add_hline(y=1.2, line_dash="dot", line_color="#007a42", line_width=1)
+                    _fig_cs2.add_hline(y=0.7, line_dash="dot", line_color="#cc0000", line_width=1)
+                    _fig_cs2.add_hline(y=1.0, line_dash="dash", line_color="#111", line_width=1)
                     _pcr_all = _cs_df['avg_pcr'].dropna().tolist() + _cs_df['avg_chgoi'].dropna().tolist() + [0.7, 1.2]
                     _fig_cs2.update_layout(
                         title="PCR OI · PCR ΔOI · GEX",
@@ -17083,7 +17086,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         yaxis2=dict(title='GEX (L)', overlaying='y', side='right',
                                     showgrid=False, zeroline=True, zerolinecolor='rgba(255,255,255,0.3)'),
                         plot_bgcolor='white', paper_bgcolor='white',
-                        margin=dict(l=40, r=55, t=55, b=40)
+                        margin=dict(l=40, r=55, t=55, b=40),
+        font=dict(color='#111'),
                     )
                     st.plotly_chart(_fig_cs2, use_container_width=True, key=f"{idx_key}_pc004")
 
@@ -17713,8 +17717,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 title=f'Straddle Engine — ATM: ₹{_pro_atm_straddle:.0f}',
                                 height=280, template='plotly_white',
                                 margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                                yaxis=dict(gridcolor='#ddd', title='₹ Straddle'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                                yaxis=dict(gridcolor='#555', title='₹ Straddle'),
                                 showlegend=True,
                                 legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
                                 paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
@@ -17750,8 +17754,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 title=f'IV Skew Engine — PE−CE: {_pro_market_iv_sk:+.1f}',
                                 height=280, template='plotly_white',
                                 margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                                yaxis=dict(gridcolor='#ddd', title='IV %'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                                yaxis=dict(gridcolor='#555', title='IV %'),
                                 showlegend=True,
                                 legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
                                 paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
@@ -17798,8 +17802,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 title=f'PCR Engine — OI:{_pro_pcr_oi:.2f} Vol:{_pro_pcr_vol:.2f} ΔOI:{_pro_pcr_chg:.2f}',
                                 height=280, template='plotly_white',
                                 margin=dict(l=40, r=40, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                                yaxis=dict(gridcolor='#ddd', title='PCR'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                                yaxis=dict(gridcolor='#555', title='PCR'),
                                 showlegend=True,
                                 legend=dict(orientation='h', y=-0.35, font=dict(size=9)),
                                 paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
@@ -17815,27 +17819,27 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _fig_gam.add_trace(go.Scatter(
                                     x=_pro_h_df['time'], y=_gv,
                                     mode='lines+markers', name='Net GEX (L)',
-                                    line=dict(color='#FFD740', width=2),
+                                    line=dict(color='#8a6f00', width=2),
                                     marker=dict(size=4,
                                                 color=['#00C853' if v >= 0 else '#FF5252' for v in _gv]),
                                     fill='tozeroy', fillcolor='rgba(255,215,0,0.08)'
                                 ))
-                                _fig_gam.add_hline(y=0, line_color='white', line_width=1.5)
+                                _fig_gam.add_hline(y=0, line_color='#111', line_width=1.5)
                                 _fig_gam.add_trace(go.Scatter(
                                     x=[_pro_h_df['time'].iloc[-1]], y=[_g_cur],
                                     mode='markers+text', text=[f'{_g_cur:+.1f}L'],
                                     textposition='top right',
-                                    textfont=dict(size=9, color='#FFD740'),
-                                    marker=dict(size=9, color='#FFD740', symbol='circle'),
+                                    textfont=dict(size=9, color='#8a6f00'),
+                                    marker=dict(size=9, color='#8a6f00', symbol='circle'),
                                     showlegend=False, hoverinfo='skip'
                                 ))
                             _fig_gam.update_layout(
                                 title=f'Gamma Pressure — {_pro_market_mode} (GEX: {_pro_net_gex:+.1f}L)',
                                 height=280, template='plotly_white',
                                 margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                                yaxis=dict(gridcolor='#ddd', title='GEX (L)',
-                                           zeroline=True, zerolinecolor='white'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                                yaxis=dict(gridcolor='#555', title='GEX (L)',
+                                           zeroline=True, zerolinecolor='#111'),
                                 showlegend=False,
                                 paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
@@ -17873,8 +17877,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 title=f'Bid/Ask Pressure — C:{_pro_call_pres:.3f} P:{_pro_put_pres:.3f}',
                                 height=250, template='plotly_white',
                                 margin=dict(l=30, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                                yaxis=dict(gridcolor='#ddd', range=[0, 1], title='Pressure'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                                yaxis=dict(gridcolor='#555', range=[0, 1], title='Pressure'),
                                 showlegend=True,
                                 legend=dict(orientation='h', y=-0.4, font=dict(size=9)),
                                 paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
@@ -17894,28 +17898,28 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _fig_nd.add_trace(go.Scatter(
                                     x=_pro_h_df['time'], y=_nd_vals,
                                     mode='lines+markers', name='Net Delta',
-                                    line=dict(color='#00BCD4', width=2),
+                                    line=dict(color='#006680', width=2),
                                     marker=dict(
                                         size=4,
                                         color=['#00C853' if v >= 0 else '#FF5252' for v in _nd_vals]),
                                     fill='tozeroy', fillcolor='rgba(0,188,212,0.08)'
                                 ))
-                                _fig_nd.add_hline(y=0, line_color='white', line_width=1)
+                                _fig_nd.add_hline(y=0, line_color='#111', line_width=1)
                                 _fig_nd.add_trace(go.Scatter(
                                     x=[_pro_h_df['time'].iloc[-1]], y=[_nd_cur],
                                     mode='markers+text', text=[f'{_nd_cur:+.0f}'],
                                     textposition='top right',
-                                    textfont=dict(size=9, color='#00BCD4'),
-                                    marker=dict(size=9, color='#00BCD4', symbol='circle'),
+                                    textfont=dict(size=9, color='#006680'),
+                                    marker=dict(size=9, color='#006680', symbol='circle'),
                                     showlegend=False, hoverinfo='skip'
                                 ))
                             _fig_nd.update_layout(
                                 title=f'Net Delta Shift — {_pro_net_delta:+,.0f}',
                                 height=250, template='plotly_white',
                                 margin=dict(l=40, r=20, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                                yaxis=dict(gridcolor='#ddd', title='Net Δ', zeroline=True,
-                                           zerolinecolor='white'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                                yaxis=dict(gridcolor='#555', title='Net Δ', zeroline=True,
+                                           zerolinecolor='#111'),
                                 showlegend=False,
                                 paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
@@ -17951,8 +17955,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 title=f'Breakout Probability — {_pro_score}/100',
                                 height=250, template='plotly_white',
                                 margin=dict(l=30, r=50, t=45, b=30),
-                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                                yaxis=dict(gridcolor='#ddd', range=[0, 105], title='Score'),
+                                xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                                yaxis=dict(gridcolor='#555', range=[0, 105], title='Score'),
                                 showlegend=False,
                                 paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'),
                             )
@@ -17987,7 +17991,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 y=_sent_h_df['total_gex'].apply(
                                     lambda x: max(0, min(100, (x + 100) / 2))),
                                 mode='lines', name='GEX (scaled)',
-                                line=dict(color='#FFD740', width=1.5, dash='dot')))
+                                line=dict(color='#8a6f00', width=1.5, dash='dot')))
                         _fig_sent.add_hline(y=70, line_dash='dot',
                             line_color='rgba(0,255,136,0.5)', line_width=1,
                             annotation_text='Bullish 70', annotation_position='right',
@@ -18003,8 +18007,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_sent.update_layout(
                             title=f'Options Flow Sentiment — Current: {_sentiment_score}/100 ({_sent_verdict})',
                             height=320, template='plotly_white',
-                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                            yaxis=dict(title='Score (0–100)', range=[0, 105], gridcolor='#ddd'),
+                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                            yaxis=dict(title='Score (0–100)', range=[0, 105], gridcolor='#555'),
                             legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
                             margin=dict(l=40, r=65, t=45, b=30),
                             paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'))
@@ -18329,12 +18333,12 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             x=_itm_chart_times,
                             y=[_itm_spot] * len(_itm_chart_times),
                             mode='lines', name='Spot Price',
-                            line=dict(color='#FFD740', width=2)))
+                            line=dict(color='#8a6f00', width=2)))
                         _fig_itm.update_layout(
                             title=f"Institutional Trade Map — Spot: {_itm_spot:,.0f}",
                             height=350, template='plotly_white',
-                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#ddd'),
-                            yaxis=dict(title='Price', gridcolor='#ddd'),
+                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), gridcolor='#555'),
+                            yaxis=dict(title='Price', gridcolor='#555'),
                             legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
                             margin=dict(l=40, r=120, t=45, b=30),
                             paper_bgcolor='white', plot_bgcolor='white', font=dict(color='#222'))
@@ -18388,9 +18392,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 ))
 
                 # Reference lines
-                fig.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
-                fig.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
-                fig.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
+                fig.add_hline(y=1.0, line_dash="dash", line_color="#111", line_width=1)
+                fig.add_hline(y=1.2, line_dash="dot", line_color="#007a42", line_width=1)
+                fig.add_hline(y=0.7, line_dash="dot", line_color="#cc0000", line_width=1)
 
                 # Get current PCR value
                 current_pcr = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
@@ -18410,7 +18414,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                     yaxis=dict(title='PCR', range=[_pcr_ymin, _pcr_ymax]),
                     plot_bgcolor='white',
-                    paper_bgcolor='white'
+                    paper_bgcolor='white',
+        font=dict(color='#111'),
                 )
                 return fig, current_pcr
             return None, 0
@@ -18434,10 +18439,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     fill='tozeroy',
                     fillcolor=f'rgba{tuple(list(int(color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4)) + [0.15])}'
                 ))
-                fig.add_hline(y=0, line_dash="solid", line_color="white", line_width=2)
-                fig.add_hline(y=10, line_dash="dot", line_color="#00ff88", line_width=1,
+                fig.add_hline(y=0, line_dash="solid", line_color="#111", line_width=2)
+                fig.add_hline(y=10, line_dash="dot", line_color="#007a42", line_width=1,
                               annotation_text="+10", annotation_position="right")
-                fig.add_hline(y=-10, line_dash="dot", line_color="#ff4444", line_width=1,
+                fig.add_hline(y=-10, line_dash="dot", line_color="#cc0000", line_width=1,
                               annotation_text="-10", annotation_position="right")
                 current_gex = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
                 fig.update_layout(
@@ -18446,10 +18451,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     margin=dict(l=10, r=10, t=70, b=30),
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                     yaxis=dict(title='GEX (L)', range=y_range, zeroline=True,
-                               zerolinecolor='white', zerolinewidth=2,
+                               zerolinecolor='#111', zerolinewidth=2,
                                tickmode='array',
                                tickvals=[-20, -10, 0, 10, 20] if max_abs <= 25 else None),
-                    plot_bgcolor='white', paper_bgcolor='white'
+                    plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                 )
                 return fig, current_gex
             return None, 0
@@ -18642,7 +18648,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 y=history_df[strike_col],
                                 mode='lines+markers',
                                 name='PCR OI',
-                                line=dict(color='#00ccff', width=2),
+                                line=dict(color='#0077aa', width=2),
                                 marker=dict(size=3),
                             ))
 
@@ -18653,17 +18659,17 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 y=chgoi_history_df[strike_col],
                                 mode='lines+markers',
                                 name='PCR ChgOI',
-                                line=dict(color='#ffaa00', width=2, dash='dash'),
+                                line=dict(color='#885500', width=2, dash='dash'),
                                 marker=dict(size=3),
                             ))
 
                         # PCR reference lines
                         fig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.533)", line_width=1,
                                       annotation_text="Bull 1.2", annotation_position="right",
-                                      annotation_font_size=8, annotation_font_color="#00ff88")
+                                      annotation_font_size=8, annotation_font_color="#007a42")
                         fig.add_hline(y=0.7, line_dash="dot", line_color="rgba(255,68,68,0.533)", line_width=1,
                                       annotation_text="Bear 0.7", annotation_position="right",
-                                      annotation_font_size=8, annotation_font_color="#ff4444")
+                                      annotation_font_size=8, annotation_font_color="#cc0000")
 
                         # Dynamic Y range: include both OI PCR and ChgOI PCR values + thresholds
                         _cmp_vals = []
@@ -18681,8 +18687,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             fig.add_trace(go.Scatter(
                                 x=[history_df['time'].iloc[-1]], y=[_pcr_cur],
                                 mode='markers+text', text=[f'{_pcr_cur:.2f}'],
-                                textposition='top right', textfont=dict(size=9, color='#00ccff'),
-                                marker=dict(size=9, color='#00ccff', symbol='circle'),
+                                textposition='top right', textfont=dict(size=9, color='#0077aa'),
+                                marker=dict(size=9, color='#0077aa', symbol='circle'),
                                 showlegend=False, hoverinfo='skip',
                             ))
                         if chgoi_history_df is not None and strike_col in chgoi_history_df.columns and len(chgoi_history_df) > 0:
@@ -18690,8 +18696,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             fig.add_trace(go.Scatter(
                                 x=[chgoi_history_df['time'].iloc[-1]], y=[_chgoi_cur],
                                 mode='markers+text', text=[f'{_chgoi_cur:.2f}'],
-                                textposition='bottom right', textfont=dict(size=9, color='#ffaa00'),
-                                marker=dict(size=9, color='#ffaa00', symbol='diamond'),
+                                textposition='bottom right', textfont=dict(size=9, color='#885500'),
+                                marker=dict(size=9, color='#885500', symbol='diamond'),
                                 showlegend=False, hoverinfo='skip',
                             ))
 
@@ -18707,6 +18713,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             yaxis=dict(title='PCR', range=[_cmp_ymin, _cmp_ymax]),
                             plot_bgcolor='white',
                             paper_bgcolor='white',
+        font=dict(color='#111'),
                         )
 
                         st.plotly_chart(fig, use_container_width=True, key=f"{idx_key}_pc014_{i}")
@@ -18744,7 +18751,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     y=history_df[_sc],
                                     mode='lines',
                                     name='PCR OI',
-                                    line=dict(color='#00ccff', width=2),
+                                    line=dict(color='#0077aa', width=2),
                                     showlegend=(_i == 0),
                                 ), row=1, col=_col_idx)
                             if chgoi_history_df is not None and _sc in chgoi_history_df.columns:
@@ -18753,7 +18760,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     y=chgoi_history_df[_sc],
                                     mode='lines',
                                     name='ChgOI PCR',
-                                    line=dict(color='#ffaa00', width=2, dash='dash'),
+                                    line=dict(color='#885500', width=2, dash='dash'),
                                     showlegend=(_i == 0),
                                 ), row=1, col=_col_idx)
                             _tg_fig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.5)",
@@ -18769,6 +18776,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             plot_bgcolor='white',
                             margin=dict(l=10, r=10, t=80, b=40),
                             legend=dict(orientation='h', yanchor='bottom', y=1.06, xanchor='center', x=0.5),
+        font=dict(color='#111'),
                         )
                         _tg_fig.update_xaxes(tickformat='%H:%M', range=_mkt_range(), tickfont=dict(size=8))
                         _tg_fig.update_yaxes(title_text='PCR', tickfont=dict(size=8))
@@ -18833,7 +18841,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             ))
                             fig_gex.update_layout(yaxis=dict(
                                 range=[-max_abs * 1.1, max_abs * 1.1],
-                                zeroline=True, zerolinecolor='white', zerolinewidth=2,
+                                zeroline=True, zerolinecolor='#111', zerolinewidth=2,
                             ))
                         elif strike in cur_gex_vals:
                             fig_gex.add_trace(go.Scatter(
@@ -18844,15 +18852,15 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 marker=dict(size=14, color=clr, symbol='diamond'),
                                 text=[f'{cur_gex:+.1f}L'],
                                 textposition='top center',
-                                textfont=dict(size=10, color='white'),
+                                textfont=dict(size=10, color='#111'),
                             ))
                         fig_gex.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.4)", line_width=1)
                         fig_gex.add_hline(y=10, line_dash="dot", line_color="rgba(0,255,136,0.4)", line_width=1,
                                           annotation_text="+10", annotation_position="right",
-                                          annotation_font_size=8, annotation_font_color="#00ff88")
+                                          annotation_font_size=8, annotation_font_color="#007a42")
                         fig_gex.add_hline(y=-10, line_dash="dot", line_color="rgba(255,68,68,0.4)", line_width=1,
                                           annotation_text="-10", annotation_position="right",
-                                          annotation_font_size=8, annotation_font_color="#ff4444")
+                                          annotation_font_size=8, annotation_font_color="#cc0000")
                         # Current value marker (present value shown in graph)
                         if has_gex_hist and gex_hist_df is not None and strike_col in gex_hist_df.columns and len(gex_hist_df) > 0:
                             fig_gex.add_trace(go.Scatter(
@@ -18952,7 +18960,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cp_fig.add_trace(go.Scatter(
                                 x=_cp_ce_df['time'], y=_cp_ce_df[_cp_sc],
                                 mode='lines+markers', name='Call OI',
-                                line=dict(color='#ff4444', width=2),
+                                line=dict(color='#cc0000', width=2),
                                 marker=dict(size=3),
                             ))
                         # PE OI (dashed green)
@@ -18960,7 +18968,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cp_fig.add_trace(go.Scatter(
                                 x=_cp_pe_df['time'], y=_cp_pe_df[_cp_sc],
                                 mode='lines+markers', name='Put OI',
-                                line=dict(color='#00ff88', width=2, dash='dash'),
+                                line=dict(color='#007a42', width=2, dash='dash'),
                                 marker=dict(size=3),
                             ))
 
@@ -18984,8 +18992,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cp_fig.add_trace(go.Scatter(
                                 x=[_cp_ce_df['time'].iloc[-1]], y=[_cp_ce_cur],
                                 mode='markers+text', text=[f'{_cp_ce_cur:,.0f}'],
-                                textposition='top right', textfont=dict(size=9, color='#ff4444'),
-                                marker=dict(size=9, color='#ff4444', symbol='circle'),
+                                textposition='top right', textfont=dict(size=9, color='#cc0000'),
+                                marker=dict(size=9, color='#cc0000', symbol='circle'),
                                 showlegend=False, hoverinfo='skip',
                             ))
                         if _cp_sc in _cp_pe_df.columns and len(_cp_pe_df) > 0:
@@ -18993,8 +19001,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cp_fig.add_trace(go.Scatter(
                                 x=[_cp_pe_df['time'].iloc[-1]], y=[_cp_pe_cur],
                                 mode='markers+text', text=[f'{_cp_pe_cur:,.0f}'],
-                                textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
-                                marker=dict(size=9, color='#00ff88', symbol='diamond'),
+                                textposition='bottom right', textfont=dict(size=9, color='#007a42'),
+                                marker=dict(size=9, color='#007a42', symbol='diamond'),
                                 showlegend=False, hoverinfo='skip',
                             ))
 
@@ -19013,6 +19021,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                             yaxis=dict(title='OI', range=[_cp_oi_ymin, _cp_oi_ymax]),
                             plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                         )
                         st.plotly_chart(_cp_fig, use_container_width=True, key=f"{idx_key}_pc016_{_ci}")
 
@@ -19044,7 +19053,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _chg_fig.add_trace(go.Scatter(
                                     x=_cp_ce_chg_df['time'], y=_cp_ce_chg_df[_cp_sc],
                                     mode='lines+markers', name='CE ΔOI',
-                                    line=dict(color='#ff4444', width=2),
+                                    line=dict(color='#cc0000', width=2),
                                     marker=dict(size=3),
                                 ))
                             # PE ΔOI (dashed green)
@@ -19052,7 +19061,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _chg_fig.add_trace(go.Scatter(
                                     x=_cp_pe_chg_df['time'], y=_cp_pe_chg_df[_cp_sc],
                                     mode='lines+markers', name='PE ΔOI',
-                                    line=dict(color='#00ff88', width=2, dash='dash'),
+                                    line=dict(color='#007a42', width=2, dash='dash'),
                                     marker=dict(size=3),
                                 ))
 
@@ -19080,8 +19089,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _chg_fig.add_trace(go.Scatter(
                                     x=[_cp_ce_chg_df['time'].iloc[-1]], y=[_chg_ce_cur],
                                     mode='markers+text', text=[f'{_chg_ce_cur:+,.0f}'],
-                                    textposition='top right', textfont=dict(size=9, color='#ff4444'),
-                                    marker=dict(size=9, color='#ff4444', symbol='circle'),
+                                    textposition='top right', textfont=dict(size=9, color='#cc0000'),
+                                    marker=dict(size=9, color='#cc0000', symbol='circle'),
                                     showlegend=False, hoverinfo='skip',
                                 ))
                             if _cp_sc in _cp_pe_chg_df.columns and len(_cp_pe_chg_df) > 0:
@@ -19089,8 +19098,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _chg_fig.add_trace(go.Scatter(
                                     x=[_cp_pe_chg_df['time'].iloc[-1]], y=[_chg_pe_cur],
                                     mode='markers+text', text=[f'{_chg_pe_cur:+,.0f}'],
-                                    textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
-                                    marker=dict(size=9, color='#00ff88', symbol='diamond'),
+                                    textposition='bottom right', textfont=dict(size=9, color='#007a42'),
+                                    marker=dict(size=9, color='#007a42', symbol='diamond'),
                                     showlegend=False, hoverinfo='skip',
                                 ))
 
@@ -19107,8 +19116,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 margin=dict(l=5, r=10, t=70, b=30),
                                 xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                                 yaxis=dict(title='ΔOI', range=[_chg_ymin, _chg_ymax],
-                                           zeroline=True, zerolinecolor='white', zerolinewidth=1),
+                                           zeroline=True, zerolinecolor='#111', zerolinewidth=1),
                                 plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                             )
                             st.plotly_chart(_chg_fig, use_container_width=True, key=f"{idx_key}_pc017_{_ci}")
 
@@ -19145,14 +19155,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _cp_tg_fig.add_trace(go.Scatter(
                                     x=_cp_ce_df['time'], y=_cp_ce_df[_csc],
                                     mode='lines', name='Call OI',
-                                    line=dict(color='#ff4444', width=2),
+                                    line=dict(color='#cc0000', width=2),
                                     showlegend=(_ci == 0),
                                 ), row=1, col=_col_idx)
                             if _csc in _cp_pe_df.columns:
                                 _cp_tg_fig.add_trace(go.Scatter(
                                     x=_cp_pe_df['time'], y=_cp_pe_df[_csc],
                                     mode='lines', name='Put OI',
-                                    line=dict(color='#00ff88', width=2, dash='dash'),
+                                    line=dict(color='#007a42', width=2, dash='dash'),
                                     showlegend=(_ci == 0),
                                 ), row=1, col=_col_idx)
                             if _has_chg:
@@ -19160,14 +19170,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     _cp_tg_fig.add_trace(go.Scatter(
                                         x=_cp_ce_chg_df['time'], y=_cp_ce_chg_df[_csc],
                                         mode='lines', name='CE ΔOI',
-                                        line=dict(color='#ff4444', width=2),
+                                        line=dict(color='#cc0000', width=2),
                                         showlegend=(_ci == 0),
                                     ), row=2, col=_col_idx)
                                 if _csc in _cp_pe_chg_df.columns:
                                     _cp_tg_fig.add_trace(go.Scatter(
                                         x=_cp_pe_chg_df['time'], y=_cp_pe_chg_df[_csc],
                                         mode='lines', name='PE ΔOI',
-                                        line=dict(color='#00ff88', width=2, dash='dash'),
+                                        line=dict(color='#007a42', width=2, dash='dash'),
                                         showlegend=(_ci == 0),
                                     ), row=2, col=_col_idx)
                         _cp_tg_fig.update_layout(
@@ -19177,6 +19187,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             paper_bgcolor='white', plot_bgcolor='white',
                             margin=dict(l=10, r=10, t=80, b=40),
                             legend=dict(orientation='h', yanchor='bottom', y=1.06, xanchor='center', x=0.5),
+        font=dict(color='#111'),
                         )
                         _cp_tg_fig.update_xaxes(tickformat='%H:%M', range=_mkt_range(), tickfont=dict(size=8))
                         _cp_tg_fig.update_yaxes(tickfont=dict(size=8))
@@ -19247,7 +19258,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cv_fig.add_trace(go.Scatter(
                                 x=_cv_ce_df['time'], y=_cv_ce_df[_cv_sc],
                                 mode='lines+markers', name='Call Vol',
-                                line=dict(color='#ff4444', width=2),
+                                line=dict(color='#cc0000', width=2),
                                 marker=dict(size=3),
                             ))
                         # PE Volume (solid green)
@@ -19255,7 +19266,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cv_fig.add_trace(go.Scatter(
                                 x=_cv_pe_df['time'], y=_cv_pe_df[_cv_sc],
                                 mode='lines+markers', name='Put Vol',
-                                line=dict(color='#00ff88', width=2, dash='dash'),
+                                line=dict(color='#007a42', width=2, dash='dash'),
                                 marker=dict(size=3),
                             ))
 
@@ -19279,8 +19290,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cv_fig.add_trace(go.Scatter(
                                 x=[_cv_ce_df['time'].iloc[-1]], y=[_cv_ce_cur],
                                 mode='markers+text', text=[f'{_cv_ce_cur:,.0f}'],
-                                textposition='top right', textfont=dict(size=9, color='#ff4444'),
-                                marker=dict(size=9, color='#ff4444', symbol='circle'),
+                                textposition='top right', textfont=dict(size=9, color='#cc0000'),
+                                marker=dict(size=9, color='#cc0000', symbol='circle'),
                                 showlegend=False, hoverinfo='skip',
                             ))
                         if _cv_sc in _cv_pe_df.columns and len(_cv_pe_df) > 0:
@@ -19288,8 +19299,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             _cv_fig.add_trace(go.Scatter(
                                 x=[_cv_pe_df['time'].iloc[-1]], y=[_cv_pe_cur],
                                 mode='markers+text', text=[f'{_cv_pe_cur:,.0f}'],
-                                textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
-                                marker=dict(size=9, color='#00ff88', symbol='diamond'),
+                                textposition='bottom right', textfont=dict(size=9, color='#007a42'),
+                                marker=dict(size=9, color='#007a42', symbol='diamond'),
                                 showlegend=False, hoverinfo='skip',
                             ))
 
@@ -19308,6 +19319,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                             yaxis=dict(title='Volume', range=[_cv_ymin, _cv_ymax]),
                             plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                         )
                         st.plotly_chart(_cv_fig, use_container_width=True, key=f"{idx_key}_pc018_{_vi}")
 
@@ -19339,7 +19351,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _cvchg_fig.add_trace(go.Scatter(
                                     x=_cv_ce_chg_df['time'], y=_cv_ce_chg_df[_cv_sc],
                                     mode='lines+markers', name='CE ΔVol',
-                                    line=dict(color='#ff4444', width=2),
+                                    line=dict(color='#cc0000', width=2),
                                     marker=dict(size=3),
                                 ))
                             # PE ΔVol (solid green)
@@ -19347,7 +19359,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _cvchg_fig.add_trace(go.Scatter(
                                     x=_cv_pe_chg_df['time'], y=_cv_pe_chg_df[_cv_sc],
                                     mode='lines+markers', name='PE ΔVol',
-                                    line=dict(color='#00ff88', width=2, dash='dash'),
+                                    line=dict(color='#007a42', width=2, dash='dash'),
                                     marker=dict(size=3),
                                 ))
 
@@ -19375,8 +19387,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _cvchg_fig.add_trace(go.Scatter(
                                     x=[_cv_ce_chg_df['time'].iloc[-1]], y=[_cvchg_ce_cur],
                                     mode='markers+text', text=[f'{_cvchg_ce_cur:+,.0f}'],
-                                    textposition='top right', textfont=dict(size=9, color='#ff4444'),
-                                    marker=dict(size=9, color='#ff4444', symbol='circle'),
+                                    textposition='top right', textfont=dict(size=9, color='#cc0000'),
+                                    marker=dict(size=9, color='#cc0000', symbol='circle'),
                                     showlegend=False, hoverinfo='skip',
                                 ))
                             if _cv_sc in _cv_pe_chg_df.columns and len(_cv_pe_chg_df) > 0:
@@ -19384,8 +19396,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 _cvchg_fig.add_trace(go.Scatter(
                                     x=[_cv_pe_chg_df['time'].iloc[-1]], y=[_cvchg_pe_cur],
                                     mode='markers+text', text=[f'{_cvchg_pe_cur:+,.0f}'],
-                                    textposition='bottom right', textfont=dict(size=9, color='#00ff88'),
-                                    marker=dict(size=9, color='#00ff88', symbol='diamond'),
+                                    textposition='bottom right', textfont=dict(size=9, color='#007a42'),
+                                    marker=dict(size=9, color='#007a42', symbol='diamond'),
                                     showlegend=False, hoverinfo='skip',
                                 ))
 
@@ -19402,8 +19414,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                 margin=dict(l=5, r=10, t=70, b=30),
                                 xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                                 yaxis=dict(title='ΔVol', range=[_cvchg_ymin, _cvchg_ymax],
-                                           zeroline=True, zerolinecolor='white', zerolinewidth=1),
+                                           zeroline=True, zerolinecolor='#111', zerolinewidth=1),
                                 plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                             )
                             st.plotly_chart(_cvchg_fig, use_container_width=True, key=f"{idx_key}_pc019_{_vi}")
 
@@ -19445,7 +19458,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 ))
 
                 # Zero line
-                _ph_fig.add_hline(y=0, line_dash="solid", line_color="white", line_width=1)
+                _ph_fig.add_hline(y=0, line_dash="solid", line_color="#111", line_width=1)
 
                 # Day High / Day Low markers
                 _ph_day_high = mde.val('day_high')
@@ -19455,14 +19468,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 if _ph_day_open and _ph_day_open > 0:
                     if _ph_day_high:
                         _ph_high_pct = ((_ph_day_high - _ph_day_open) / _ph_day_open) * 100
-                        _ph_fig.add_hline(y=_ph_high_pct, line_dash="dot", line_color="#ff6600", line_width=1,
+                        _ph_fig.add_hline(y=_ph_high_pct, line_dash="dot", line_color="#c04400", line_width=1,
                                           annotation_text=f"Day High {_ph_high_pct:+.2f}%", annotation_position="right",
-                                          annotation_font_size=9, annotation_font_color="#ff6600")
+                                          annotation_font_size=9, annotation_font_color="#c04400")
                     if _ph_day_low:
                         _ph_low_pct = ((_ph_day_low - _ph_day_open) / _ph_day_open) * 100
-                        _ph_fig.add_hline(y=_ph_low_pct, line_dash="dot", line_color="#ff4444", line_width=1,
+                        _ph_fig.add_hline(y=_ph_low_pct, line_dash="dot", line_color="#cc0000", line_width=1,
                                           annotation_text=f"Day Low {_ph_low_pct:+.2f}%", annotation_position="right",
-                                          annotation_font_size=9, annotation_font_color="#ff4444")
+                                          annotation_font_size=9, annotation_font_color="#cc0000")
                     if _ph_vwap and _ph_vwap > 0:
                         _ph_vwap_pct = ((_ph_vwap - _ph_day_open) / _ph_day_open) * 100
                         _ph_fig.add_hline(y=_ph_vwap_pct, line_dash="dash", line_color="#ffeb3b", line_width=1,
@@ -19497,8 +19510,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time'),
                     yaxis=dict(title='Price Change %',
                                range=[-_ph_max_abs * 1.2, _ph_max_abs * 1.2],
-                               zeroline=True, zerolinecolor='white', zerolinewidth=1),
+                               zeroline=True, zerolinecolor='#111', zerolinewidth=1),
                     plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                 )
                 st.plotly_chart(_ph_fig, use_container_width=True, key=f"{idx_key}_pc020")
 
@@ -19820,10 +19834,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 _sop_fig = go.Figure()
                 _sop_fig.add_trace(go.Bar(
                     x=_sop_trend_df['Strike'], y=_sop_trend_df['CE_OI'],
-                    name='CE OI (L)', marker_color='#ff4444', opacity=0.7))
+                    name='CE OI (L)', marker_color='#cc0000', opacity=0.7))
                 _sop_fig.add_trace(go.Bar(
                     x=_sop_trend_df['Strike'], y=_sop_trend_df['PE_OI'],
-                    name='PE OI (L)', marker_color='#00ff88', opacity=0.7))
+                    name='PE OI (L)', marker_color='#007a42', opacity=0.7))
                 _sop_fig.add_trace(go.Bar(
                     x=_sop_trend_df['Strike'], y=_sop_trend_df['CE_Change'],
                     name='CE ΔOI (L)', marker_color='#ff8888', opacity=0.5))
@@ -20050,13 +20064,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         name='CE Bid', marker_color='#ff8888', opacity=0.6))
                     _mdp_fig.add_trace(go.Bar(
                         x=_mdp_df['Strike'], y=_mdp_df['CE_Ask'],
-                        name='CE Ask', marker_color='#ff4444', opacity=0.8))
+                        name='CE Ask', marker_color='#cc0000', opacity=0.8))
                     _mdp_fig.add_trace(go.Bar(
                         x=_mdp_df['Strike'], y=_mdp_df['PE_Bid'],
                         name='PE Bid', marker_color='#88ffaa', opacity=0.6))
                     _mdp_fig.add_trace(go.Bar(
                         x=_mdp_df['Strike'], y=_mdp_df['PE_Ask'],
-                        name='PE Ask', marker_color='#00ff88', opacity=0.8))
+                        name='PE Ask', marker_color='#007a42', opacity=0.8))
                     _mdp_fig.update_layout(
                         barmode='group', height=320,
                         paper_bgcolor='white', plot_bgcolor='white',
@@ -20346,10 +20360,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 _fig_zone.add_trace(go.Scatter(
                     x=_zh_df['time'], y=_zh_df['support_zone'],
                     name='Support Zone', mode='lines+markers',
-                    line=dict(color='#00ff88', width=2, dash='dot'),
+                    line=dict(color='#007a42', width=2, dash='dot'),
                     marker=dict(
                         size=8, color=_sup_colors,
-                        line=dict(width=1, color='white')
+                        line=dict(width=1, color='#111')
                     ),
                 ))
 
@@ -20362,10 +20376,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 _fig_zone.add_trace(go.Scatter(
                     x=_zh_df['time'], y=_zh_df['resistance_zone'],
                     name='Resistance Zone', mode='lines+markers',
-                    line=dict(color='#ff4444', width=2, dash='dot'),
+                    line=dict(color='#cc0000', width=2, dash='dot'),
                     marker=dict(
                         size=8, color=_res_colors,
-                        line=dict(width=1, color='white')
+                        line=dict(width=1, color='#111')
                     ),
                 ))
 
@@ -20386,7 +20400,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         marker=dict(
                             size=14, symbol='star',
                             color=['#00ff88' if s == 'BREAKOUT' else '#ff4444' for s in _sig_df['signal']],
-                            line=dict(width=2, color='white')
+                            line=dict(width=2, color='#111')
                         ),
                     ))
 
@@ -20398,6 +20412,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     xaxis=dict(title='Time', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
                     yaxis=dict(title='Price', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
                     hovermode='x unified',
+        font=dict(color='#111'),
                 )
 
                 st.plotly_chart(_fig_zone, use_container_width=True, key=f"{idx_key}_zone_tracker_chart")
@@ -20408,13 +20423,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 _fig_score.add_trace(go.Scatter(
                     x=_zh_df['time'], y=_zh_df['support_score'],
                     name='Support Strength', mode='lines',
-                    line=dict(color='#00ff88', width=2),
+                    line=dict(color='#007a42', width=2),
                     fill='tozeroy', fillcolor='rgba(0,255,136,0.1)',
                 ))
                 _fig_score.add_trace(go.Scatter(
                     x=_zh_df['time'], y=_zh_df['resistance_score'],
                     name='Resistance Strength', mode='lines',
-                    line=dict(color='#ff4444', width=2),
+                    line=dict(color='#cc0000', width=2),
                     fill='tozeroy', fillcolor='rgba(255,68,68,0.1)',
                 ))
                 _fig_score.update_layout(
@@ -20425,6 +20440,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='Score (0-100)', range=[0, 100],
                                showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
                     hovermode='x unified',
+        font=dict(color='#111'),
                 )
                 st.plotly_chart(_fig_score, use_container_width=True, key=f"{idx_key}_zone_score_chart")
 
@@ -20437,7 +20453,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 _fig_conf.add_trace(go.Scatter(
                     x=_zh_df['time'], y=_zh_df['confidence_score'],
                     name='Confidence %', mode='lines',
-                    line=dict(color='#FFD700', width=2),
+                    line=dict(color='#8a6f00', width=2),
                 ))
                 _fig_conf.add_trace(go.Bar(
                     x=_zh_df['time'], y=_zh_df['_bias_val'] * 50,
@@ -20454,6 +20470,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='Score', showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
                     hovermode='x unified',
                     barmode='overlay',
+        font=dict(color='#111'),
                 )
                 st.plotly_chart(_fig_conf, use_container_width=True, key=f"{idx_key}_zone_confidence_chart")
             else:
@@ -20565,10 +20582,10 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     ))
                     _vfig.add_hline(y=1.2, line_dash="dot", line_color="rgba(0,255,136,0.5)", line_width=1,
                                     annotation_text="Bull 1.2", annotation_position="right",
-                                    annotation_font_size=8, annotation_font_color="#00ff88")
+                                    annotation_font_size=8, annotation_font_color="#007a42")
                     _vfig.add_hline(y=0.7, line_dash="dot", line_color="rgba(255,68,68,0.5)", line_width=1,
                                     annotation_text="Bear 0.7", annotation_position="right",
-                                    annotation_font_size=8, annotation_font_color="#ff4444")
+                                    annotation_font_size=8, annotation_font_color="#cc0000")
                     _vfig.add_hline(y=1.0, line_dash="dash", line_color="rgba(255,255,255,0.3)", line_width=1)
                     # Dynamic Y range: data + thresholds always visible
                     _vp_raw = _vp_hist_df[_vscol].dropna().tolist()
@@ -20582,6 +20599,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                         yaxis=dict(title='Vol PCR', range=[_vp_ymin, _vp_ymax]),
                         plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                     )
                     st.plotly_chart(_vfig, use_container_width=True, key=f"{idx_key}_pc026_{_vi}")
                     _vsig = "🟢 Bull" if _vcur > 1.2 else ("🔴 Bear" if _vcur < 0.7 else "🟡 Ntrl")
@@ -20633,7 +20651,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _sfig.add_trace(go.Scatter(
                             x=_st_df['time'], y=_st_df[_cekey],
                             mode='lines', name='CE',
-                            line=dict(color='#ff4444', width=1, dash='dot'),
+                            line=dict(color='#cc0000', width=1, dash='dot'),
                             hovertemplate='CE: ₹%{y:.2f}<br>%{x|%H:%M}<extra></extra>',
                         ))
                     if _pekey in _st_df.columns:
@@ -20662,6 +20680,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                         yaxis=dict(title='Premium (₹)', range=[_sy_min, _sy_max]),
                         plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                     )
                     st.plotly_chart(_sfig, use_container_width=True, key=f"{idx_key}_pc027_{_si}")
                     _move_lbl = "💥 Explosive" if _st_dir == "rising" else ("🐌 Grinding" if _st_dir == "falling" else "⬛ Range")
@@ -21056,14 +21075,14 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     ))
 
                     # Add zero line
-                    fig_gex.add_hline(y=0, line_dash="dash", line_color="white", line_width=2)
+                    fig_gex.add_hline(y=0, line_dash="dash", line_color="#111", line_width=2)
 
                     # Add gamma flip line if exists
                     if gex_data['gamma_flip_level']:
                         fig_gex.add_vline(
                             x=gex_data['gamma_flip_level'],
                             line_dash="dot",
-                            line_color="#FFD700",
+                            line_color="#8a6f00",
                             line_width=2,
                             annotation_text=f"Gamma Flip: ₹{gex_data['gamma_flip_level']:.0f}",
                             annotation_position="top"
@@ -21088,7 +21107,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         yaxis_title="Net GEX (Lakhs)",
                         plot_bgcolor='white',
                         paper_bgcolor='white',
-                        margin=dict(l=50, r=50, t=60, b=50)
+                        margin=dict(l=50, r=50, t=60, b=50),
+        font=dict(color='#111'),
                     )
 
                     st.plotly_chart(fig_gex, use_container_width=True, key=f"{idx_key}_pc028")
@@ -21274,11 +21294,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 ))
 
                 # Reference zones
-                fig_pcr_chgoi.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1,
+                fig_pcr_chgoi.add_hline(y=1.0, line_dash="dash", line_color="#111", line_width=1,
                                         annotation_text="1.0 (Neutral)", annotation_position="right")
-                fig_pcr_chgoi.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1,
+                fig_pcr_chgoi.add_hline(y=1.2, line_dash="dot", line_color="#007a42", line_width=1,
                                         annotation_text="1.2 (Bullish)", annotation_position="right")
-                fig_pcr_chgoi.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1,
+                fig_pcr_chgoi.add_hline(y=0.7, line_dash="dot", line_color="#cc0000", line_width=1,
                                         annotation_text="0.7 (Bearish)", annotation_position="right")
 
                 # Dynamic Y range: data + reference thresholds always in view
@@ -21300,7 +21320,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(title='PCR (Total PE ΔOI / Total CE ΔOI)', range=[_ov_ymin, _ov_ymax]),
                     plot_bgcolor='white',
                     paper_bgcolor='white',
-                    margin=dict(l=50, r=50, t=60, b=50)
+                    margin=dict(l=50, r=50, t=60, b=50),
+        font=dict(color='#111'),
                 )
 
                 st.plotly_chart(fig_pcr_chgoi, use_container_width=True, key=f"{idx_key}_pc029")
@@ -21344,9 +21365,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 ))
 
                 # Reference lines
-                fig.add_hline(y=1.0, line_dash="dash", line_color="white", line_width=1)
-                fig.add_hline(y=1.2, line_dash="dot", line_color="#00ff88", line_width=1)
-                fig.add_hline(y=0.7, line_dash="dot", line_color="#ff4444", line_width=1)
+                fig.add_hline(y=1.0, line_dash="dash", line_color="#111", line_width=1)
+                fig.add_hline(y=1.2, line_dash="dot", line_color="#007a42", line_width=1)
+                fig.add_hline(y=0.7, line_dash="dot", line_color="#cc0000", line_width=1)
 
                 # Get current value
                 current_val = history_df[col_name].iloc[-1] if len(history_df) > 0 else 0
@@ -21366,7 +21387,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title=''),
                     yaxis=dict(title='PCR (ΔOI)', range=[_chgoi_ymin, _chgoi_ymax]),
                     plot_bgcolor='white',
-                    paper_bgcolor='white'
+                    paper_bgcolor='white',
+        font=dict(color='#111'),
                 )
                 return fig, current_val
             return None, 0
@@ -21598,11 +21620,11 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     line=dict(color='#00aaff', width=3),
                     marker=dict(size=8, color=_mkr_colors2),
                     fill='tozeroy', fillcolor='rgba(0,170,255,0.08)'))
-                fig_score.add_hline(y=0, line_dash='dash', line_color='white', line_width=1.5,
+                fig_score.add_hline(y=0, line_dash='dash', line_color='#111', line_width=1.5,
                     annotation_text='Neutral (0%)', annotation_position='right')
-                fig_score.add_hline(y=15, line_dash='dot', line_color='#00ff88', line_width=1,
+                fig_score.add_hline(y=15, line_dash='dot', line_color='#007a42', line_width=1,
                     annotation_text='Bullish Zone', annotation_position='right')
-                fig_score.add_hline(y=-15, line_dash='dot', line_color='#ff4444', line_width=1,
+                fig_score.add_hline(y=-15, line_dash='dot', line_color='#cc0000', line_width=1,
                     annotation_text='Bearish Zone', annotation_position='right')
                 _ymax2 = max(abs(comp_hist_df['score_pct'].max()), abs(comp_hist_df['score_pct'].min()), 30) * 1.2
                 fig_score.add_hrect(y0=15, y1=_ymax2, fillcolor='rgba(0,255,136,0.06)', line_width=0)
@@ -21613,8 +21635,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     title=f"Composite Direction Score | Current: {_cv2_s_now:+.0f}% ({_cv2_v_now})",
                     template='plotly_white', height=380, showlegend=False,
                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time'),
-                    yaxis=dict(title='Score %', zeroline=True, zerolinecolor='white'),
+                    yaxis=dict(title='Score %', zeroline=True, zerolinecolor='#111'),
                     plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                     margin=dict(l=50, r=50, t=60, b=50))
                 st.plotly_chart(fig_score, use_container_width=True, key=f"{idx_key}_pc030")
 
@@ -21630,9 +21653,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         x=comp_hist_df['time'], y=comp_hist_df['avg_chgoi'],
                         mode='lines+markers', name='Avg PCR (ΔOI)',
                         line=dict(color='#ff44ff', width=2), marker=dict(size=4)))
-                    fig_pcr_ts.add_hline(y=1.2, line_dash='dot', line_color='#00ff88', line_width=1)
-                    fig_pcr_ts.add_hline(y=1.0, line_dash='dash', line_color='white', line_width=1)
-                    fig_pcr_ts.add_hline(y=0.7, line_dash='dot', line_color='#ff4444', line_width=1)
+                    fig_pcr_ts.add_hline(y=1.2, line_dash='dot', line_color='#007a42', line_width=1)
+                    fig_pcr_ts.add_hline(y=1.0, line_dash='dash', line_color='#111', line_width=1)
+                    fig_pcr_ts.add_hline(y=0.7, line_dash='dot', line_color='#cc0000', line_width=1)
                     _all_pcr = (comp_hist_df['avg_pcr'].dropna().tolist() +
                                 comp_hist_df['avg_chgoi'].dropna().tolist() + [0.7, 1.0, 1.2])
                     fig_pcr_ts.update_layout(
@@ -21643,6 +21666,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         yaxis=dict(title='PCR',
                                    range=[max(0, min(_all_pcr)*0.9), max(_all_pcr)*1.1]),
                         plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                         margin=dict(l=40, r=10, t=50, b=30))
                     st.plotly_chart(fig_pcr_ts, use_container_width=True, key=f"{idx_key}_pc031")
                 with ind_col2:
@@ -21652,20 +21676,21 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     fig_gex_ts.add_trace(go.Scatter(
                         x=comp_hist_df['time'], y=comp_hist_df['total_gex'],
                         mode='lines+markers', name='Total GEX',
-                        line=dict(color='#FFD700', width=2),
+                        line=dict(color='#8a6f00', width=2),
                         marker=dict(size=5, color=_gex_c2),
                         fill='tozeroy', fillcolor='rgba(255,215,0,0.08)'))
-                    fig_gex_ts.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
-                    fig_gex_ts.add_hline(y=10, line_dash='dot', line_color='#00ff88', line_width=1,
+                    fig_gex_ts.add_hline(y=0, line_dash='dash', line_color='#111', line_width=1)
+                    fig_gex_ts.add_hline(y=10, line_dash='dot', line_color='#007a42', line_width=1,
                         annotation_text='Pin Zone', annotation_position='right')
-                    fig_gex_ts.add_hline(y=-10, line_dash='dot', line_color='#ff4444', line_width=1,
+                    fig_gex_ts.add_hline(y=-10, line_dash='dot', line_color='#cc0000', line_width=1,
                         annotation_text='Accel Zone', annotation_position='right')
                     fig_gex_ts.update_layout(
                         title='Total GEX (ATM±2) Over Time',
                         template='plotly_white', height=300, showlegend=False,
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range()),
-                        yaxis=dict(title='GEX (Lakhs)', zeroline=True, zerolinecolor='white'),
+                        yaxis=dict(title='GEX (Lakhs)', zeroline=True, zerolinecolor='#111'),
                         plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                         margin=dict(l=40, r=50, t=50, b=30))
                     st.plotly_chart(fig_gex_ts, use_container_width=True, key=f"{idx_key}_pc032")
 
@@ -21684,14 +21709,15 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             name=f'{_slbl3} (₹{_sn})',
                             line=dict(color=_cs_colors[_idx_s % len(_cs_colors)], width=2),
                             marker=dict(size=3)))
-                    fig_strike_ts.add_hline(y=0, line_dash='dash', line_color='white', line_width=1)
+                    fig_strike_ts.add_hline(y=0, line_dash='dash', line_color='#111', line_width=1)
                     fig_strike_ts.update_layout(
                         title='Per-Strike Weighted Score Over Time',
                         template='plotly_white', height=320, showlegend=True,
                         legend=dict(orientation='h', y=-0.3, font=dict(size=9)),
                         xaxis=dict(tickformat='%H:%M', range=_mkt_range()),
-                        yaxis=dict(title='Weighted Score', zeroline=True, zerolinecolor='white'),
+                        yaxis=dict(title='Weighted Score', zeroline=True, zerolinecolor='#111'),
                         plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                         margin=dict(l=50, r=20, t=50, b=40))
                     st.plotly_chart(fig_strike_ts, use_container_width=True, key=f"{idx_key}_pc033")
 
@@ -21797,13 +21823,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                 ))
 
                 # Zero reference line (critical flip boundary)
-                fig_total_gex.add_hline(y=0, line_dash="solid", line_color="white", line_width=2,
+                fig_total_gex.add_hline(y=0, line_dash="solid", line_color="#111", line_width=2,
                                         annotation_text="0 (Gamma Flip)", annotation_position="right")
 
                 # Threshold lines
-                fig_total_gex.add_hline(y=50, line_dash="dot", line_color="#00ff88", line_width=1,
+                fig_total_gex.add_hline(y=50, line_dash="dot", line_color="#007a42", line_width=1,
                                         annotation_text="+50 (Strong Pin)", annotation_position="right")
-                fig_total_gex.add_hline(y=-50, line_dash="dot", line_color="#ff4444", line_width=1,
+                fig_total_gex.add_hline(y=-50, line_dash="dot", line_color="#cc0000", line_width=1,
                                         annotation_text="-50 (Strong Trend)", annotation_position="right")
 
                 # Shading zones
@@ -21820,12 +21846,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     yaxis=dict(
                         title='Total Net GEX (Lakhs)',
                         zeroline=True,
-                        zerolinecolor='white',
+                        zerolinecolor='#111',
                         zerolinewidth=2
                     ),
                     plot_bgcolor='white',
                     paper_bgcolor='white',
-                    margin=dict(l=50, r=50, t=60, b=50)
+                    margin=dict(l=50, r=50, t=60, b=50),
+        font=dict(color='#111'),
                 )
 
                 st.plotly_chart(fig_total_gex, use_container_width=True, key=f"{idx_key}_pc034")
@@ -21909,7 +21936,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         x=gs_df['Strike'],
                         y=gs_df['CE_Gamma_Exp'],
                         name='CE Gamma',
-                        marker_color='#ff4444',
+                        marker_color='#cc0000',
                         text=[f"{v:.1f}" for v in gs_df['CE_Gamma_Exp']],
                         textposition='outside',
                         textfont=dict(size=9)
@@ -21919,7 +21946,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         x=gs_df['Strike'],
                         y=gs_df['PE_Gamma_Exp'],
                         name='PE Gamma',
-                        marker_color='#00ff88',
+                        marker_color='#007a42',
                         text=[f"{v:.1f}" for v in gs_df['PE_Gamma_Exp']],
                         textposition='outside',
                         textfont=dict(size=9)
@@ -21939,13 +21966,13 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         fillcolor='rgba(0, 170, 255, 0.1)'
                     ), row=2, col=1)
 
-                    fig_gs.add_hline(y=0, line_dash="dash", line_color="white", line_width=1, row=2, col=1)
+                    fig_gs.add_hline(y=0, line_dash="dash", line_color="#111", line_width=1, row=2, col=1)
 
                     # Spot price vertical line on both subplots
                     fig_gs.add_vline(
                         x=underlying_price_gs,
                         line_dash="solid",
-                        line_color="#FFD700",
+                        line_color="#8a6f00",
                         line_width=2,
                         annotation_text=f"Spot: ₹{underlying_price_gs:.0f}",
                         annotation_position="top",
@@ -21954,7 +21981,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                     fig_gs.add_vline(
                         x=underlying_price_gs,
                         line_dash="solid",
-                        line_color="#FFD700",
+                        line_color="#8a6f00",
                         line_width=2,
                         row=2, col=1
                     )
@@ -21967,7 +21994,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         plot_bgcolor='white',
                         paper_bgcolor='white',
                         margin=dict(l=50, r=50, t=80, b=50),
-                        barmode='group'
+                        barmode='group',
+        font=dict(color='#111'),
                     )
 
                     fig_gs.update_yaxes(title_text="Gamma Exp (L)", row=1, col=1)
@@ -22214,7 +22242,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_iv.add_trace(go.Scatter(
                             x=_iv_hist_df['time'], y=_iv_hist_df['iv_skew'],
                             mode='lines+markers', name='IV Skew (PE/CE)',
-                            line=dict(color='#FFD740', width=2),
+                            line=dict(color='#8a6f00', width=2),
                             marker=dict(size=4)
                         ))
                         _fig_iv.add_hline(y=0.90, line_dash='dash', line_color='#00C853',
@@ -22226,8 +22254,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_iv.add_trace(go.Scatter(
                             x=[_iv_hist_df['time'].iloc[-1]], y=[_iv_cur],
                             mode='markers+text', text=[f'{_iv_cur:.3f}'],
-                            textposition='top right', textfont=dict(size=10, color='#FFD740'),
-                            marker=dict(size=10, color='#FFD740', symbol='circle'),
+                            textposition='top right', textfont=dict(size=10, color='#8a6f00'),
+                            marker=dict(size=10, color='#8a6f00', symbol='circle'),
                             showlegend=False, hoverinfo='skip',
                         ))
                         _fig_iv.update_layout(
@@ -22235,7 +22263,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             height=250, margin=dict(l=40, r=20, t=40, b=30),
                             paper_bgcolor='white', plot_bgcolor='white',
                             font=dict(color='#222'),
-                            xaxis=dict(gridcolor='#ddd'), yaxis=dict(gridcolor='#ddd'),
+                            xaxis=dict(gridcolor='#555'), yaxis=dict(gridcolor='#555'),
                             showlegend=True, legend=dict(orientation='h', y=-0.3)
                         )
                         st.plotly_chart(_fig_iv, use_container_width=True, key=f"{idx_key}_pc036")
@@ -22257,7 +22285,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_pr.add_trace(go.Scatter(
                             x=_pr_hist_df['time'], y=_pr_hist_df['net_pressure'],
                             mode='lines+markers', name='Net Pressure',
-                            line=dict(color='#FFD740', width=2, dash='dot'),
+                            line=dict(color='#8a6f00', width=2, dash='dot'),
                             marker=dict(size=4)
                         ))
                         _fig_pr.add_hline(y=0.15, line_dash='dash', line_color='#00C853',
@@ -22272,8 +22300,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_pr.add_trace(go.Scatter(
                             x=[_pr_hist_df['time'].iloc[-1]], y=[_pr_cur_net],
                             mode='markers+text', text=[f'Net:{_pr_cur_net:+.3f}'],
-                            textposition='top right', textfont=dict(size=9, color='#FFD740'),
-                            marker=dict(size=9, color='#FFD740', symbol='circle'),
+                            textposition='top right', textfont=dict(size=9, color='#8a6f00'),
+                            marker=dict(size=9, color='#8a6f00', symbol='circle'),
                             showlegend=False, hoverinfo='skip',
                         ))
                         _fig_pr.update_layout(
@@ -22281,7 +22309,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             height=250, margin=dict(l=40, r=20, t=40, b=30),
                             paper_bgcolor='white', plot_bgcolor='white',
                             font=dict(color='#222'),
-                            xaxis=dict(gridcolor='#ddd'), yaxis=dict(gridcolor='#ddd'),
+                            xaxis=dict(gridcolor='#555'), yaxis=dict(gridcolor='#555'),
                             showlegend=True, legend=dict(orientation='h', y=-0.3)
                         )
                         st.plotly_chart(_fig_pr, use_container_width=True, key=f"{idx_key}_pc037")
@@ -22310,7 +22338,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     _fig_ivs.add_trace(go.Scatter(
                                         x=_ivh_df['time'], y=_ivh_df[_ck],
                                         mode='lines+markers', name='CE IV%',
-                                        line=dict(color='#00ccff', width=2),
+                                        line=dict(color='#0077aa', width=2),
                                         marker=dict(size=3),
                                     ))
                                 # PE IV (dashed orange)
@@ -22318,7 +22346,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     _fig_ivs.add_trace(go.Scatter(
                                         x=_ivh_df['time'], y=_ivh_df[_pk],
                                         mode='lines+markers', name='PE IV%',
-                                        line=dict(color='#ffaa00', width=2, dash='dash'),
+                                        line=dict(color='#885500', width=2, dash='dash'),
                                         marker=dict(size=3),
                                     ))
                                 # Current value markers
@@ -22328,16 +22356,16 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     _fig_ivs.add_trace(go.Scatter(
                                         x=[_ivh_df['time'].iloc[-1]], y=[_iv_ce_cur],
                                         mode='markers+text', text=[f'{_iv_ce_cur:.1f}%'],
-                                        textposition='top right', textfont=dict(size=8, color='#00ccff'),
-                                        marker=dict(size=8, color='#00ccff', symbol='circle'),
+                                        textposition='top right', textfont=dict(size=8, color='#0077aa'),
+                                        marker=dict(size=8, color='#0077aa', symbol='circle'),
                                         showlegend=False, hoverinfo='skip',
                                     ))
                                 if _iv_pe_cur is not None:
                                     _fig_ivs.add_trace(go.Scatter(
                                         x=[_ivh_df['time'].iloc[-1]], y=[_iv_pe_cur],
                                         mode='markers+text', text=[f'{_iv_pe_cur:.1f}%'],
-                                        textposition='bottom right', textfont=dict(size=8, color='#ffaa00'),
-                                        marker=dict(size=8, color='#ffaa00', symbol='diamond'),
+                                        textposition='bottom right', textfont=dict(size=8, color='#885500'),
+                                        marker=dict(size=8, color='#885500', symbol='diamond'),
                                         showlegend=False, hoverinfo='skip',
                                     ))
                                 # Determine IV skew signal for this strike
@@ -22355,6 +22383,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                                     yaxis=dict(title='IV%', tickfont=dict(size=8)),
                                     plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                                 )
                                 st.plotly_chart(_fig_ivs, use_container_width=True, key=f"{idx_key}_pc038_{_ivc_i}")
                                 # Net pressure caption
@@ -22860,7 +22889,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_dg.add_trace(go.Scatter(
                             x=_dgh['time'], y=_dgh['net_gamma'],
                             mode='lines+markers', name='Net Gamma (L)',
-                            line=dict(color='#FFD740', width=2, dash='dot'),
+                            line=dict(color='#8a6f00', width=2, dash='dot'),
                             marker=dict(size=4), yaxis='y2'
                         ))
                         _fig_dg.add_hline(y=0.15, line_dash='dash', line_color='#00C853',
@@ -22882,8 +22911,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                         _fig_dg.add_trace(go.Scatter(
                             x=[_dgh['time'].iloc[-1]], y=[_cur_ng],
                             mode='markers+text', text=[f'{_cur_ng:+.2f}L'],
-                            textposition='bottom right', textfont=dict(size=9, color='#FFD740'),
-                            marker=dict(size=9, color='#FFD740', symbol='diamond'),
+                            textposition='bottom right', textfont=dict(size=9, color='#8a6f00'),
+                            marker=dict(size=9, color='#8a6f00', symbol='diamond'),
                             showlegend=False, hoverinfo='skip', yaxis='y2'
                         ))
                         _fig_dg.update_layout(
@@ -22891,9 +22920,9 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                             height=280, margin=dict(l=40, r=60, t=40, b=30),
                             paper_bgcolor='white', plot_bgcolor='white',
                             font=dict(color='#222'),
-                            xaxis=dict(gridcolor='#ddd'),
-                            yaxis=dict(title=dict(text='Net Delta', font=dict(color='#00C853')), gridcolor='#ddd'),
-                            yaxis2=dict(title=dict(text='Net Gamma (L)', font=dict(color='#FFD740')),
+                            xaxis=dict(gridcolor='#555'),
+                            yaxis=dict(title=dict(text='Net Delta', font=dict(color='#00C853')), gridcolor='#555'),
+                            yaxis2=dict(title=dict(text='Net Gamma (L)', font=dict(color='#8a6f00')),
                                         overlaying='y', side='right', showgrid=False),
                             showlegend=True, legend=dict(orientation='h', y=-0.3)
                         )
@@ -22928,7 +22957,7 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     _fig_dg_ps.add_trace(go.Scatter(
                                         x=_dgh['time'], y=_dgh[_gk],
                                         mode='lines+markers', name='Gamma (L)',
-                                        line=dict(color='#FFD740', width=2, dash='dash'),
+                                        line=dict(color='#8a6f00', width=2, dash='dash'),
                                         marker=dict(size=3), yaxis='y2'
                                     ))
                                 _fig_dg_ps.add_hline(y=0, line_color='rgba(255,255,255,0.3)', line_width=1, yref='y1')
@@ -22947,8 +22976,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     _fig_dg_ps.add_trace(go.Scatter(
                                         x=[_dgh['time'].iloc[-1]], y=[_ps_cur_g],
                                         mode='markers+text', text=[f'{_ps_cur_g:+.2f}L'],
-                                        textposition='bottom right', textfont=dict(size=8, color='#FFD740'),
-                                        marker=dict(size=8, color='#FFD740', symbol='diamond'),
+                                        textposition='bottom right', textfont=dict(size=8, color='#8a6f00'),
+                                        marker=dict(size=8, color='#8a6f00', symbol='diamond'),
                                         showlegend=False, hoverinfo='skip', yaxis='y2'
                                     ))
                                 _hot_border = '2px solid #ff4444' if _lk == _hot_lbl else '1px solid #333'
@@ -22966,8 +22995,8 @@ def render_options_analysis_panel(option_data, current_price, api, db,
                                     margin=dict(l=5, r=35, t=80, b=30),
                                     xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='', tickfont=dict(size=8)),
                                     yaxis=dict(title='Delta', title_font=dict(color='#00C853', size=9),
-                                               tickfont=dict(size=8), gridcolor='#ddd'),
-                                    yaxis2=dict(title='Gamma (L)', title_font=dict(color='#FFD740', size=9),
+                                               tickfont=dict(size=8), gridcolor='#555'),
+                                    yaxis2=dict(title='Gamma (L)', title_font=dict(color='#8a6f00', size=9),
                                                 overlaying='y', side='right', showgrid=False,
                                                 tickfont=dict(size=8)),
                                     plot_bgcolor='white', paper_bgcolor='white',
@@ -23756,10 +23785,10 @@ def main():
                             fig.add_annotation(
                                 x=_ov_last_t, y=_ov_trap_lvl,
                                 text=f"⚠️ {_ov_trap['type'].split(' ')[1] if len(_ov_trap['type'].split(' ')) > 1 else 'Trap'}",
-                                showarrow=True, arrowhead=2, arrowcolor="#ff6600",
-                                font=dict(size=9, color="#ff6600"),
+                                showarrow=True, arrowhead=2, arrowcolor="#c04400",
+                                font=dict(size=9, color="#c04400"),
                                 bgcolor="rgba(30,30,30,0.8)",
-                                bordercolor="#ff6600", borderwidth=1,
+                                bordercolor="#c04400", borderwidth=1,
                                 row=1, col=1,
                             )
             except Exception:
@@ -24019,6 +24048,7 @@ def main():
                                 showlegend=False,
                                 margin=dict(l=0, r=0, t=40, b=0),
                                 yaxis=dict(autorange=True),
+        font=dict(color='#111'),
                             )
 
                             st.plotly_chart(_mfp_fig, use_container_width=True)
@@ -24171,12 +24201,12 @@ def main():
                             y=_vdc_df['cum_delta'],
                             mode='lines',
                             name='Cum Delta',
-                            line=dict(color='#ffaa00', width=2, dash='dash'),
+                            line=dict(color='#885500', width=2, dash='dash'),
                             hovertemplate='Time: %{x|%H:%M}<br>Cum Delta: %{y:+,.0f}<extra></extra>',
                         ))
 
                         # Zero reference line
-                        _vdc_fig2.add_hline(y=0, line_dash='dash', line_color='white', line_width=1,
+                        _vdc_fig2.add_hline(y=0, line_dash='dash', line_color='#111', line_width=1,
                                             annotation_text='0 (Neutral)',
                                             annotation_position='right',
                                             annotation_font_size=8)
@@ -24199,11 +24229,11 @@ def main():
                             height=400,
                             showlegend=True,
                             legend=dict(orientation='h', y=-0.25, font=dict(size=9)),
-                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time', gridcolor='#ddd'),
-                            yaxis=dict(title='Delta Volume', range=[_vdc_ymin, _vdc_ymax], gridcolor='#ddd'),
+                            xaxis=dict(tickformat='%H:%M', range=_mkt_range(), title='Time', gridcolor='#555'),
+                            yaxis=dict(title='Delta Volume', range=[_vdc_ymin, _vdc_ymax], gridcolor='#555'),
                             plot_bgcolor='white', paper_bgcolor='white',
                             margin=dict(l=50, r=50, t=60, b=50),
-                            font=dict(color='#222'),
+        font=dict(color='#111'),
                         )
 
                         st.plotly_chart(_vdc_fig2, use_container_width=True)
@@ -25176,7 +25206,7 @@ def main():
                         _fig_gs.add_trace(go.Scatter(
                             x=list(range(len(_gsh_atm))), y=_gsh_atm,
                             mode='lines+markers', name='ATM Gamma',
-                            line=dict(color='#ffaa00', width=2),
+                            line=dict(color='#885500', width=2),
                             marker=dict(size=4),
                             text=_gsh_times, hovertemplate='%{text}<br>ATM Gamma: %{y:.4f}'
                         ))
@@ -25187,6 +25217,7 @@ def main():
                             xaxis=dict(title='Snapshot', showticklabels=False),
                             yaxis=dict(title='Gamma'),
                             plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                         )
                         st.plotly_chart(_fig_gs, use_container_width=True)
                     else:
@@ -25212,6 +25243,7 @@ def main():
                         xaxis=dict(title='Strike Position'),
                         yaxis=dict(title='Gamma Value'),
                         plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                     )
                     st.plotly_chart(_fig_gmap, use_container_width=True)
 
@@ -25228,12 +25260,12 @@ def main():
                     _fig_esh.add_trace(go.Scatter(
                         x=list(range(len(_esh_scores))), y=_esh_scores,
                         mode='lines+markers+text', name='Expiry Spike Score',
-                        line=dict(color='#ff6600', width=2),
+                        line=dict(color='#c04400', width=2),
                         marker=dict(size=4),
                         fill='tozeroy', fillcolor='rgba(255,102,0,0.1)'
                     ))
-                    _fig_esh.add_hline(y=80, line_dash='dot', line_color='#ff4444', annotation_text='Explosion 80')
-                    _fig_esh.add_hline(y=70, line_dash='dot', line_color='#ffaa00', annotation_text='Breakout 70')
+                    _fig_esh.add_hline(y=80, line_dash='dot', line_color='#cc0000', annotation_text='Explosion 80')
+                    _fig_esh.add_hline(y=70, line_dash='dot', line_color='#885500', annotation_text='Breakout 70')
                     _fig_esh.add_hline(y=40, line_dash='dot', line_color='#aaaaaa', annotation_text='Build-up 40')
                     _fig_esh.update_layout(
                         title='Expiry Spike Score History',
@@ -25242,6 +25274,7 @@ def main():
                         xaxis=dict(title='Snapshot', showticklabels=False),
                         yaxis=dict(title='Expiry Spike Score', range=[0, 110]),
                         plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                     )
                     st.plotly_chart(_fig_esh, use_container_width=True)
 
@@ -25265,6 +25298,7 @@ def main():
                         yaxis=dict(title='Gamma'),
                         showlegend=True, legend=dict(orientation='h', y=-0.3),
                         plot_bgcolor='white', paper_bgcolor='white',
+        font=dict(color='#111'),
                     )
                     st.plotly_chart(_fig_gsh, use_container_width=True)
 
@@ -25523,20 +25557,20 @@ def main():
                             low=_cie_chart_df['low'],
                             close=_cie_chart_df['close'],
                             name='NIFTY 5m',
-                            increasing_line_color='#00ff88',
-                            decreasing_line_color='#ff4444',
+                            increasing_line_color='#007a42',
+                            decreasing_line_color='#cc0000',
                         ))
 
                         # Support levels
                         for _sl in _cie_sup[-6:]:
                             _cie_fig.add_hline(y=_sl, line_dash='dash', line_color='rgba(0,255,136,0.4)',
                                                line_width=1, annotation_text=f'S {_sl:.0f}',
-                                               annotation_font_color='#00ff88', annotation_font_size=9)
+                                               annotation_font_color='#007a42', annotation_font_size=9)
                         # Resistance levels
                         for _rl in _cie_res[-6:]:
                             _cie_fig.add_hline(y=_rl, line_dash='dash', line_color='rgba(255,68,68,0.4)',
                                                line_width=1, annotation_text=f'R {_rl:.0f}',
-                                               annotation_font_color='#ff4444', annotation_font_size=9)
+                                               annotation_font_color='#cc0000', annotation_font_size=9)
 
                         # Highlight signal candles
                         for _sig in _cie_signals:
@@ -25557,9 +25591,9 @@ def main():
                                 )
 
                         # Spot price line
-                        _cie_fig.add_hline(y=_cie_underlying, line_dash='dot', line_color='#ffffff',
+                        _cie_fig.add_hline(y=_cie_underlying, line_dash='dot', line_color='#111',
                                            line_width=1.5, annotation_text=f'Spot {_cie_underlying:.0f}',
-                                           annotation_font_color='#fff', annotation_font_size=10)
+                                           annotation_font_color='#111', annotation_font_size=10)
 
                         _cie_fig.update_layout(
                             title='NIFTY 5-Min — Candlestick Intelligence Engine S/R Map',
@@ -25569,6 +25603,7 @@ def main():
                             plot_bgcolor='white', paper_bgcolor='white',
                             xaxis=dict(type='category', tickangle=-45, nticks=15,
                                        tickfont=dict(size=8)),
+        font=dict(color='#111'),
                         )
                         st.plotly_chart(_cie_fig, use_container_width=True)
 
@@ -25643,9 +25678,9 @@ def main():
                                     mode='lines', name='IV Skew (PE/CE)',
                                     line=dict(color='#ff9900', width=2),
                                 ))
-                            _cie_iv_fig.add_hline(y=1.10, line_dash='dot', line_color='#ff4444',
+                            _cie_iv_fig.add_hline(y=1.10, line_dash='dot', line_color='#cc0000',
                                                   annotation_text='Bearish 1.10')
-                            _cie_iv_fig.add_hline(y=0.90, line_dash='dot', line_color='#00ff88',
+                            _cie_iv_fig.add_hline(y=0.90, line_dash='dot', line_color='#007a42',
                                                   annotation_text='Bullish 0.90')
                             _cie_iv_fig.update_layout(
                                 title='IV Skew (PE IV / CE IV)',
@@ -25654,6 +25689,7 @@ def main():
                                 plot_bgcolor='white', paper_bgcolor='white',
                                 xaxis=dict(title='Snapshot', showticklabels=False),
                                 yaxis=dict(title='Skew'),
+        font=dict(color='#111'),
                             )
                             st.plotly_chart(_cie_iv_fig, use_container_width=True)
                         else:
@@ -25674,9 +25710,9 @@ def main():
                                     marker_color=_cie_pres_clrs,
                                     name='Net Bid/Ask Pressure',
                                 ))
-                            _cie_pres_fig.add_hline(y=0.15, line_dash='dot', line_color='#00ff88',
+                            _cie_pres_fig.add_hline(y=0.15, line_dash='dot', line_color='#007a42',
                                                     annotation_text='Bull 0.15')
-                            _cie_pres_fig.add_hline(y=-0.15, line_dash='dot', line_color='#ff4444',
+                            _cie_pres_fig.add_hline(y=-0.15, line_dash='dot', line_color='#cc0000',
                                                     annotation_text='Bear -0.15')
                             _cie_pres_fig.update_layout(
                                 title='Net Bid/Ask Pressure',
@@ -25685,6 +25721,7 @@ def main():
                                 plot_bgcolor='white', paper_bgcolor='white',
                                 xaxis=dict(title='Snapshot', showticklabels=False),
                                 yaxis=dict(title='Pressure'),
+        font=dict(color='#111'),
                             )
                             st.plotly_chart(_cie_pres_fig, use_container_width=True)
                         else:
@@ -25710,6 +25747,7 @@ def main():
                             plot_bgcolor='white', paper_bgcolor='white',
                             xaxis=dict(title='Snapshot', showticklabels=False),
                             yaxis=dict(title='Straddle ₹'),
+        font=dict(color='#111'),
                         )
                         st.plotly_chart(_cie_strad_fig, use_container_width=True)
 
@@ -25734,6 +25772,7 @@ def main():
                             plot_bgcolor='white', paper_bgcolor='white',
                             xaxis=dict(title='Snapshot', showticklabels=False),
                             yaxis=dict(title='GEX (L)'),
+        font=dict(color='#111'),
                         )
                         st.plotly_chart(_cie_gex_fig, use_container_width=True)
 
