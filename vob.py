@@ -24306,463 +24306,470 @@ def main():
 
             # ── Candle Types Table ────────────────────────────────────────
             if _chart_candle_markers:
-                st.markdown(f"### 🕯️ Candle Patterns Detected — {_date_label}")
-                _ctype_rows = []
-                for _cp in reversed(_chart_candle_markers):
-                    _ts = _cp['time']
-                    _time_str = _ts.strftime('%H:%M') if hasattr(_ts, 'strftime') else str(_ts)
-                    _dir = _cp['direction']
-                    _dir_lbl = '🟢 BUY' if _dir == 'BUY' else ('🔴 SELL' if _dir == 'SELL' else '🟡 NEUTRAL')
-                    _price = _cp['price']
+                with st.expander(f"🕯️ Candle Patterns Detected — {_date_label}", expanded=False):
+                    st.markdown(f"### 🕯️ Candle Patterns Detected — {_date_label}")
+                    _ctype_rows = []
+                    for _cp in reversed(_chart_candle_markers):
+                        _ts = _cp['time']
+                        _time_str = _ts.strftime('%H:%M') if hasattr(_ts, 'strftime') else str(_ts)
+                        _dir = _cp['direction']
+                        _dir_lbl = '🟢 BUY' if _dir == 'BUY' else ('🔴 SELL' if _dir == 'SELL' else '🟡 NEUTRAL')
+                        _price = _cp['price']
 
-                    # For BUY → show nearest HTF support + distance + VOB support
-                    # For SELL → show nearest HTF resistance + distance + VOB resistance
-                    if _dir == 'BUY':
-                        _htf_level, _dist_pts, _dist_pct = _nearest_level(_price, _cp_htf_supports)
-                        _htf_label = (f"₹{_htf_level:.0f} ({_dist_pct:.2f}% below)"
-                                      if _htf_level else '—')
-                        _vob_label = _nearest_vob(_price, _cp_vob_supports)
-                        _htf_col   = 'Nearest HTF Support'
-                        _vob_col   = 'Nearest VOB Support'
-                    elif _dir == 'SELL':
-                        _htf_level, _dist_pts, _dist_pct = _nearest_level(_price, _cp_htf_resistances)
-                        _htf_label = (f"₹{_htf_level:.0f} ({_dist_pct:.2f}% above)"
-                                      if _htf_level else '—')
-                        _vob_label = _nearest_vob(_price, _cp_vob_resistances)
-                        _htf_col   = 'Nearest HTF Resistance'
-                        _vob_col   = 'Nearest VOB Resistance'
-                    else:
-                        # NEUTRAL — show both nearest support and resistance
-                        _sup_lvl, _sup_pts, _sup_pct = _nearest_level(_price, _cp_htf_supports)
-                        _res_lvl, _res_pts, _res_pct = _nearest_level(_price, _cp_htf_resistances)
-                        _htf_label = (f"S ₹{_sup_lvl:.0f} / R ₹{_res_lvl:.0f}"
-                                      if (_sup_lvl and _res_lvl) else '—')
-                        _vob_label = '—'
-                        _htf_col   = 'HTF S/R Context'
-                        _vob_col   = 'VOB'
+                        # For BUY → show nearest HTF support + distance + VOB support
+                        # For SELL → show nearest HTF resistance + distance + VOB resistance
+                        if _dir == 'BUY':
+                            _htf_level, _dist_pts, _dist_pct = _nearest_level(_price, _cp_htf_supports)
+                            _htf_label = (f"₹{_htf_level:.0f} ({_dist_pct:.2f}% below)"
+                                          if _htf_level else '—')
+                            _vob_label = _nearest_vob(_price, _cp_vob_supports)
+                            _htf_col   = 'Nearest HTF Support'
+                            _vob_col   = 'Nearest VOB Support'
+                        elif _dir == 'SELL':
+                            _htf_level, _dist_pts, _dist_pct = _nearest_level(_price, _cp_htf_resistances)
+                            _htf_label = (f"₹{_htf_level:.0f} ({_dist_pct:.2f}% above)"
+                                          if _htf_level else '—')
+                            _vob_label = _nearest_vob(_price, _cp_vob_resistances)
+                            _htf_col   = 'Nearest HTF Resistance'
+                            _vob_col   = 'Nearest VOB Resistance'
+                        else:
+                            # NEUTRAL — show both nearest support and resistance
+                            _sup_lvl, _sup_pts, _sup_pct = _nearest_level(_price, _cp_htf_supports)
+                            _res_lvl, _res_pts, _res_pct = _nearest_level(_price, _cp_htf_resistances)
+                            _htf_label = (f"S ₹{_sup_lvl:.0f} / R ₹{_res_lvl:.0f}"
+                                          if (_sup_lvl and _res_lvl) else '—')
+                            _vob_label = '—'
+                            _htf_col   = 'HTF S/R Context'
+                            _vob_col   = 'VOB'
 
-                    # Volume context for the candle
-                    _cp_vol = _cp.get('volume', 0)
-                    _cp_vol_str = f"{int(_cp_vol):,}" if _cp_vol else '—'
-                    # Compute vol ratio vs MA20 at this candle's time
-                    _cp_vol_ratio_str = '—'
-                    _cp_vol_signal = '—'
-                    if _cp_vol and not _df_today.empty and 'volume' in _df_today.columns:
-                        try:
-                            _cp_ts = _cp['time']
-                            _cp_match = _df_today[_df_today['datetime'] == _cp_ts]
-                            if not _cp_match.empty:
-                                _cp_idx = _cp_match.index[0]
-                                _cp_win_start = max(0, _cp_idx - 20)
-                                _cp_avg_vol = _df_today.iloc[_cp_win_start:_cp_idx]['volume'].mean() if _cp_idx > 0 else _cp_vol
-                                if _cp_avg_vol and _cp_avg_vol > 0:
-                                    _cp_vr = _cp_vol / _cp_avg_vol
-                                    _cp_vol_ratio_str = f"{_cp_vr:.2f}x"
-                                    _cp_vol_signal = '🔥 Spike' if _cp_vr > 2.0 else ('⬆️ High' if _cp_vr > 1.5 else ('➡️ Avg' if _cp_vr > 0.75 else '⬇️ Low'))
-                        except Exception:
-                            pass
+                        # Volume context for the candle
+                        _cp_vol = _cp.get('volume', 0)
+                        _cp_vol_str = f"{int(_cp_vol):,}" if _cp_vol else '—'
+                        # Compute vol ratio vs MA20 at this candle's time
+                        _cp_vol_ratio_str = '—'
+                        _cp_vol_signal = '—'
+                        if _cp_vol and not _df_today.empty and 'volume' in _df_today.columns:
+                            try:
+                                _cp_ts = _cp['time']
+                                _cp_match = _df_today[_df_today['datetime'] == _cp_ts]
+                                if not _cp_match.empty:
+                                    _cp_idx = _cp_match.index[0]
+                                    _cp_win_start = max(0, _cp_idx - 20)
+                                    _cp_avg_vol = _df_today.iloc[_cp_win_start:_cp_idx]['volume'].mean() if _cp_idx > 0 else _cp_vol
+                                    if _cp_avg_vol and _cp_avg_vol > 0:
+                                        _cp_vr = _cp_vol / _cp_avg_vol
+                                        _cp_vol_ratio_str = f"{_cp_vr:.2f}x"
+                                        _cp_vol_signal = '🔥 Spike' if _cp_vr > 2.0 else ('⬆️ High' if _cp_vr > 1.5 else ('➡️ Avg' if _cp_vr > 0.75 else '⬇️ Low'))
+                            except Exception:
+                                pass
 
-                    _ctype_rows.append({
-                        'Time': _time_str,
-                        'Pattern': _cp['pattern'],
-                        'Signal': _dir_lbl,
-                        'Price (₹)': f"{_price:.1f}",
-                        'High (₹)': f"{_cp['high']:.1f}",
-                        'Low (₹)': f"{_cp['low']:.1f}",
-                        'Volume': _cp_vol_str,
-                        'Vol Ratio': _cp_vol_ratio_str,
-                        'Vol Signal': _cp_vol_signal,
-                        'Nearest HTF Pivot': _htf_label,
-                        'Nearest VOB': _vob_label,
-                    })
-                st.dataframe(pd.DataFrame(_ctype_rows), use_container_width=True, hide_index=True)
+                        _ctype_rows.append({
+                            'Time': _time_str,
+                            'Pattern': _cp['pattern'],
+                            'Signal': _dir_lbl,
+                            'Price (₹)': f"{_price:.1f}",
+                            'High (₹)': f"{_cp['high']:.1f}",
+                            'Low (₹)': f"{_cp['low']:.1f}",
+                            'Volume': _cp_vol_str,
+                            'Vol Ratio': _cp_vol_ratio_str,
+                            'Vol Signal': _cp_vol_signal,
+                            'Nearest HTF Pivot': _htf_label,
+                            'Nearest VOB': _vob_label,
+                        })
+                    st.dataframe(pd.DataFrame(_ctype_rows), use_container_width=True, hide_index=True)
 
             # ── Geometric & Reversal Pattern Analysis ──────────────────────
-            render_geo_pattern_analysis(_df_today, df, date_label=_date_label)
+            with st.expander("📐 Geometric & Reversal Pattern Analysis", expanded=False):
+                render_geo_pattern_analysis(_df_today, df, date_label=_date_label)
 
             # ── HTF Support & Resistance + VOB Summary ────────────────────
-            st.markdown("---")
-            _sr_label = f"HTF Support & Resistance Levels — {_date_label}" if (backtest_mode and backtest_date) else "HTF Support & Resistance Levels"
-            st.markdown(f"## 📊 {_sr_label}")
-
-            _htf_pivots_raw = []
-            if show_pivots and len(df) > 50:
-                try:
-                    _htf_pivots_raw = cached_pivot_calculation(_cached_df_json, pivot_settings or {})
-                except Exception:
-                    _htf_pivots_raw = []
-
-            _htf_supports = sorted([p['value'] for p in _htf_pivots_raw if p['type'] == 'low'], reverse=True)
-            _htf_resistances = sorted([p['value'] for p in _htf_pivots_raw if p['type'] == 'high'])
-
-            _vob_supports = []
-            _vob_resistances = []
-            if _cached_vob_sr is not None:
-                try:
-                    _vob_supports = sorted([v for v in _cached_vob_sr.get('support', [])], reverse=True)
-                    _vob_resistances = sorted([v for v in _cached_vob_sr.get('resistance', [])])
-                except Exception:
-                    pass
-
-            _col_sup, _col_res = st.columns(2)
-            with _col_sup:
-                st.markdown("### 🟢 Support Levels")
-                _sup_rows = []
-                for _v in _htf_supports[:10]:
-                    _sup_rows.append({'Type': 'HTF Pivot', 'Level (₹)': f"{_v:.1f}"})
-                for _v in _vob_supports[:5]:
-                    _sup_rows.append({'Type': 'VOB↑', 'Level (₹)': f"{_v:.1f}"})
-                if _sup_rows:
-                    st.dataframe(pd.DataFrame(_sup_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.info("No support levels detected")
-
-            with _col_res:
-                st.markdown("### 🔴 Resistance Levels")
-                _res_rows = []
-                for _v in _htf_resistances[:10]:
-                    _res_rows.append({'Type': 'HTF Pivot', 'Level (₹)': f"{_v:.1f}"})
-                for _v in _vob_resistances[:5]:
-                    _res_rows.append({'Type': 'VOB↓', 'Level (₹)': f"{_v:.1f}"})
-                if _res_rows:
-                    st.dataframe(pd.DataFrame(_res_rows), use_container_width=True, hide_index=True)
-                else:
-                    st.info("No resistance levels detected")
-
-            # Reversal Detector Analysis
-            st.markdown("---")
-            st.markdown("## 🔄 Intraday Reversal Detector")
-
-            try:
-                # Get pivot lows and highs for S/R detection
-                pivot_lows = []
-                pivot_highs = []
-                if show_pivots and len(df) > 50:
-                    pivots = cached_pivot_calculation(_cached_df_json, pivot_settings or {})
-                    pivot_lows = [p['value'] for p in pivots if p['type'] == 'low']
-                    pivot_highs = [p['value'] for p in pivots if p['type'] == 'high']
-
-                # Reuse cached VOB for S/R integration
-                if _cached_vob_sr is not None:
-                    vob_data = {
-                        'sr_levels': _cached_vob_sr,
-                        'blocks': _cached_vob_blks
-                    }
-                elif vob_data is None and len(df) > 30:
-                    try:
-                        vob_detector = VolumeOrderBlocks(sensitivity=5)
-                        vob_sr_levels, vob_blocks = vob_detector.get_sr_levels(df)
-                        vob_data = {
-                            'sr_levels': vob_sr_levels,
-                            'blocks': vob_blocks
-                        }
-                    except Exception as e:
-                        st.warning(f"VOB calculation error: {str(e)}")
-                        vob_data = None
-
-                # Calculate BULLISH reversal score
-                bull_score, bull_signals, bull_verdict = ReversalDetector.calculate_reversal_score(df, pivot_lows)
-
-                # Calculate BEARISH reversal score
-                bear_score, bear_signals, bear_verdict = ReversalDetector.calculate_bearish_reversal_score(df, pivot_highs)
-
-                # Display both verdicts side by side
-                col_bull, col_bear = st.columns(2)
-
-                with col_bull:
-                    st.markdown("### 🟢 Bullish Reversal")
-                    if "STRONG BUY" in bull_verdict:
-                        st.success(f"**{bull_verdict}**")
-                    elif "MODERATE BUY" in bull_verdict:
-                        st.warning(f"**{bull_verdict}**")
-                    else:
-                        st.info(f"**{bull_verdict}**")
-
-                    st.markdown(f"**Score: {bull_signals.get('Reversal_Score', 0)}/6**")
-                    st.markdown(f"- Selling Exhausted: {bull_signals.get('Selling_Exhausted', 'N/A')}")
-                    st.markdown(f"- Higher Low: {bull_signals.get('Higher_Low', 'N/A')}")
-                    st.markdown(f"- Strong Bullish Candle: {bull_signals.get('Strong_Bullish_Candle', 'N/A')}")
-                    st.markdown(f"- Volume: {bull_signals.get('Volume_Signal', 'N/A')}")
-                    st.markdown(f"- Above VWAP: {bull_signals.get('Above_VWAP', 'N/A')}")
-
-                with col_bear:
-                    st.markdown("### 🔴 Bearish Reversal")
-                    if "STRONG SELL" in bear_verdict:
-                        st.error(f"**{bear_verdict}**")
-                    elif "MODERATE SELL" in bear_verdict:
-                        st.warning(f"**{bear_verdict}**")
-                    else:
-                        st.info(f"**{bear_verdict}**")
-
-                    st.markdown(f"**Score: {bear_signals.get('Bearish_Score', 0)}/6**")
-                    st.markdown(f"- Buying Exhausted: {bear_signals.get('Buying_Exhausted', 'N/A')}")
-                    st.markdown(f"- Lower High: {bear_signals.get('Lower_High', 'N/A')}")
-                    st.markdown(f"- Strong Bearish Candle: {bear_signals.get('Strong_Bearish_Candle', 'N/A')}")
-                    st.markdown(f"- Volume: {bear_signals.get('Volume_Signal', 'N/A')}")
-                    st.markdown(f"- Below VWAP: {bear_signals.get('Below_VWAP', 'N/A')}")
-
-                # VWAP display
-                if bull_signals.get('VWAP'):
-                    st.info(f"📊 **VWAP:** ₹{bull_signals.get('VWAP')} | **Day High:** ₹{bull_signals.get('Day_High', 'N/A')} | **Day Low:** ₹{bull_signals.get('Day_Low', 'N/A')}")
-
-                # Entry Rules Expander
-                with st.expander("📋 Entry Rules & Recommendations"):
-                    col_r1, col_r2 = st.columns(2)
-
-                    with col_r1:
-                        st.markdown("**🟢 Bullish Entry Rules:**")
-                        entry_rules = ReversalDetector.get_entry_rules(bull_signals, bull_score)
-                        for rule in entry_rules:
-                            st.markdown(f"- {rule}")
-
-                    with col_r2:
-                        st.markdown("**🔴 Bearish Entry Rules:**")
-                        if bear_score <= -4:
-                            st.markdown("- 🎯 ENTRY: Buy PE at current level")
-                            st.markdown(f"- 🛑 SL: Above recent high ({bear_signals.get('Day_High', 'N/A')})")
-                            st.markdown("- 🎯 Target: Previous low / Nearest support")
-                        elif bear_score <= -2.5:
-                            st.markdown("- ⏳ WAIT: Confirmation pending")
-                            st.markdown("- 📋 Checklist: Lower High + Strong Bearish Candle + Volume")
-                        else:
-                            st.markdown("- ❌ NO ENTRY: Bearish conditions not met")
-
-                    st.markdown("---")
-                    st.markdown("**🧠 Trading Psychology:**")
-                    st.markdown("> *Missing a trade is 100x better than entering a wrong trade.*")
-                    st.markdown("- Trade only after structure forms")
-                    st.markdown("- No emotional entries")
-                    st.markdown("- Fixed SL, fixed target")
-                    st.markdown("- If trade missed → day closed")
-
-            except Exception as e:
-                st.warning(f"Reversal analysis unavailable: {str(e)}")
-
-            # ===== ULTIMATE RSI [LuxAlgo] =====
-            if ultimate_rsi_data_for_chart:
+            with st.expander("📊 HTF Support & Resistance Levels", expanded=False):
                 st.markdown("---")
-                st.markdown("## 📈 Ultimate RSI [LuxAlgo]")
+                _sr_label = f"HTF Support & Resistance Levels — {_date_label}" if (backtest_mode and backtest_date) else "HTF Support & Resistance Levels"
+                st.markdown(f"## 📊 {_sr_label}")
 
-                ursi_val = ultimate_rsi_data_for_chart.get('latest_arsi', 50)
-                ursi_sig = ultimate_rsi_data_for_chart.get('latest_signal', 50)
-                ursi_zone = ultimate_rsi_data_for_chart.get('zone', 'Neutral')
-                ursi_cross = ultimate_rsi_data_for_chart.get('cross_signal', 'None')
-                ursi_momentum = ultimate_rsi_data_for_chart.get('momentum', 'Neutral')
+                _htf_pivots_raw = []
+                if show_pivots and len(df) > 50:
+                    try:
+                        _htf_pivots_raw = cached_pivot_calculation(_cached_df_json, pivot_settings or {})
+                    except Exception:
+                        _htf_pivots_raw = []
 
-                ursi_col1, ursi_col2, ursi_col3, ursi_col4 = st.columns(4)
-                with ursi_col1:
-                    delta_color = "normal" if ursi_momentum == 'Bullish' else ("inverse" if ursi_momentum == 'Bearish' else "off")
-                    st.metric("URSI Value", f"{ursi_val:.1f}", delta=ursi_momentum, delta_color=delta_color)
-                with ursi_col2:
-                    st.metric("Signal Line", f"{ursi_sig:.1f}")
-                with ursi_col3:
-                    zone_icon = "🟢" if ursi_zone == 'Overbought' else ("🔴" if ursi_zone == 'Oversold' else "⚪")
-                    st.metric("Zone", f"{zone_icon} {ursi_zone}")
-                with ursi_col4:
-                    cross_icon = "🔼" if 'Bullish' in ursi_cross else ("🔽" if 'Bearish' in ursi_cross else "➖")
-                    st.metric("Cross Signal", f"{cross_icon} {ursi_cross}")
+                _htf_supports = sorted([p['value'] for p in _htf_pivots_raw if p['type'] == 'low'], reverse=True)
+                _htf_resistances = sorted([p['value'] for p in _htf_pivots_raw if p['type'] == 'high'])
 
-                st.markdown("""
-                **Ultimate RSI Interpretation:**
-                - **Above 70 (OB)**: Overbought — expect bearish reversal
-                - **Below 40 (OS)**: Oversold — expect bullish bounce
-                - **URSI > Signal + Above 50**: Bullish momentum confirmed
-                - **URSI < Signal + Below 50**: Bearish momentum confirmed
-                - **Bullish/Bearish Cross**: URSI crossing signal line = momentum shift
-                """)
+                _vob_supports = []
+                _vob_resistances = []
+                if _cached_vob_sr is not None:
+                    try:
+                        _vob_supports = sorted([v for v in _cached_vob_sr.get('support', [])], reverse=True)
+                        _vob_resistances = sorted([v for v in _cached_vob_sr.get('resistance', [])])
+                    except Exception:
+                        pass
 
-            # ===== TRIPLE POC + FUTURE SWING ANALYSIS =====
-            st.markdown("---")
-            st.markdown("## 📊 Triple POC + Future Swing Analysis")
+                _col_sup, _col_res = st.columns(2)
+                with _col_sup:
+                    st.markdown("### 🟢 Support Levels")
+                    _sup_rows = []
+                    for _v in _htf_supports[:10]:
+                        _sup_rows.append({'Type': 'HTF Pivot', 'Level (₹)': f"{_v:.1f}"})
+                    for _v in _vob_supports[:5]:
+                        _sup_rows.append({'Type': 'VOB↑', 'Level (₹)': f"{_v:.1f}"})
+                    if _sup_rows:
+                        st.dataframe(pd.DataFrame(_sup_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No support levels detected")
 
-            # Triple POC Table
-            if poc_data_for_chart:
-                st.markdown("### 🎯 Triple Point of Control (POC)")
+                with _col_res:
+                    st.markdown("### 🔴 Resistance Levels")
+                    _res_rows = []
+                    for _v in _htf_resistances[:10]:
+                        _res_rows.append({'Type': 'HTF Pivot', 'Level (₹)': f"{_v:.1f}"})
+                    for _v in _vob_resistances[:5]:
+                        _res_rows.append({'Type': 'VOB↓', 'Level (₹)': f"{_v:.1f}"})
+                    if _res_rows:
+                        st.dataframe(pd.DataFrame(_res_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No resistance levels detected")
 
-                poc_table_data = []
-                current_price_for_poc = df['close'].iloc[-1] if not df.empty else 0
+                # Reversal Detector Analysis
+            with st.expander("🔄 Intraday Reversal Detector", expanded=True):
+                st.markdown("---")
+                st.markdown("## 🔄 Intraday Reversal Detector")
 
-                for poc_key, period_key in [('poc1', 'poc1'), ('poc2', 'poc2'), ('poc3', 'poc3')]:
-                    poc = poc_data_for_chart.get(poc_key)
-                    period = poc_data_for_chart.get('periods', {}).get(period_key, '')
+                try:
+                    # Get pivot lows and highs for S/R detection
+                    pivot_lows = []
+                    pivot_highs = []
+                    if show_pivots and len(df) > 50:
+                        pivots = cached_pivot_calculation(_cached_df_json, pivot_settings or {})
+                        pivot_lows = [p['value'] for p in pivots if p['type'] == 'low']
+                        pivot_highs = [p['value'] for p in pivots if p['type'] == 'high']
 
-                    if poc:
-                        # Determine position relative to POC line
-                        # Above POC = Bull, Below POC = Bear
-                        if current_price_for_poc > poc.get('poc', 0):
-                            position = "🟢 Above"
-                            signal = "Bullish"
+                    # Reuse cached VOB for S/R integration
+                    if _cached_vob_sr is not None:
+                        vob_data = {
+                            'sr_levels': _cached_vob_sr,
+                            'blocks': _cached_vob_blks
+                        }
+                    elif vob_data is None and len(df) > 30:
+                        try:
+                            vob_detector = VolumeOrderBlocks(sensitivity=5)
+                            vob_sr_levels, vob_blocks = vob_detector.get_sr_levels(df)
+                            vob_data = {
+                                'sr_levels': vob_sr_levels,
+                                'blocks': vob_blocks
+                            }
+                        except Exception as e:
+                            st.warning(f"VOB calculation error: {str(e)}")
+                            vob_data = None
+
+                    # Calculate BULLISH reversal score
+                    bull_score, bull_signals, bull_verdict = ReversalDetector.calculate_reversal_score(df, pivot_lows)
+
+                    # Calculate BEARISH reversal score
+                    bear_score, bear_signals, bear_verdict = ReversalDetector.calculate_bearish_reversal_score(df, pivot_highs)
+
+                    # Display both verdicts side by side
+                    col_bull, col_bear = st.columns(2)
+
+                    with col_bull:
+                        st.markdown("### 🟢 Bullish Reversal")
+                        if "STRONG BUY" in bull_verdict:
+                            st.success(f"**{bull_verdict}**")
+                        elif "MODERATE BUY" in bull_verdict:
+                            st.warning(f"**{bull_verdict}**")
                         else:
-                            position = "🔴 Below"
-                            signal = "Bearish"
+                            st.info(f"**{bull_verdict}**")
 
-                        poc_table_data.append({
-                            'POC': f"POC {poc_key[-1]} ({period})",
-                            'Value': f"₹{poc.get('poc', 0):.2f}",
-                            'Upper': f"₹{poc.get('upper_poc', 0):.2f}",
-                            'Lower': f"₹{poc.get('lower_poc', 0):.2f}",
-                            'Range': f"₹{poc.get('high', 0):.0f} - ₹{poc.get('low', 0):.0f}",
-                            'Position': position,
-                            'Signal': signal
-                        })
+                        st.markdown(f"**Score: {bull_signals.get('Reversal_Score', 0)}/6**")
+                        st.markdown(f"- Selling Exhausted: {bull_signals.get('Selling_Exhausted', 'N/A')}")
+                        st.markdown(f"- Higher Low: {bull_signals.get('Higher_Low', 'N/A')}")
+                        st.markdown(f"- Strong Bullish Candle: {bull_signals.get('Strong_Bullish_Candle', 'N/A')}")
+                        st.markdown(f"- Volume: {bull_signals.get('Volume_Signal', 'N/A')}")
+                        st.markdown(f"- Above VWAP: {bull_signals.get('Above_VWAP', 'N/A')}")
 
-                if poc_table_data:
-                    poc_df = pd.DataFrame(poc_table_data)
-
-                    # Style the table
-                    def style_poc_signal(val):
-                        if val == 'Bullish':
-                            return 'background-color: #00ff8840; color: white'
-                        elif val == 'Bearish':
-                            return 'background-color: #ff444440; color: white'
+                    with col_bear:
+                        st.markdown("### 🔴 Bearish Reversal")
+                        if "STRONG SELL" in bear_verdict:
+                            st.error(f"**{bear_verdict}**")
+                        elif "MODERATE SELL" in bear_verdict:
+                            st.warning(f"**{bear_verdict}**")
                         else:
-                            return 'background-color: #FFD70040; color: white'
+                            st.info(f"**{bear_verdict}**")
 
-                    styled_poc = poc_df.style.map(style_poc_signal, subset=['Signal'])
-                    st.dataframe(styled_poc, use_container_width=True, hide_index=True)
+                        st.markdown(f"**Score: {bear_signals.get('Bearish_Score', 0)}/6**")
+                        st.markdown(f"- Buying Exhausted: {bear_signals.get('Buying_Exhausted', 'N/A')}")
+                        st.markdown(f"- Lower High: {bear_signals.get('Lower_High', 'N/A')}")
+                        st.markdown(f"- Strong Bearish Candle: {bear_signals.get('Strong_Bearish_Candle', 'N/A')}")
+                        st.markdown(f"- Volume: {bear_signals.get('Volume_Signal', 'N/A')}")
+                        st.markdown(f"- Below VWAP: {bear_signals.get('Below_VWAP', 'N/A')}")
+
+                    # VWAP display
+                    if bull_signals.get('VWAP'):
+                        st.info(f"📊 **VWAP:** ₹{bull_signals.get('VWAP')} | **Day High:** ₹{bull_signals.get('Day_High', 'N/A')} | **Day Low:** ₹{bull_signals.get('Day_Low', 'N/A')}")
+
+                    # Entry Rules Expander
+                    with st.expander("📋 Entry Rules & Recommendations"):
+                        col_r1, col_r2 = st.columns(2)
+
+                        with col_r1:
+                            st.markdown("**🟢 Bullish Entry Rules:**")
+                            entry_rules = ReversalDetector.get_entry_rules(bull_signals, bull_score)
+                            for rule in entry_rules:
+                                st.markdown(f"- {rule}")
+
+                        with col_r2:
+                            st.markdown("**🔴 Bearish Entry Rules:**")
+                            if bear_score <= -4:
+                                st.markdown("- 🎯 ENTRY: Buy PE at current level")
+                                st.markdown(f"- 🛑 SL: Above recent high ({bear_signals.get('Day_High', 'N/A')})")
+                                st.markdown("- 🎯 Target: Previous low / Nearest support")
+                            elif bear_score <= -2.5:
+                                st.markdown("- ⏳ WAIT: Confirmation pending")
+                                st.markdown("- 📋 Checklist: Lower High + Strong Bearish Candle + Volume")
+                            else:
+                                st.markdown("- ❌ NO ENTRY: Bearish conditions not met")
+
+                        st.markdown("---")
+                        st.markdown("**🧠 Trading Psychology:**")
+                        st.markdown("> *Missing a trade is 100x better than entering a wrong trade.*")
+                        st.markdown("- Trade only after structure forms")
+                        st.markdown("- No emotional entries")
+                        st.markdown("- Fixed SL, fixed target")
+                        st.markdown("- If trade missed → day closed")
+
+                except Exception as e:
+                    st.warning(f"Reversal analysis unavailable: {str(e)}")
+
+                # ===== ULTIMATE RSI [LuxAlgo] =====
+            if ultimate_rsi_data_for_chart:
+                with st.expander("📈 Ultimate RSI [LuxAlgo]", expanded=False):
+                    st.markdown("---")
+                    st.markdown("## 📈 Ultimate RSI [LuxAlgo]")
+
+                    ursi_val = ultimate_rsi_data_for_chart.get('latest_arsi', 50)
+                    ursi_sig = ultimate_rsi_data_for_chart.get('latest_signal', 50)
+                    ursi_zone = ultimate_rsi_data_for_chart.get('zone', 'Neutral')
+                    ursi_cross = ultimate_rsi_data_for_chart.get('cross_signal', 'None')
+                    ursi_momentum = ultimate_rsi_data_for_chart.get('momentum', 'Neutral')
+
+                    ursi_col1, ursi_col2, ursi_col3, ursi_col4 = st.columns(4)
+                    with ursi_col1:
+                        delta_color = "normal" if ursi_momentum == 'Bullish' else ("inverse" if ursi_momentum == 'Bearish' else "off")
+                        st.metric("URSI Value", f"{ursi_val:.1f}", delta=ursi_momentum, delta_color=delta_color)
+                    with ursi_col2:
+                        st.metric("Signal Line", f"{ursi_sig:.1f}")
+                    with ursi_col3:
+                        zone_icon = "🟢" if ursi_zone == 'Overbought' else ("🔴" if ursi_zone == 'Oversold' else "⚪")
+                        st.metric("Zone", f"{zone_icon} {ursi_zone}")
+                    with ursi_col4:
+                        cross_icon = "🔼" if 'Bullish' in ursi_cross else ("🔽" if 'Bearish' in ursi_cross else "➖")
+                        st.metric("Cross Signal", f"{cross_icon} {ursi_cross}")
 
                     st.markdown("""
-                    **POC Interpretation:**
-                    - **POC 1 (10)**: Short-term volume profile - intraday support/resistance
-                    - **POC 2 (25)**: Medium-term volume profile - swing trading levels
-                    - **POC 3 (70)**: Long-term volume profile - major support/resistance
-                    - **Above POC**: Bullish — market is bull, POC acts as support
-                    - **Below POC**: Bearish — market is bear, POC acts as resistance
+                    **Ultimate RSI Interpretation:**
+                    - **Above 70 (OB)**: Overbought — expect bearish reversal
+                    - **Below 40 (OS)**: Oversold — expect bullish bounce
+                    - **URSI > Signal + Above 50**: Bullish momentum confirmed
+                    - **URSI < Signal + Below 50**: Bearish momentum confirmed
+                    - **Bullish/Bearish Cross**: URSI crossing signal line = momentum shift
                     """)
 
-            # Future Swing Table
-            if swing_data_for_chart:
-                st.markdown("### 🔄 Future Swing Projection")
+            # ===== TRIPLE POC + FUTURE SWING ANALYSIS =====
+            with st.expander("📊 Triple POC + Future Swing Analysis", expanded=False):
+                st.markdown("---")
+                st.markdown("## 📊 Triple POC + Future Swing Analysis")
 
-                swings = swing_data_for_chart.get('swings', {})
-                projection = swing_data_for_chart.get('projection')
-                volume = swing_data_for_chart.get('volume', {})
-                percentages = swing_data_for_chart.get('percentages', [])
+                # Triple POC Table
+                if poc_data_for_chart:
+                    st.markdown("### 🎯 Triple Point of Control (POC)")
 
-                # Swing Summary
-                swing_col1, swing_col2, swing_col3 = st.columns(3)
+                    poc_table_data = []
+                    current_price_for_poc = df['close'].iloc[-1] if not df.empty else 0
 
-                with swing_col1:
-                    direction = swings.get('direction', 'Unknown')
-                    dir_color = "#15dd7c" if direction == 'bullish' else "#eb7514"
-                    dir_icon = "🟢" if direction == 'bullish' else "🔴"
-                    st.markdown(f"""
-                    <div style="background-color: {dir_color}20; padding: 15px; border-radius: 10px; border: 2px solid {dir_color};">
-                        <h4 style="color: {dir_color}; margin: 0;">Current Direction</h4>
-                        <h2 style="color: {dir_color}; margin: 5px 0;">{dir_icon} {direction.upper()}</h2>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    for poc_key, period_key in [('poc1', 'poc1'), ('poc2', 'poc2'), ('poc3', 'poc3')]:
+                        poc = poc_data_for_chart.get(poc_key)
+                        period = poc_data_for_chart.get('periods', {}).get(period_key, '')
 
-                with swing_col2:
-                    if projection:
-                        target_color = "#15dd7c" if projection['direction'] == 'bullish' else "#eb7514"
+                        if poc:
+                            # Determine position relative to POC line
+                            # Above POC = Bull, Below POC = Bear
+                            if current_price_for_poc > poc.get('poc', 0):
+                                position = "🟢 Above"
+                                signal = "Bullish"
+                            else:
+                                position = "🔴 Below"
+                                signal = "Bearish"
+
+                            poc_table_data.append({
+                                'POC': f"POC {poc_key[-1]} ({period})",
+                                'Value': f"₹{poc.get('poc', 0):.2f}",
+                                'Upper': f"₹{poc.get('upper_poc', 0):.2f}",
+                                'Lower': f"₹{poc.get('lower_poc', 0):.2f}",
+                                'Range': f"₹{poc.get('high', 0):.0f} - ₹{poc.get('low', 0):.0f}",
+                                'Position': position,
+                                'Signal': signal
+                            })
+
+                    if poc_table_data:
+                        poc_df = pd.DataFrame(poc_table_data)
+
+                        # Style the table
+                        def style_poc_signal(val):
+                            if val == 'Bullish':
+                                return 'background-color: #00ff8840; color: white'
+                            elif val == 'Bearish':
+                                return 'background-color: #ff444440; color: white'
+                            else:
+                                return 'background-color: #FFD70040; color: white'
+
+                        styled_poc = poc_df.style.map(style_poc_signal, subset=['Signal'])
+                        st.dataframe(styled_poc, use_container_width=True, hide_index=True)
+
+                        st.markdown("""
+                        **POC Interpretation:**
+                        - **POC 1 (10)**: Short-term volume profile - intraday support/resistance
+                        - **POC 2 (25)**: Medium-term volume profile - swing trading levels
+                        - **POC 3 (70)**: Long-term volume profile - major support/resistance
+                        - **Above POC**: Bullish — market is bull, POC acts as support
+                        - **Below POC**: Bearish — market is bear, POC acts as resistance
+                        """)
+
+                # Future Swing Table
+                if swing_data_for_chart:
+                    st.markdown("### 🔄 Future Swing Projection")
+
+                    swings = swing_data_for_chart.get('swings', {})
+                    projection = swing_data_for_chart.get('projection')
+                    volume = swing_data_for_chart.get('volume', {})
+                    percentages = swing_data_for_chart.get('percentages', [])
+
+                    # Swing Summary
+                    swing_col1, swing_col2, swing_col3 = st.columns(3)
+
+                    with swing_col1:
+                        direction = swings.get('direction', 'Unknown')
+                        dir_color = "#15dd7c" if direction == 'bullish' else "#eb7514"
+                        dir_icon = "🟢" if direction == 'bullish' else "🔴"
                         st.markdown(f"""
-                        <div style="background-color: {target_color}20; padding: 15px; border-radius: 10px; border: 2px solid {target_color};">
-                            <h4 style="color: {target_color}; margin: 0;">Projected Target</h4>
-                            <h2 style="color: {target_color}; margin: 5px 0;">₹{projection['target']:.0f}</h2>
-                            <p style="color: white; margin: 0;">{projection['sign']}{projection['swing_pct']:.1f}%</p>
+                        <div style="background-color: {dir_color}20; padding: 15px; border-radius: 10px; border: 2px solid {dir_color};">
+                            <h4 style="color: {dir_color}; margin: 0;">Current Direction</h4>
+                            <h2 style="color: {dir_color}; margin: 5px 0;">{dir_icon} {direction.upper()}</h2>
                         </div>
                         """, unsafe_allow_html=True)
-                    else:
-                        st.info("Projection not available")
 
-                with swing_col3:
-                    delta = volume.get('delta', 0)
-                    delta_color = "#15dd7c" if delta > 0 else "#eb7514"
-                    delta_icon = "🟢" if delta > 0 else "🔴"
-                    st.markdown(f"""
-                    <div style="background-color: {delta_color}20; padding: 15px; border-radius: 10px; border: 2px solid {delta_color};">
-                        <h4 style="color: {delta_color}; margin: 0;">Volume Delta</h4>
-                        <h2 style="color: {delta_color}; margin: 5px 0;">{delta_icon} {delta:+,.0f}</h2>
-                        <p style="color: white; margin: 0;">Buy: {volume.get('buy_volume', 0):,.0f} | Sell: {volume.get('sell_volume', 0):,.0f}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    with swing_col2:
+                        if projection:
+                            target_color = "#15dd7c" if projection['direction'] == 'bullish' else "#eb7514"
+                            st.markdown(f"""
+                            <div style="background-color: {target_color}20; padding: 15px; border-radius: 10px; border: 2px solid {target_color};">
+                                <h4 style="color: {target_color}; margin: 0;">Projected Target</h4>
+                                <h2 style="color: {target_color}; margin: 5px 0;">₹{projection['target']:.0f}</h2>
+                                <p style="color: white; margin: 0;">{projection['sign']}{projection['swing_pct']:.1f}%</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.info("Projection not available")
 
-                # Swing Percentages Table
-                if percentages:
-                    st.markdown("### 📈 Historical Swing Percentages")
+                    with swing_col3:
+                        delta = volume.get('delta', 0)
+                        delta_color = "#15dd7c" if delta > 0 else "#eb7514"
+                        delta_icon = "🟢" if delta > 0 else "🔴"
+                        st.markdown(f"""
+                        <div style="background-color: {delta_color}20; padding: 15px; border-radius: 10px; border: 2px solid {delta_color};">
+                            <h4 style="color: {delta_color}; margin: 0;">Volume Delta</h4>
+                            <h2 style="color: {delta_color}; margin: 5px 0;">{delta_icon} {delta:+,.0f}</h2>
+                            <p style="color: white; margin: 0;">Buy: {volume.get('buy_volume', 0):,.0f} | Sell: {volume.get('sell_volume', 0):,.0f}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-                    swing_pct_data = []
-                    for i, pct in enumerate(percentages):
+                    # Swing Percentages Table
+                    if percentages:
+                        st.markdown("### 📈 Historical Swing Percentages")
+
+                        swing_pct_data = []
+                        for i, pct in enumerate(percentages):
+                            swing_pct_data.append({
+                                'Swing': f"Swing {i+1}",
+                                'Percentage': f"{pct:+.2f}%",
+                                'Type': '🟢 Bullish' if pct > 0 else '🔴 Bearish'
+                            })
+
+                        # Add average
+                        avg_pct = sum(abs(p) for p in percentages) / len(percentages) if percentages else 0
                         swing_pct_data.append({
-                            'Swing': f"Swing {i+1}",
-                            'Percentage': f"{pct:+.2f}%",
-                            'Type': '🟢 Bullish' if pct > 0 else '🔴 Bearish'
+                            'Swing': '📊 Average',
+                            'Percentage': f"{avg_pct:.2f}%",
+                            'Type': 'Used for projection'
                         })
 
-                    # Add average
-                    avg_pct = sum(abs(p) for p in percentages) / len(percentages) if percentages else 0
-                    swing_pct_data.append({
-                        'Swing': '📊 Average',
-                        'Percentage': f"{avg_pct:.2f}%",
-                        'Type': 'Used for projection'
-                    })
+                        swing_pct_df = pd.DataFrame(swing_pct_data)
+                        st.dataframe(swing_pct_df, use_container_width=True, hide_index=True)
 
-                    swing_pct_df = pd.DataFrame(swing_pct_data)
-                    st.dataframe(swing_pct_df, use_container_width=True, hide_index=True)
+                    # Swing Levels Table
+                    st.markdown("### 📍 Swing Levels")
 
-                # Swing Levels Table
-                st.markdown("### 📍 Swing Levels")
+                    swing_levels_data = []
+                    last_high = swings.get('last_swing_high')
+                    last_low = swings.get('last_swing_low')
 
-                swing_levels_data = []
-                last_high = swings.get('last_swing_high')
-                last_low = swings.get('last_swing_low')
+                    if last_high:
+                        swing_levels_data.append({
+                            'Type': '🔴 Swing High',
+                            'Value': f"₹{last_high['value']:.2f}",
+                            'Index': last_high['index']
+                        })
 
-                if last_high:
-                    swing_levels_data.append({
-                        'Type': '🔴 Swing High',
-                        'Value': f"₹{last_high['value']:.2f}",
-                        'Index': last_high['index']
-                    })
+                    if last_low:
+                        swing_levels_data.append({
+                            'Type': '🟢 Swing Low',
+                            'Value': f"₹{last_low['value']:.2f}",
+                            'Index': last_low['index']
+                        })
 
-                if last_low:
-                    swing_levels_data.append({
-                        'Type': '🟢 Swing Low',
-                        'Value': f"₹{last_low['value']:.2f}",
-                        'Index': last_low['index']
-                    })
+                    if swing_levels_data:
+                        swing_levels_df = pd.DataFrame(swing_levels_data)
+                        st.dataframe(swing_levels_df, use_container_width=True, hide_index=True)
 
-                if swing_levels_data:
-                    swing_levels_df = pd.DataFrame(swing_levels_data)
-                    st.dataframe(swing_levels_df, use_container_width=True, hide_index=True)
+                    st.markdown("""
+                    **Swing Analysis Interpretation:**
+                    - **Swing High**: Resistance level where price reversed down
+                    - **Swing Low**: Support level where price reversed up
+                    - **Volume Delta**: Positive = more buying, Negative = more selling
+                    - **Projected Target**: Based on average of historical swing percentages
+                    """)
 
-                st.markdown("""
-                **Swing Analysis Interpretation:**
-                - **Swing High**: Resistance level where price reversed down
-                - **Swing Low**: Support level where price reversed up
-                - **Volume Delta**: Positive = more buying, Negative = more selling
-                - **Projected Target**: Based on average of historical swing percentages
-                """)
-
-            # ===== RSI VOLATILITY SUPPRESSION ZONES =====
+                # ===== RSI VOLATILITY SUPPRESSION ZONES =====
             if rsi_sz_data_for_chart and rsi_sz_data_for_chart.get('zones'):
-                st.markdown("---")
-                st.markdown("## ∿ RSI Volatility Suppression Zones")
+                with st.expander("∿ RSI Volatility Suppression Zones", expanded=False):
+                    st.markdown("---")
+                    st.markdown("## ∿ RSI Volatility Suppression Zones")
 
-                current_signal = rsi_sz_data_for_chart.get('current_signal', 'No Zone')
-                count_vol = rsi_sz_data_for_chart.get('count_volatility', 0)
+                    current_signal = rsi_sz_data_for_chart.get('current_signal', 'No Zone')
+                    count_vol = rsi_sz_data_for_chart.get('count_volatility', 0)
 
-                # Signal summary
-                sz_col1, sz_col2, sz_col3 = st.columns(3)
-                with sz_col1:
-                    signal_color = "normal" if current_signal == 'Bullish Breakout' else ("inverse" if current_signal == 'Bearish Breakout' else "off")
-                    st.metric("Current Signal", current_signal, delta=current_signal if current_signal != 'No Zone' else None, delta_color=signal_color)
-                with sz_col2:
-                    st.metric("Low Vol Bar Count", count_vol)
-                with sz_col3:
-                    total_zones = len(rsi_sz_data_for_chart['zones'])
-                    bullish_count = sum(1 for z in rsi_sz_data_for_chart['zones'] if z['breakout'] == 'bullish')
-                    bearish_count = sum(1 for z in rsi_sz_data_for_chart['zones'] if z['breakout'] == 'bearish')
-                    st.metric("Zones Detected", f"{total_zones} (▲{bullish_count} / ▼{bearish_count})")
+                    # Signal summary
+                    sz_col1, sz_col2, sz_col3 = st.columns(3)
+                    with sz_col1:
+                        signal_color = "normal" if current_signal == 'Bullish Breakout' else ("inverse" if current_signal == 'Bearish Breakout' else "off")
+                        st.metric("Current Signal", current_signal, delta=current_signal if current_signal != 'No Zone' else None, delta_color=signal_color)
+                    with sz_col2:
+                        st.metric("Low Vol Bar Count", count_vol)
+                    with sz_col3:
+                        total_zones = len(rsi_sz_data_for_chart['zones'])
+                        bullish_count = sum(1 for z in rsi_sz_data_for_chart['zones'] if z['breakout'] == 'bullish')
+                        bearish_count = sum(1 for z in rsi_sz_data_for_chart['zones'] if z['breakout'] == 'bearish')
+                        st.metric("Zones Detected", f"{total_zones} (▲{bullish_count} / ▼{bearish_count})")
 
-                # Zone table
-                zone_table_data = []
-                for idx, zone in enumerate(reversed(rsi_sz_data_for_chart['zones'][-10:]), 1):
-                    breakout = zone.get('breakout', 'pending')
-                    if breakout == 'bullish':
-                        signal = '▲ Bullish'
-                    elif breakout == 'bearish':
-                        signal = '▼ Bearish'
+                    # Zone table
+                    zone_table_data = []
+                    for idx, zone in enumerate(reversed(rsi_sz_data_for_chart['zones'][-10:]), 1):
+                        breakout = zone.get('breakout', 'pending')
+                        if breakout == 'bullish':
+                            signal = '▲ Bullish'
+                        elif breakout == 'bearish':
+                            signal = '▼ Bearish'
                     else:
                         signal = '∿ Pending'
 
