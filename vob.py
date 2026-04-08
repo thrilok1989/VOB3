@@ -5767,6 +5767,10 @@ def analyze_option_chain(selected_expiry=None, pivot_data=None, vob_data=None, l
     
     df_ce = pd.DataFrame(calls)
     df_pe = pd.DataFrame(puts)
+    # Guard: if either side is empty, return early to avoid KeyError on merge
+    if df_ce.empty or df_pe.empty or 'strikePrice' not in df_ce.columns or 'strikePrice' not in df_pe.columns:
+        st.warning(f"Incomplete option chain data for {index_name} – CE or PE data missing")
+        return {'underlying': underlying, 'df_summary': None, 'expiry_dates': expiry_dates, 'expiry': expiry, 'sr_data': [], 'max_pain_strike': None, 'styled_df': None, 'df_display': None, 'display_cols': [], 'bias_cols': [], 'total_ce_change': 0, 'total_pe_change': 0}
     # Sort descending: OTM (higher strikes) at top, ITM (lower strikes) at bottom
     df = pd.merge(df_ce, df_pe, on='strikePrice', suffixes=('_CE', '_PE')).sort_values('strikePrice', ascending=False)
 
