@@ -24083,9 +24083,24 @@ def main():
             # 📊 VOLUME DELTA CANDLES
             # ══════════════════════════════════════════════════════════════════
             st.markdown("---")
-            with st.expander("📊 Volume Delta Candles — Buy vs Sell Pressure per Candle", expanded=False):
+            with st.expander("📊 Volume Delta Candles — Buy vs Sell Pressure per Candle (1-min)", expanded=False):
                 try:
-                    _vdc_df = _df_today.copy() if not _df_today.empty else pd.DataFrame()
+                    # Fetch dedicated 1-minute candle data for Volume Delta analysis
+                    _vdc_df = pd.DataFrame()
+                    _vdc_1m_raw = api.get_intraday_data(security_id="13", exchange_segment="IDX_I", instrument="INDEX", interval="1", days_back=1)
+                    if _vdc_1m_raw:
+                        _vdc_1m_full = process_candle_data(_vdc_1m_raw, "1")
+                        if not _vdc_1m_full.empty:
+                            _vdc_target = _target_date if '_target_date' in dir() else datetime.now(pytz.timezone('Asia/Kolkata')).date()
+                            try:
+                                _vdc_df = _vdc_1m_full[pd.to_datetime(_vdc_1m_full['datetime']).dt.date == _vdc_target].copy()
+                            except Exception:
+                                _vdc_df = _vdc_1m_full.copy()
+                            if _vdc_df.empty:
+                                _vdc_df = _vdc_1m_full.copy()
+                            _vdc_df = _vdc_df.reset_index(drop=True)
+                    if _vdc_df.empty:
+                        _vdc_df = _df_today.copy() if not _df_today.empty else pd.DataFrame()
                     if len(_vdc_df) >= 5 and 'volume' in _vdc_df.columns:
                         for _col in ['open', 'high', 'low', 'close', 'volume']:
                             if _col in _vdc_df.columns:
